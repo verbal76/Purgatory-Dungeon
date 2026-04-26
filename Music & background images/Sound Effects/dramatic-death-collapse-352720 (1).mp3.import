@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://cbhivfgvxgii5"
+path="res://godot/imported/dramatic-death-collapse-352720 (1).mp3-c58eaef747212dd57c851f8f6817d31c.mp3str"
+
+[deps]
+
+source_file="res://Music & background images/Sound Effects/dramatic-death-collapse-352720 (1).mp3"
+dest_files=["res://godot/imported/dramatic-death-collapse-352720 (1).mp3-c58eaef747212dd57c851f8f6817d31c.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

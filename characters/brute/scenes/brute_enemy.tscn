@@ -1,0 +1,22 @@
+[gd_scene format=3 uid="uid://bcfyuc5h8ls6c"]
+
+[ext_resource type="Script" uid="uid://balmopf4o36jc" path="res://characters/brute/scripts/brute_ai.gd" id="1_8fuyk"]
+[ext_resource type="PackedScene" uid="uid://cphtd2300recq" path="res://characters/brute/Brute_multi.gltf" id="2_3lxye"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_wscrn"]
+radius = 0.59228516
+height = 2.0825195
+
+[node name="BruteEnemy" type="CharacterBody3D" unique_id=129293300]
+script = ExtResource("1_8fuyk")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=279437818]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.041259766, 0)
+shape = SubResource("CapsuleShape3D_wscrn")
+debug_color = Color(0.96920174, 0, 0.46601945, 0.41960785)
+
+[node name="Mesh" type="Node3D" parent="." unique_id=1194122809]
+
+[node name="Brute" parent="Mesh" unique_id=453318031 instance=ExtResource("2_3lxye")]
+
+[editable path="Mesh/Brute"]

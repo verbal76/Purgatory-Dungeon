@@ -1,0 +1,789 @@
+# ============================================================
+#  FILE: BuffManager.gd
+#  PATH: res://autoloads/BuffManager.gd
+#  ATTACHED TO: Autoload (BuffManager)
+#  USED BY: GameClock.gd, global UI, player
+#  DESCRIPTION: Fully self-contained buff pick and tracking system.
+#  MOD NOTES: Added _handle_schizophrenia() hook to dynamically
+#  attach/detach the auditory hallucination script to the player.
+#  Also plays buff_choice_sound via AudioManager.
+#  Rarity system: common (green) / rare (yellow) / legendary (purple).
+#  Weighted pick, slot-machine cycling display, slowdown-on-stop.
+#
+#  SLOT MACHINE CHANGE: Replaced the 2-choice card pick with a single
+#  centered selector that cycles through the weighted perk pool like a
+#  slot machine. Player presses A to stop; the selector slows down first,
+#  then lands on the final perk and awards it.
+# ============================================================
+
+extends Node
+
+# ── Signals ────────────────────────────────────────────────
+
+signal buff_chosen(buff: Dictionary)
+signal buff_expired(buff: Dictionary)
+
+# ── File paths ─────────────────────────────────────────────
+
+const BUFF_DATA_PATH : String = "res://data/buffs.json"
+
+# ══════════════════════════════════════════════════════════
+#  SLOT MACHINE TUNING
+#  Adjust these to change the feel of the perk selector.
+# ══════════════════════════════════════════════════════════
+
+# How fast the selector cycles during the rolling phase (seconds per step).
+# Lower = faster spin. 0.10 is readable but hard to snipe.
+const PERK_CYCLE_START_SPEED : float = 0.10
+
+# How fast the selector moves just before it stops (seconds per step).
+# Higher = more noticeable slowdown.
+const PERK_CYCLE_END_SPEED : float = 0.38
+
+# Total seconds the slowdown phase lasts after A is pressed.
+# Short enough not to feel annoying; long enough to feel deliberate.
+const PERK_CYCLE_SLOWDOWN_DURATION : float = 1.4
+
+# How long the winning perk is held on screen before the UI closes.
+const PERK_CYCLE_VISUAL_HOLD_TIME : float = 0.7
+
+# ── Card / slot UI layout ──────────────────────────────────
+
+const CARD_WIDTH         : float = 280.0
+const CARD_HEIGHT        : float = 260.0
+const TITLE_FONT_SIZE    : int   = 28
+const DAY_FONT_SIZE      : int   = 16
+const NAME_FONT_SIZE     : int   = 22
+const DESC_FONT_SIZE     : int   = 14
+const TRADEOFF_FONT_SIZE : int   = 13
+const PROMPT_FONT_SIZE   : int   = 16
+const RARITY_TAG_FONT_SIZE : int = 11
+
+const TRADEOFF_COLOR   : Color = Color(1.0, 0.6,  0.2)
+const DAY_LABEL_COLOR  : Color = Color(0.8, 0.8,  0.8)
+const PROMPT_COLOR     : Color = Color(0.7, 0.7,  0.7)
+
+# ── Card animation ─────────────────────────────────────────
+
+const CARD_ENTRY_DURATION  : float = 0.35
+const CARD_ENTRY_OFFSET_Y  : float = 200.0
+const CARD_EXIT_DURATION   : float = 0.35
+
+# ── Rarity ─────────────────────────────────────────────────
+
+const RARITY_COLOR_COMMON    : Color = Color(0.25, 0.85, 0.25)
+const RARITY_COLOR_RARE      : Color = Color(1.0,  0.82, 0.12)
+const RARITY_COLOR_LEGENDARY : Color = Color(0.72, 0.15, 0.92)
+# Weights: roughly common 10x, rare 4x, legendary 1x
+const RARITY_WEIGHTS : Dictionary = { "common": 10, "rare": 4, "legendary": 1 }
+const RARITY_SQUARE_SIZE : float = 22.0
+
+# ── Buff HUD ───────────────────────────────────────────────
+
+const HUD_FONT_SIZE         : int   = 14
+const HUD_PERM_COLOR        : Color = Color(0.5, 0.9, 0.5)
+const HUD_TEMP_COLOR        : Color = Color(0.5, 0.7, 1.0)
+const HUD_DEBUFF_COLOR      : Color = Color(1.0, 0.45, 0.35)
+const HUD_MARGIN_X          : float = 20.0
+const HUD_START_Y           : float = 50.0
+const HUD_LINE_SPACING      : float = 20.0
+const COUNTDOWN_UPDATE_RATE : float = 0.5
+
+# ── Slot machine states ────────────────────────────────────
+
+enum SlotState { IDLE, ROLLING, SLOWING, AWARDING, DONE }
+
+# ── Runtime state ──────────────────────────────────────────
+
+var _buff_pool    : Array = []
+var _active_buffs : Array = []
+
+# Slot machine
+var _slot_state   : SlotState = SlotState.IDLE
+var _slot_pool    : Array     = []   # weighted entries shuffled
+var _slot_index   : int       = 0
+var _slot_timer   : float     = 0.0  # accumulator for cycle steps
+var _slot_elapsed : float     = 0.0  # time spent in SLOWING state
+
+# Live label/border refs — updated every cycle step
+var _slot_name_label     : Label     = null
+var _slot_desc_label     : Label     = null
+var _slot_rarity_label   : Label     = null
+var _slot_tradeoff_label : Label     = null
+var _slot_border_rect    : ColorRect = null
+var _slot_rarity_square  : ColorRect = null
+
+# UI containers (needed for entry animation + close)
+var _ui_layer  : CanvasLayer = null
+var _ui_root   : Control     = null
+
+var _is_picking : bool = false
+
+var _hud_layer         : CanvasLayer   = null
+var _hud_container     : VBoxContainer = null
+var _hud_dirty         : bool          = true
+var _countdown_refresh : float         = 0.0
+var _timed_labels      : Array         = []
+
+# ── Lifecycle ──────────────────────────────────────────────
+
+func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	_load_buff_data()
+	GameClock.buff_pick_triggered.connect(_on_buff_pick_triggered)
+	GameClock.day_changed.connect(_on_day_changed)
+	_build_buff_hud()
+
+func _load_buff_data() -> void:
+	if not FileAccess.file_exists(BUFF_DATA_PATH):
+		push_warning("BuffManager: buffs.json not found at %s" % BUFF_DATA_PATH)
+		return
+	var file   := FileAccess.open(BUFF_DATA_PATH, FileAccess.READ)
+	var parsed  = JSON.parse_string(file.get_as_text())
+	file.close()
+	if parsed is Array:
+		_buff_pool.clear()
+		for entry in parsed:
+			if entry is Dictionary and entry.has("id"):
+				_buff_pool.append(entry)
+	else:
+		push_warning("BuffManager: buffs.json failed to parse.")
+
+# ══════════════════════════════════════════════════════════════
+#  PROCESS
+# ══════════════════════════════════════════════════════════════
+
+func _process(delta: float) -> void:
+	# ── Slot machine tick ──────────────────────────────────────
+	if _is_picking:
+		match _slot_state:
+			SlotState.ROLLING:
+				_slot_timer += delta
+				if _slot_timer >= PERK_CYCLE_START_SPEED:
+					_slot_timer -= PERK_CYCLE_START_SPEED
+					_advance_slot()
+
+			SlotState.SLOWING:
+				_slot_elapsed += delta
+				var t        : float = clampf(_slot_elapsed / PERK_CYCLE_SLOWDOWN_DURATION, 0.0, 1.0)
+				var interval : float = lerpf(PERK_CYCLE_START_SPEED, PERK_CYCLE_END_SPEED, t)
+				_slot_timer += delta
+				if _slot_timer >= interval:
+					_slot_timer -= interval
+					_advance_slot()
+				if _slot_elapsed >= PERK_CYCLE_SLOWDOWN_DURATION:
+					_slot_state = SlotState.AWARDING
+					_award_slot_perk()
+
+		# Skip timed-buff expiry while the pick is open — same as old system.
+		return
+
+	# ── Timed buff expiry ──────────────────────────────────────
+	var any_expired : bool = false
+	for i in range(_active_buffs.size() - 1, -1, -1):
+		var buff : Dictionary = _active_buffs[i]
+		if buff.has("_remaining") and buff.get("_duration_type", "") == "seconds":
+			buff["_remaining"] -= delta
+			if buff["_remaining"] <= 0.0:
+				var expired := buff.duplicate()
+				_active_buffs.remove_at(i)
+				_modify_stats(expired, false)
+				any_expired = true
+				emit_signal("buff_expired", expired)
+
+	if any_expired:
+		_hud_dirty = true
+
+	_countdown_refresh += delta
+	if _countdown_refresh >= COUNTDOWN_UPDATE_RATE:
+		_countdown_refresh = 0.0
+		_refresh_countdown_text()
+
+	if _hud_dirty:
+		_hud_dirty = false
+		_rebuild_buff_list()
+
+func _on_day_changed(_day: int) -> void:
+	var any_expired : bool = false
+	for i in range(_active_buffs.size() - 1, -1, -1):
+		var buff : Dictionary = _active_buffs[i]
+		if buff.has("_remaining") and buff.get("_duration_type", "") == "days":
+			buff["_remaining"] -= 1.0
+			if buff["_remaining"] <= 0.0:
+				var expired := buff.duplicate()
+				_active_buffs.remove_at(i)
+				_modify_stats(expired, false)
+				any_expired = true
+				emit_signal("buff_expired", expired)
+	if any_expired:
+		_hud_dirty = true
+
+# ══════════════════════════════════════════════════════════════
+#  BUFF HUD
+# ══════════════════════════════════════════════════════════════
+
+func _build_buff_hud() -> void:
+	_hud_layer       = CanvasLayer.new()
+	_hud_layer.layer = 5
+	add_child(_hud_layer)
+
+	_hud_container = VBoxContainer.new()
+	_hud_container.add_theme_constant_override("separation", int(HUD_LINE_SPACING))
+	_hud_container.anchor_left   = 1.0
+	_hud_container.anchor_right  = 1.0
+	_hud_container.anchor_top    = 0.0
+	_hud_container.anchor_bottom = 0.0
+	_hud_container.offset_left   = -250.0 - HUD_MARGIN_X
+	_hud_container.offset_right  = -HUD_MARGIN_X
+	_hud_container.offset_top    = HUD_START_Y
+
+	_hud_layer.add_child(_hud_container)
+	_hud_layer.visible = false
+
+func _rebuild_buff_list() -> void:
+	for child in _hud_container.get_children():
+		child.queue_free()
+	_timed_labels.clear()
+
+	if _active_buffs.is_empty():
+		return
+
+	for buff in _active_buffs:
+		if buff.has("_remaining"):
+			continue
+		var dt : String = buff.get("duration_type", "permanent")
+		if dt == "permanent" or dt == "instant":
+			_hud_container.add_child(_build_hud_entry(
+				buff.get("name", "???"),
+				buff.get("description", ""),
+				HUD_PERM_COLOR, null
+			))
+
+	for buff in _active_buffs:
+		if not buff.has("_remaining"):
+			continue
+		var is_neg : bool = false
+		if buff.has("value"):
+			is_neg = float(buff.get("value", 0)) < 0.0
+		if buff.get("effect_type") == "schizophrenia":
+			is_neg = true
+		var color : Color = HUD_DEBUFF_COLOR if is_neg else HUD_TEMP_COLOR
+		var box := _build_hud_entry(_format_timed_entry(buff), buff.get("description", ""), color, null)
+		_hud_container.add_child(box)
+		_timed_labels.append({ "label": box.get_child(0) as Label, "buff": buff })
+
+func _build_hud_entry(name_text: String, desc_text: String,
+		name_color: Color, _unused) -> VBoxContainer:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 1)
+
+	var name_lbl := Label.new()
+	name_lbl.text = name_text
+	name_lbl.add_theme_font_size_override("font_size", HUD_FONT_SIZE)
+	name_lbl.add_theme_color_override("font_color", name_color)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	box.add_child(name_lbl)
+
+	if desc_text != "":
+		var desc_lbl := Label.new()
+		desc_lbl.text = desc_text
+		desc_lbl.add_theme_font_size_override("font_size", HUD_FONT_SIZE - 2)
+		var dc := name_color; dc.a = 0.65
+		desc_lbl.add_theme_color_override("font_color", dc)
+		desc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		desc_lbl.autowrap_mode        = TextServer.AUTOWRAP_WORD_SMART
+		box.add_child(desc_lbl)
+
+	return box
+
+func _refresh_countdown_text() -> void:
+	for entry in _timed_labels:
+		var lbl : Label = entry["label"]
+		if is_instance_valid(lbl):
+			lbl.text = _format_timed_entry(entry["buff"])
+
+func _format_timed_entry(buff: Dictionary) -> String:
+	var name_str  : String = buff.get("name", "???")
+	var remaining : float  = buff.get("_remaining", 0.0)
+	var dur_type  : String = buff.get("_duration_type", "")
+	if dur_type == "days":
+		return "%s — %dd" % [name_str, int(ceil(remaining))]
+	var total_sec : int = int(ceil(remaining))
+	return "%s — %d:%02d" % [name_str, int(total_sec / 60.0), total_sec % 60]
+
+# ══════════════════════════════════════════════════════════════
+#  SLOT MACHINE — TRIGGER
+# ══════════════════════════════════════════════════════════════
+
+func _on_buff_pick_triggered() -> void:
+	# Block duplicate triggers while already running.
+	if _is_picking:
+		return
+
+	if _buff_pool.is_empty():
+		push_warning("BuffManager: no buffs available. Resuming clock.")
+		GameClock.resume()
+		return
+
+	_build_slot_pool()
+
+	if _slot_pool.is_empty():
+		push_warning("BuffManager: slot pool is empty after build. Resuming clock.")
+		GameClock.resume()
+		return
+
+	_slot_index   = 0
+	_slot_timer   = 0.0
+	_slot_elapsed = 0.0
+	_slot_state   = SlotState.ROLLING
+	_is_picking   = true
+
+	get_tree().paused = true
+	_show_slot_ui()
+
+
+# Build the weighted perk pool the same way the old system did.
+# Common entries appear ~10×, rare ~4×, legendary ~1× so rarity
+# weighting is naturally reflected in both the visible cycle and
+# the final landed result — no separate winner pre-selection needed.
+func _build_slot_pool() -> void:
+	_slot_pool.clear()
+	for buff in _buff_pool:
+		var w : int = RARITY_WEIGHTS.get(buff.get("ranking", "common"), 10)
+		for _j in w:
+			_slot_pool.append(buff)
+	_slot_pool.shuffle()
+
+# ══════════════════════════════════════════════════════════════
+#  SLOT MACHINE — UI
+# ══════════════════════════════════════════════════════════════
+
+func _show_slot_ui() -> void:
+	_ui_layer              = CanvasLayer.new()
+	_ui_layer.layer        = 10
+	_ui_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	get_tree().root.add_child(_ui_layer)
+
+	_ui_root              = Control.new()
+	_ui_root.process_mode = Node.PROCESS_MODE_ALWAYS
+	_ui_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_ui_layer.add_child(_ui_root)
+
+	# Title
+	var title := Label.new()
+	title.text = "Choose Your Fate"
+	title.add_theme_font_size_override("font_size", TITLE_FONT_SIZE)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	title.position.y = 80.0
+	_ui_root.add_child(title)
+
+	# Day label
+	var day_label := Label.new()
+	day_label.text = "Day %d" % GameClock.current_day
+	day_label.add_theme_font_size_override("font_size", DAY_FONT_SIZE)
+	day_label.modulate = DAY_LABEL_COLOR
+	day_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	day_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	day_label.position.y = 120.0
+	_ui_root.add_child(day_label)
+
+	# Centered card — same anchor math as the old two-card layout,
+	# but positioned at screen centre instead of offset left/right.
+	var sw     : float = get_viewport_rect().size.x
+	var sh     : float = get_viewport_rect().size.y
+	var card_x : float = (sw * 0.5) - (CARD_WIDTH * 0.5)
+	var card_y : float = (sh * 0.5) - (CARD_HEIGHT * 0.5)
+
+	_build_slot_card(card_x, card_y)
+
+	# Prompt
+	var prompt := Label.new()
+	prompt.text = "Ⓐ Stop"
+	prompt.add_theme_font_size_override("font_size", PROMPT_FONT_SIZE)
+	prompt.add_theme_color_override("font_color", PROMPT_COLOR)
+	prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	prompt.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	prompt.position.y = -60.0
+	_ui_root.add_child(prompt)
+
+	_update_slot_display()
+	_animate_slot_card_in(card_x, card_y)
+
+
+func _build_slot_card(x: float, y: float) -> void:
+	var buff    : Dictionary = _slot_pool[_slot_index]
+	var ranking : String     = buff.get("ranking", "common")
+	var col     : Color      = _get_rarity_color(ranking)
+
+	# Border
+	var border       := ColorRect.new()
+	border.position   = Vector2(x - 4.0, y - 4.0 + CARD_ENTRY_OFFSET_Y)
+	border.size       = Vector2(CARD_WIDTH + 8.0, CARD_HEIGHT + 8.0)
+	border.color      = col
+	border.modulate.a = 0.0
+	_ui_root.add_child(border)
+	_slot_border_rect = border
+
+	# Panel
+	var panel                := PanelContainer.new()
+	panel.name                = "SlotPanel"
+	panel.position            = Vector2(x, y + CARD_ENTRY_OFFSET_Y)
+	panel.custom_minimum_size = Vector2(CARD_WIDTH, CARD_HEIGHT)
+	panel.modulate.a          = 0.0
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+
+	# Rarity tag
+	var rarity_lbl := Label.new()
+	rarity_lbl.text = ranking.to_upper()
+	rarity_lbl.add_theme_font_size_override("font_size", RARITY_TAG_FONT_SIZE)
+	rarity_lbl.add_theme_color_override("font_color", col)
+	rarity_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	vbox.add_child(rarity_lbl)
+	_slot_rarity_label = rarity_lbl
+
+	# Name
+	var name_lbl := Label.new()
+	name_lbl.text = buff.get("name", "???")
+	name_lbl.add_theme_font_size_override("font_size", NAME_FONT_SIZE)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(name_lbl)
+	_slot_name_label = name_lbl
+
+	# Description
+	var desc_lbl := Label.new()
+	desc_lbl.text = buff.get("description", "")
+	desc_lbl.add_theme_font_size_override("font_size", DESC_FONT_SIZE)
+	desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(desc_lbl)
+	_slot_desc_label = desc_lbl
+
+	# Tradeoff
+	var td_lbl := Label.new()
+	var tradeoff = buff.get("tradeoff", null)
+	td_lbl.text = "⚠ " + (tradeoff.get("description", "") if tradeoff != null else "")
+	td_lbl.add_theme_font_size_override("font_size", TRADEOFF_FONT_SIZE)
+	td_lbl.modulate = TRADEOFF_COLOR
+	td_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	td_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	td_lbl.visible = (tradeoff != null)
+	vbox.add_child(td_lbl)
+	_slot_tradeoff_label = td_lbl
+
+	panel.add_child(vbox)
+	_ui_root.add_child(panel)
+
+	# Rarity square badge — bottom-right
+	var sq        := ColorRect.new()
+	sq.size        = Vector2(RARITY_SQUARE_SIZE, RARITY_SQUARE_SIZE)
+	sq.position    = Vector2(
+		x + CARD_WIDTH  - RARITY_SQUARE_SIZE - 6.0,
+		y + CARD_HEIGHT - RARITY_SQUARE_SIZE - 6.0 + CARD_ENTRY_OFFSET_Y)
+	sq.color       = col
+	sq.modulate.a  = 0.0
+	_ui_root.add_child(sq)
+	_slot_rarity_square = sq
+
+
+func _animate_slot_card_in(_card_x: float, card_y: float) -> void:
+	if _ui_root == null:
+		return
+	var panel  : Control = _ui_root.get_node_or_null("SlotPanel")
+	var border : Control = _slot_border_rect
+	var sq     : Control = _slot_rarity_square
+	if panel == null or border == null or sq == null:
+		return
+
+	var tgt_panel_y  : float = card_y
+	var tgt_border_y : float = card_y - 4.0
+	var tgt_sq_y     : float = card_y + CARD_HEIGHT - RARITY_SQUARE_SIZE - 6.0
+
+	var t := self.create_tween()
+	t.set_process_mode(Tween.TWEEN_PROCESS_IDLE)
+	t.set_parallel(true)
+	t.tween_property(panel,  "position:y", tgt_panel_y,  CARD_ENTRY_DURATION).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	t.tween_property(border, "position:y", tgt_border_y, CARD_ENTRY_DURATION).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	t.tween_property(sq,     "position:y", tgt_sq_y,     CARD_ENTRY_DURATION).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	t.tween_property(panel,  "modulate:a", 1.0, CARD_ENTRY_DURATION * 0.75)
+	t.tween_property(border, "modulate:a", 1.0, CARD_ENTRY_DURATION * 0.75)
+	t.tween_property(sq,     "modulate:a", 1.0, CARD_ENTRY_DURATION * 0.75)
+
+# ══════════════════════════════════════════════════════════════
+#  SLOT MACHINE — CYCLING
+# ══════════════════════════════════════════════════════════════
+
+func _advance_slot() -> void:
+	_slot_index = (_slot_index + 1) % _slot_pool.size()
+	_update_slot_display()
+
+
+# Pushes the current buff's name, description, rarity, and tradeoff
+# into the live label refs.  Called every cycle step — no node rebuild.
+func _update_slot_display() -> void:
+	if _slot_pool.is_empty():
+		return
+	var buff     : Dictionary = _slot_pool[_slot_index]
+	var ranking  : String     = buff.get("ranking", "common")
+	var col      : Color      = _get_rarity_color(ranking)
+
+	if is_instance_valid(_slot_name_label):
+		_slot_name_label.text = buff.get("name", "???")
+
+	if is_instance_valid(_slot_rarity_label):
+		_slot_rarity_label.text = ranking.to_upper()
+		_slot_rarity_label.add_theme_color_override("font_color", col)
+
+	if is_instance_valid(_slot_desc_label):
+		_slot_desc_label.text = buff.get("description", "")
+
+	if is_instance_valid(_slot_tradeoff_label):
+		var tradeoff = buff.get("tradeoff", null)
+		if tradeoff != null:
+			_slot_tradeoff_label.text    = "⚠ " + tradeoff.get("description", "")
+			_slot_tradeoff_label.visible = true
+		else:
+			_slot_tradeoff_label.text    = ""
+			_slot_tradeoff_label.visible = false
+
+	if is_instance_valid(_slot_border_rect):
+		_slot_border_rect.color = col
+
+	if is_instance_valid(_slot_rarity_square):
+		_slot_rarity_square.color = col
+
+# ══════════════════════════════════════════════════════════════
+#  INPUT — A PRESS TO STOP
+# ══════════════════════════════════════════════════════════════
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not _is_picking:
+		return
+	# Only accept input during ROLLING — once slowing starts, lock out further presses.
+	if _slot_state != SlotState.ROLLING:
+		return
+	if event.is_action_pressed("ui_accept") or event.is_action_pressed("equip"):
+		_slot_state   = SlotState.SLOWING
+		_slot_elapsed = 0.0
+		_slot_timer   = 0.0
+		get_viewport().set_input_as_handled()
+
+# ══════════════════════════════════════════════════════════════
+#  SLOT MACHINE — AWARD
+# ══════════════════════════════════════════════════════════════
+
+func _award_slot_perk() -> void:
+	_slot_state = SlotState.DONE
+	var buff : Dictionary = _slot_pool[_slot_index]
+
+	if has_node("/root/AudioManager"):
+		AudioManager.play_buff_choice()
+
+	_apply_buff(buff)
+	emit_signal("buff_chosen", buff)
+
+	# Brief hold so the player can read the winner, then close.
+	get_tree().create_timer(PERK_CYCLE_VISUAL_HOLD_TIME).timeout.connect(
+		func() -> void:
+			_animate_slot_exit(buff),
+		CONNECT_ONE_SHOT)
+
+
+func _animate_slot_exit(buff: Dictionary) -> void:
+	if _ui_root == null:
+		_finalize_close(buff)
+		return
+
+	var t := self.create_tween()
+	t.set_process_mode(Tween.TWEEN_PROCESS_IDLE)
+	t.tween_property(_ui_root, "modulate:a", 0.0, CARD_EXIT_DURATION).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
+	await t.finished
+
+	_finalize_close(buff)
+
+
+func _finalize_close(_buff: Dictionary) -> void:
+	_destroy_ui()
+	get_tree().paused = false
+	_is_picking = false
+	GameClock.resume()
+
+	# Defensive state reset — if the player was mid-attack / mid-kick /
+	# mid-slide / mid-block when the tree paused, their `await` loops froze
+	# and their state flag may still be stuck. Clear everything so movement
+	# input works immediately after the pick closes.
+	var player = get_tree().get_first_node_in_group("player")
+	if player != null:
+		if player.has_method("_on_buff_pick_finished"):
+			player._on_buff_pick_finished()
+		# Diagnostic — if the theory holds, all four will be false by now.
+		# If any print true we know some other path is holding the flag.
+		print("BuffPick end — blocking:", player.get("_is_blocking"),
+			  " attacking:", player.get("_is_attacking"),
+			  " sliding:",  player.get("_is_sliding"),
+			  " kicking:",  player.get("_is_kicking"))
+
+	# If the caller chained picks (e.g. chest reward trigger_buff_picks(3)),
+	# fire the next one on the following idle frame so UI has time to tear down.
+	if _queued_picks > 0:
+		_queued_picks -= 1
+		call_deferred("_on_buff_pick_triggered")
+
+
+# Public API — fire `count` consecutive day-change-style buff picks. If a pick
+# is already running the new ones are queued onto the tail.
+var _queued_picks : int = 0
+
+func trigger_buff_picks(count: int) -> void:
+	if count <= 0:
+		return
+	_queued_picks += count
+	if not _is_picking:
+		_queued_picks -= 1
+		_on_buff_pick_triggered()
+
+
+func _destroy_ui() -> void:
+	if _ui_layer != null:
+		_ui_layer.queue_free()
+		_ui_layer = null
+	_ui_root             = null
+	_slot_name_label     = null
+	_slot_desc_label     = null
+	_slot_rarity_label   = null
+	_slot_tradeoff_label = null
+	_slot_border_rect    = null
+	_slot_rarity_square  = null
+	_slot_pool.clear()
+
+# ══════════════════════════════════════════════════════════════
+#  BUFF APPLICATION  (unchanged from previous version)
+# ══════════════════════════════════════════════════════════════
+
+func _apply_buff(buff: Dictionary) -> void:
+	var stored := buff.duplicate()
+
+	var duration_type : String = stored.get("duration_type", "permanent")
+	var duration      : float  = float(stored.get("duration", 0))
+	if duration_type == "days" and duration > 0:
+		stored["_remaining"]     = duration
+		stored["_duration_type"] = "days"
+	elif duration_type == "seconds" and duration > 0:
+		stored["_remaining"]     = duration
+		stored["_duration_type"] = "seconds"
+
+	_active_buffs.append(stored)
+
+	var effect_type : String = stored.get("effect_type", "")
+	if effect_type == "currency":
+		PlayerWallet.add_potions(int(stored.get("value", 0)))
+	else:
+		_modify_stats(stored, true)
+
+	if _hud_layer != null:
+		_hud_layer.visible = true
+	_hud_dirty = true
+
+func _modify_stats(buff: Dictionary, apply: bool) -> void:
+	if buff.has("effects"):
+		for effect in buff.get("effects", []):
+			_apply_effect_dict(effect, apply)
+		return
+	_apply_effect_dict(buff, apply)
+
+func _apply_effect_dict(effect: Dictionary, apply: bool) -> void:
+	var effect_type : String = effect.get("effect_type", "")
+
+	if effect_type in ["stat_modifier", "on_kill", "max_health"]:
+		var stat : String = effect.get("stat", "")
+		var val  : float  = float(effect.get("value", 0.0))
+		if stat != "":
+			_apply_single_stat(stat, val, apply)
+	elif effect_type == "schizophrenia":
+		_handle_schizophrenia(apply)
+
+	var tradeoff = effect.get("tradeoff", null)
+	if tradeoff != null:
+		var t_stat : String = tradeoff.get("stat", "")
+		var t_val  : float  = float(tradeoff.get("value", 0.0))
+		if t_stat != "":
+			_apply_single_stat(t_stat, t_val, apply)
+
+func _apply_single_stat(stat_name: String, value: float, apply: bool) -> void:
+	var player = get_tree().get_first_node_in_group("player")
+	if player == null or not (stat_name in player):
+		push_warning("BuffManager: Player does not have stat: " + stat_name)
+		return
+
+	var current_val : float = float(player.get(stat_name))
+	var change      : float = value if apply else -value
+	player.set(stat_name, current_val + change)
+
+	if stat_name == "max_health":
+		if apply and change > 0.0 and player.has_method("receive_heal"):
+			player.receive_heal(change)
+		elif apply and change < 0.0:
+			var hp      : float = float(player.get("_current_health"))
+			var new_max : float = float(player.get("max_health"))
+			if hp > new_max:
+				player.set("_current_health", new_max)
+			if player.has_user_signal("health_changed"):
+				player.emit_signal("health_changed", player.get("_current_health"), new_max)
+		elif not apply:
+			var hp      = player.get("_current_health")
+			var new_max = player.get("max_health")
+			if hp > new_max:
+				player.set("_current_health", new_max)
+			if player.has_user_signal("health_changed"):
+				player.emit_signal("health_changed", player.get("_current_health"), new_max)
+
+# ── Custom effect handlers ─────────────────────────────────
+
+func _handle_schizophrenia(apply: bool) -> void:
+	var player = get_tree().get_first_node_in_group("player")
+	if player == null:
+		return
+	if apply:
+		if player.get_node_or_null("SchizophreniaEffect") == null:
+			var s = load("res://schizophrenia_audio.gd")
+			if s:
+				var n = s.new()
+				n.name = "SchizophreniaEffect"
+				player.add_child(n)
+	else:
+		var existing = player.get_node_or_null("SchizophreniaEffect")
+		if existing != null:
+			existing.queue_free()
+
+# ══════════════════════════════════════════════════════════════
+#  HELPERS
+# ══════════════════════════════════════════════════════════════
+
+func _get_rarity_color(ranking: String) -> Color:
+	match ranking:
+		"rare":      return RARITY_COLOR_RARE
+		"legendary": return RARITY_COLOR_LEGENDARY
+		_:           return RARITY_COLOR_COMMON
+
+# ══════════════════════════════════════════════════════════════
+#  PUBLIC API
+# ══════════════════════════════════════════════════════════════
+
+func get_active_buffs() -> Array:
+	return _active_buffs.duplicate()
+
+func reset() -> void:
+	_active_buffs.clear()
+	if _is_picking:
+		get_tree().paused = false
+	_is_picking   = false
+	_slot_state   = SlotState.IDLE
+	_hud_dirty    = true
+	_destroy_ui()
+	if _hud_layer != null:
+		_hud_layer.visible = false
+
+func get_viewport_rect() -> Rect2:
+	return get_viewport().get_visible_rect()

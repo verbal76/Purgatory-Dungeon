@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://ipaquarfmms7"
+path="res://godot/imported/pick buff.mp3-9efe5bb3e341457e09f71be4cfc02c35.mp3str"
+
+[deps]
+
+source_file="res://Music & background images/Sound Effects/pick buff.mp3"
+dest_files=["res://godot/imported/pick buff.mp3-9efe5bb3e341457e09f71be4cfc02c35.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

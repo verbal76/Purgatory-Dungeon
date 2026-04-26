@@ -1,0 +1,20 @@
+[gd_resource type="StandardMaterial3D" format=3 uid="uid://ddmw2eltq7jww"]
+
+[ext_resource type="Texture2D" uid="uid://d2x7plqlo58a" path="res://addons/props/Staff_AlbedoTransparency.png" id="1_albedo"]
+[ext_resource type="Texture2D" uid="uid://6cg61vxpwnh2" path="res://addons/props/Staff_Normal.png" id="2_normal"]
+[ext_resource type="Texture2D" uid="uid://cse6emcetoinu" path="res://addons/props/Staff_MetallicSmoothness.png" id="3_metallic"]
+[ext_resource type="Texture2D" uid="uid://dxgfogx6hb3ij" path="res://addons/props/Staff_AO.png" id="4_ao"]
+
+[resource]
+albedo_texture = ExtResource("1_albedo")
+normal_enabled = true
+normal_texture = ExtResource("2_normal")
+metallic = 1.0
+metallic_texture = ExtResource("3_metallic")
+metallic_texture_channel = 0
+roughness = 1.0
+roughness_texture = ExtResource("3_metallic")
+roughness_texture_channel = 3
+ao_enabled = true
+ao_texture = ExtResource("4_ao")
+ao_texture_channel = 0

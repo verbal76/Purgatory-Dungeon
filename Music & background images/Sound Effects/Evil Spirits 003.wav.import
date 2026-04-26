@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://c4t5kx1sjip0e"
+path="res://godot/imported/Evil Spirits 003.wav-415246df294ee0baf8824d90d5997c33.sample"
+
+[deps]
+
+source_file="res://Music & background images/Sound Effects/Evil Spirits 003.wav"
+dest_files=["res://godot/imported/Evil Spirits 003.wav-415246df294ee0baf8824d90d5997c33.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

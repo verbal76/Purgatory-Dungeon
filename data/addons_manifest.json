@@ -1,0 +1,112 @@
+{
+  "generated": "2026-04-17",
+  "note": "Static reference of all usable asset files in res://addons/. Excludes .import sidecar files. Use res:// paths directly in GDScript.",
+
+  "AllSkyFree": {
+    "path": "res://addons/AllSkyFree/Skyboxes/",
+    "type": "panoramic_sky_png",
+    "files": [
+      "AllSkyFree_Sky_AnotherPlanet_Equirect.png",
+      "AllSkyFree_Sky_CartoonNightSky_Equirect.png",
+      "AllSkyFree_Sky_ClearBlueSky_Equirect.png",
+      "AllSkyFree_Sky_ColdNight_Equirect.png",
+      "AllSkyFree_Sky_ColdSunset_Equirect.png",
+      "AllSkyFree_Sky_DeepDusk_Equirect.png",
+      "AllSkyFree_Sky_EpicBlueSunset_Equirect.png",
+      "AllSkyFree_Sky_EpicGloriousPink_Equirect.png",
+      "AllSkyFree_Sky_MoonBurst_Equirect.png",
+      "AllSkyFree_Sky_OvercastLow_Equirect.png"
+    ]
+  },
+
+  "kenney_particle_pack": {
+    "path": "res://addons/kenney_particle_pack/",
+    "type": "particle_texture_png",
+    "categories": {
+      "circle":  ["circle_01.png", "circle_02.png", "circle_03.png", "circle_04.png", "circle_05.png"],
+      "dirt":    ["dirt_01.png", "dirt_02.png", "dirt_03.png"],
+      "fire":    ["fire_01.png", "fire_02.png"],
+      "flame":   ["flame_01.png", "flame_02.png", "flame_03.png", "flame_04.png", "flame_05.png", "flame_06.png"],
+      "flare":   ["flare_01.png"],
+      "light":   ["light_01.png", "light_02.png", "light_03.png"],
+      "magic":   ["magic_01.png", "magic_02.png", "magic_03.png", "magic_04.png", "magic_05.png"],
+      "muzzle":  ["muzzle_01.png", "muzzle_02.png", "muzzle_03.png", "muzzle_04.png", "muzzle_05.png"],
+      "scorch":  ["scorch_01.png", "scorch_02.png", "scorch_03.png"],
+      "scratch": ["scratch_01.png"],
+      "slash":   ["slash_01.png", "slash_02.png", "slash_03.png", "slash_04.png"],
+      "smoke":   ["smoke_01.png", "smoke_02.png", "smoke_03.png", "smoke_04.png", "smoke_05.png", "smoke_06.png", "smoke_07.png", "smoke_08.png", "smoke_09.png", "smoke_10.png"],
+      "spark":   ["spark_01.png", "spark_02.png", "spark_03.png", "spark_04.png", "spark_05.png", "spark_06.png", "spark_07.png"],
+      "star":    ["star_01.png", "star_02.png", "star_03.png", "star_04.png", "star_05.png", "star_06.png", "star_07.png", "star_08.png", "star_09.png"],
+      "symbol":  ["symbol_01.png", "symbol_02.png"],
+      "trace":   ["trace_01.png", "trace_02.png", "trace_03.png", "trace_04.png", "trace_05.png", "trace_06.png", "trace_07.png"],
+      "twirl":   ["twirl_01.png", "twirl_02.png", "twirl_03.png"],
+      "window":  ["window_01.png", "window_02.png", "window_03.png", "window_04.png"]
+    },
+    "rotated_subdir": {
+      "path": "res://addons/kenney_particle_pack/rotated/",
+      "note": "Pre-rotated 90 degrees — use these for GPUParticles3D facing the camera in 3D",
+      "files": [
+        "flame_05_rotated.png",
+        "flame_06_rotated.png",
+        "muzzle_01_rotated.png",
+        "muzzle_02_rotated.png",
+        "muzzle_03_rotated.png",
+        "muzzle_04_rotated.png",
+        "muzzle_05_rotated.png",
+        "spark_05_rotated.png",
+        "spark_06_rotated.png",
+        "trace_01_rotated.png",
+        "trace_02_rotated.png",
+        "trace_03_rotated.png",
+        "trace_04_rotated.png",
+        "trace_05_rotated.png",
+        "trace_06_rotated.png",
+        "trace_07_rotated.png"
+      ]
+    }
+  },
+
+  "kenney_ui_audio": {
+    "path": "res://addons/kenney_ui_audio/",
+    "type": "wav",
+    "categories": {
+      "click":      ["click1.wav", "click2.wav", "click3.wav", "click4.wav", "click5.wav"],
+      "mouseclick": ["mouseclick1.wav"],
+      "mouserelease": ["mouserelease1.wav"],
+      "rollover":   ["rollover1.wav", "rollover2.wav", "rollover3.wav", "rollover4.wav", "rollover5.wav", "rollover6.wav"],
+      "switch":     ["switch1.wav", "switch2.wav", "switch3.wav", "switch10.wav", "switch11.wav", "switch12.wav", "switch13.wav", "switch14.wav", "switch15.wav", "switch16.wav", "switch17.wav", "switch18.wav", "switch19.wav", "switch20.wav", "switch21.wav", "switch22.wav", "switch23.wav", "switch24.wav", "switch25.wav", "switch26.wav", "switch27.wav", "switch28.wav", "switch29.wav"]
+    }
+  },
+
+  "props": {
+    "path": "res://addons/props/",
+    "models": {
+      "SM_Bottle.fbx":                  "generic bottle mesh",
+      "SM_ManaPotion.fbx":              "mana potion bottle mesh — used by health_orb_manager (scale 0.65)",
+      "SM_PosionBottle.fbx":            "poison bottle mesh — used by Globe/Potent Curse (scale 0.55)",
+      "uploads_files_2055133_staff.fbx":"player mage staff mesh",
+      "SM_Anvil.fbx":                   "stone anvil — decorative/destructible dungeon prop",
+      "SM_LargeBookPile.fbx":           "large book pile — decorative/destructible dungeon prop",
+      "SM_MetalCrate.fbx":              "metal crate — decorative/destructible dungeon prop",
+      "SM_Self.fbx":                    "shelf/bookcase — decorative/destructible dungeon prop",
+      "SM_Stool.fbx":                   "wooden stool — decorative/destructible dungeon prop",
+      "SM_WoodenBarrle.fbx":            "wooden barrel — decorative/destructible dungeon prop",
+      "SM_WoodenContainer.fbx":         "wooden container — decorative/destructible dungeon prop",
+      "SM_WoodenCrate.fbx":             "wooden crate — decorative/destructible dungeon prop",
+      "SM_WoodenTable.fbx":             "wooden table — decorative/destructible dungeon prop"
+    },
+    "textures": {
+      "Staff_AO.png":                   "staff ambient occlusion map",
+      "Staff_AlbedoTransparency.png":   "staff albedo + alpha",
+      "Staff_MetallicSmoothness.png":   "staff metallic + smoothness",
+      "Staff_Normal.png":               "staff normal map",
+      "swirl.png":                      "swirl/vortex effect texture",
+      "SM_GeneralProps_Mat_GeneralProps_AlbedoTransparency.tga": "shared albedo map for all SM_* dungeon props",
+      "SM_GeneralProps_Mat_GeneralProps_MetallicSmoothness.tga": "shared metallic+smoothness map for SM_* props (R=metallic, G=roughness)",
+      "SM_GeneralProps_Mat_GeneralProps_Normal.tga":             "shared normal map for all SM_* dungeon props"
+    },
+    "materials": {
+      "Staff_material.tres":            "pre-built StandardMaterial3D for the staff"
+    }
+  }
+}

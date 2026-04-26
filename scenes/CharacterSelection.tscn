@@ -1,0 +1,163 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/character_selection.gd" id="1_script"]
+[ext_resource type="Texture2D" path="res://Music & background images/background menu image.png" id="2_bg_image"]
+[ext_resource type="PackedScene" path="res://scenes/VirtualKeyboard.tscn" id="3_keyboard"]
+
+[node name="CharacterSelection" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_script")
+
+[node name="BackgroundImage" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("2_bg_image")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="BackgroundShade" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.588235)
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 40
+theme_override_constants/margin_top = 40
+theme_override_constants/margin_right = 40
+theme_override_constants/margin_bottom = 40
+
+[node name="VBox" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="TopRow" type="HBoxContainer" parent="Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 15
+
+[node name="BackButton" type="Button" parent="Margin/VBox/TopRow"]
+custom_minimum_size = Vector2(100, 40)
+layout_mode = 2
+focus_mode = 2
+text = "<- Back"
+
+[node name="LoadCharacterButton" type="Button" parent="Margin/VBox/TopRow"]
+custom_minimum_size = Vector2(150, 40)
+layout_mode = 2
+focus_mode = 2
+text = "Load Character"
+
+[node name="Title" type="Label" parent="Margin/VBox/TopRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 32
+text = "Character Selection"
+horizontal_alignment = 1
+
+[node name="Spacer" type="Control" parent="Margin/VBox/TopRow"]
+custom_minimum_size = Vector2(265, 0)
+layout_mode = 2
+
+[node name="CenterContent" type="HBoxContainer" parent="Margin/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 50
+alignment = 1
+
+[node name="SelectedCharPanel" type="PanelContainer" parent="Margin/VBox/CenterContent"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+
+[node name="VBox" type="VBoxContainer" parent="Margin/VBox/CenterContent/SelectedCharPanel"]
+layout_mode = 2
+theme_override_constants/separation = 15
+alignment = 1
+
+[node name="CharName" type="Label" parent="Margin/VBox/CenterContent/SelectedCharPanel/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "Character Name"
+horizontal_alignment = 1
+
+[node name="CharImagePlaceholder" type="Label" parent="Margin/VBox/CenterContent/SelectedCharPanel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.890196, 0.231373, 0.223529, 1)
+theme_override_font_sizes/font_size = 64
+text = "?"
+horizontal_alignment = 1
+
+[node name="CharNameInput" type="LineEdit" parent="Margin/VBox/CenterContent/SelectedCharPanel/VBox"]
+layout_mode = 2
+focus_mode = 2
+placeholder_text = "Enter Name..."
+alignment = 1
+
+[node name="RunOptionsPanel" type="PanelContainer" parent="Margin/VBox/CenterContent"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="Margin/VBox/CenterContent/RunOptionsPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="VBox" type="VBoxContainer" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="RunOptionsLabel" type="Label" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
+layout_mode = 2
+text = "Run Options"
+horizontal_alignment = 1
+
+[node name="SeedLabel" type="Label" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
+layout_mode = 2
+text = "Seed:"
+
+[node name="SeedInput" type="LineEdit" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
+layout_mode = 2
+focus_mode = 2
+placeholder_text = "Enter Custom Seed..."
+
+[node name="RandomSeedButton" type="Button" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
+layout_mode = 2
+focus_mode = 2
+text = "Randomize Seed"
+
+[node name="Spacer" type="Control" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
+custom_minimum_size = Vector2(0, 20)
+layout_mode = 2
+
+[node name="StartRunButton" type="Button" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
+custom_minimum_size = Vector2(200, 60)
+layout_mode = 2
+size_flags_horizontal = 4
+focus_mode = 2
+theme_override_colors/font_color = Color(0.196078, 0.803922, 0.196078, 1)
+theme_override_font_sizes/font_size = 24
+text = "START RUN"
+
+[node name="VirtualKeyboard" parent="." instance=ExtResource("3_keyboard")]
+visible = false
+layout_mode = 1

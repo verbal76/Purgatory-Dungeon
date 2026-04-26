@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://detljugucml7w"
+path="res://godot/imported/Ambience Abyss.wav-e527f3fea45872d23d9ffcb34cf0c83b.sample"
+
+[deps]
+
+source_file="res://Music & background images/Ambience Abyss.wav"
+dest_files=["res://godot/imported/Ambience Abyss.wav-e527f3fea45872d23d9ffcb34cf0c83b.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

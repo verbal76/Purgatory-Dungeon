@@ -1,0 +1,12 @@
+[gd_scene format=3 uid="uid://bvvsks4gm1wa"]
+
+[ext_resource type="Script" uid="uid://cme0k2pospmmy" path="res://objects/globe/Globe.gd" id="1_28paj"]
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_n18on"]
+radius = 0.25
+
+[node name="Globe" type="CharacterBody3D" unique_id=175017480]
+script = ExtResource("1_28paj")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=2133770473]
+shape = SubResource("SphereShape3D_n18on")

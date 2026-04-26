@@ -1,0 +1,59 @@
+[gd_scene format=3 uid="uid://ypinb5lf7pn"]
+
+[ext_resource type="Script" uid="uid://bmc1auihl6iqt" path="res://characters/Lutsch Mage/projectiles/fireball.gd" id="1_vexg5"]
+[ext_resource type="Texture2D" uid="uid://8rifc2xuwclc" path="res://addons/kenney_particle_pack/flame_04.png" id="2_kmx2m"]
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_k3x9a"]
+
+[sub_resource type="Gradient" id="Gradient_orb"]
+offsets = PackedFloat32Array(0, 0.35, 1)
+colors = PackedColorArray(0.8, 0.7, 1, 1, 0.25, 0.1, 0.65, 1, 0, 0, 0, 0)
+
+[sub_resource type="GradientTexture1D" id="GradientTexture1D_orb"]
+gradient = SubResource("Gradient_orb")
+
+[sub_resource type="Curve" id="Curve_orb"]
+_data = [Vector2(0, 1), 0.0, 0.0, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 2
+
+[sub_resource type="CurveTexture" id="CurveTexture_orb"]
+curve = SubResource("Curve_orb")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_orb"]
+emission_shape = 1
+emission_sphere_radius = 0.2
+gravity = Vector3(0, 0.2, 0)
+scale_curve = SubResource("CurveTexture_orb")
+color_ramp = SubResource("GradientTexture1D_orb")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_orb"]
+transparency = 1
+blend_mode = 1
+vertex_color_use_as_albedo = true
+albedo_color = Color(0.85744894, 0.36934623, 0.2325888, 1)
+albedo_texture = ExtResource("2_kmx2m")
+emission_enabled = true
+emission = Color(0.79607844, 0, 0, 1)
+emission_energy_multiplier = 5.16
+billboard_mode = 3
+billboard_keep_scale = true
+particles_anim_h_frames = 1
+particles_anim_v_frames = 1
+particles_anim_loop = false
+
+[sub_resource type="QuadMesh" id="QuadMesh_orb"]
+material = SubResource("StandardMaterial3D_orb")
+
+[node name="Fireball" type="Area3D" unique_id=567936480]
+collision_layer = 0
+collision_mask = 3
+script = ExtResource("1_vexg5")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=837145146]
+shape = SubResource("SphereShape3D_k3x9a")
+
+[node name="GPUParticles3D" type="GPUParticles3D" parent="." unique_id=49183612]
+amount = 40
+lifetime = 1.2
+process_material = SubResource("ParticleProcessMaterial_orb")
+draw_pass_1 = SubResource("QuadMesh_orb")

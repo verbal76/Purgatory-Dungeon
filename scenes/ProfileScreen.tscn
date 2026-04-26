@@ -1,0 +1,144 @@
+[gd_scene format=3 uid="uid://c1x8j5b6l7m8n"]
+
+[ext_resource type="Script" uid="uid://saj63qedeuu0" path="res://scripts/profile_screen.gd" id="1_script"]
+
+[node name="ProfileScreen" type="Control" unique_id=308933809]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_script")
+
+[node name="Background" type="ColorRect" parent="." unique_id=1170989466]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.0784314, 0.0784314, 0.0784314, 1)
+
+[node name="MainLayout" type="VBoxContainer" parent="." unique_id=2109398333]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+theme_override_constants/separation = 40
+alignment = 1
+
+[node name="Header" type="Label" parent="MainLayout" unique_id=1021714860]
+layout_mode = 2
+theme_override_font_sizes/font_size = 32
+text = "PLAYER PROFILES"
+horizontal_alignment = 1
+
+[node name="SlotGrid" type="GridContainer" parent="MainLayout" unique_id=1355231052]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_constants/h_separation = 20
+theme_override_constants/v_separation = 15
+columns = 2
+
+[node name="BackButton" type="Button" parent="MainLayout" unique_id=2109684104]
+custom_minimum_size = Vector2(240, 50)
+layout_mode = 2
+size_flags_horizontal = 4
+text = "Back to Main Menu"
+
+[node name="PopupLayer" type="ColorRect" parent="." unique_id=1611099260]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.784314)
+
+[node name="ChoicePanel" type="PanelContainer" parent="PopupLayer" unique_id=1764390158]
+visible = false
+custom_minimum_size = Vector2(300, 200)
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -150.0
+offset_top = -100.0
+offset_right = 150.0
+offset_bottom = 100.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="PopupLayer/ChoicePanel" unique_id=431558747]
+layout_mode = 2
+mouse_filter = 0
+theme_override_constants/separation = 15
+alignment = 1
+
+[node name="SlotTitle" type="Label" parent="PopupLayer/ChoicePanel/VBox" unique_id=1270251899]
+layout_mode = 2
+text = "Slot Action"
+horizontal_alignment = 1
+
+[node name="LoadBtn" type="Button" parent="PopupLayer/ChoicePanel/VBox" unique_id=1276501895]
+layout_mode = 2
+text = "LOAD PROFILE"
+
+[node name="DeleteBtn" type="Button" parent="PopupLayer/ChoicePanel/VBox" unique_id=188230396]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.305882, 0.231373, 1)
+text = "DELETE"
+
+[node name="CancelBtn" type="Button" parent="PopupLayer/ChoicePanel/VBox" unique_id=1170266122]
+layout_mode = 2
+text = "CANCEL"
+
+[node name="ConfirmPanel" type="PanelContainer" parent="PopupLayer" unique_id=675156059]
+visible = false
+custom_minimum_size = Vector2(300, 150)
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -150.0
+offset_top = -75.0
+offset_right = 150.0
+offset_bottom = 75.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="PopupLayer/ConfirmPanel" unique_id=8442938]
+layout_mode = 2
+mouse_filter = 0
+theme_override_constants/separation = 15
+alignment = 1
+
+[node name="Label" type="Label" parent="PopupLayer/ConfirmPanel/VBox" unique_id=97669009]
+layout_mode = 2
+text = "Are you sure?
+This cannot be undone."
+horizontal_alignment = 1
+
+[node name="HBox" type="HBoxContainer" parent="PopupLayer/ConfirmPanel/VBox" unique_id=158574423]
+layout_mode = 2
+mouse_filter = 0
+alignment = 1
+
+[node name="YesBtn" type="Button" parent="PopupLayer/ConfirmPanel/VBox/HBox" unique_id=666083555]
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+text = "YES"
+
+[node name="NoBtn" type="Button" parent="PopupLayer/ConfirmPanel/VBox/HBox" unique_id=1768888923]
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+text = "NO"

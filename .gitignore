@@ -1,0 +1,21 @@
+# Godot 4+ specific ignores
+.godot/
+/godot/
+/android/
+
+# Editor temp files
+*.tmp
+
+# Empty / stale folders
+/Purgatory/
+
+# Claude tooling — not part of the game
+/.claude/
+/claude-skills-threejs-ecs-ts/
+/threejs-skills/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

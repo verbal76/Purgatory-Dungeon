@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://x838to52qtpf"
+path="res://godot/imported/Deadly Whispers 003.wav-e6af27e3940e24abb22f29f355116c9e.sample"
+
+[deps]
+
+source_file="res://Music & background images/Sound Effects/Deadly Whispers 003.wav"
+dest_files=["res://godot/imported/Deadly Whispers 003.wav-e6af27e3940e24abb22f29f355116c9e.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

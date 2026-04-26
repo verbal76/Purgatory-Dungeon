@@ -1,0 +1,101 @@
+[gd_scene format=3 uid="uid://d304bn1mndu3"]
+
+[ext_resource type="Script" uid="uid://daaxpsk76cm54" path="res://scripts/Purgatory_Dungeon_main_game_file.gd" id="1_ix1po"]
+[ext_resource type="PackedScene" uid="uid://hvwbtqgmlrw2" path="res://dungeon modules/player_spawn_2_openings.tscn" id="2_5tq5w"]
+[ext_resource type="PackedScene" uid="uid://lann4x8bsjxr" path="res://dungeon modules/collision_x_large_room_2_opening.tscn" id="3_irgxc"]
+[ext_resource type="PackedScene" uid="uid://cfkgaquynm3ts" path="res://dungeon modules/collision_small_room_2_openings.tscn" id="5_y74jw"]
+[ext_resource type="PackedScene" uid="uid://dld6qitiips0f" path="res://dungeon modules/collision_long_room_1_opening.tscn" id="6_3oefq"]
+[ext_resource type="PackedScene" uid="uid://8whak0ajdolx" path="res://dungeon modules/collision_large_room_2_opening.tscn" id="7_rg17w"]
+[ext_resource type="PackedScene" uid="uid://2el6lrdm2250" path="res://dungeon modules/collision_large_room_1_opening.tscn" id="8_5k3n1"]
+[ext_resource type="PackedScene" uid="uid://bqlru2ckj0io" path="res://dungeon modules/collision_large_4_way_room_2_sides_connected.tscn" id="9_opeb5"]
+[ext_resource type="PackedScene" uid="uid://b4gjatiaugvt0" path="res://dungeon modules/collision_2_section_hallway_straight.tscn" id="11_p0j2q"]
+[ext_resource type="PackedScene" uid="uid://b3vxswlm2ov5a" path="res://dungeon modules/collision_2_section_hallway_each_side_of_90.tscn" id="12_kr6p4"]
+[ext_resource type="PackedScene" uid="uid://chmvuj4tldx6v" path="res://dungeon modules/collioion_small_room_1_openings.tscn" id="13_w61mj"]
+[ext_resource type="PackedScene" uid="uid://cebsyfv6h6gq0" path="res://dungeon modules/new_collision_square_4_openings.tscn" id="14_d6no3"]
+[ext_resource type="PackedScene" uid="uid://bmiiba0tc00qh" path="res://dungeon modules/new_collision_rectangle_4_opening.tscn" id="15_5lg3e"]
+[ext_resource type="PackedScene" uid="uid://cqfqwjhpvd7m3" path="res://dungeon modules/room_connector.tscn" id="15_17fdp"]
+[ext_resource type="PackedScene" uid="uid://d24xov20jfgvu" path="res://dungeon modules/long_room_2_opening.tscn" id="15_l3he5"]
+[ext_resource type="PackedScene" uid="uid://c0fhpxtl8w52" path="res://dungeon modules/new_collision_hallway_tee_3_openings.tscn" id="16_nmwft"]
+[ext_resource type="PackedScene" uid="uid://dgnu1ho2agv77" path="res://dungeon modules/new_collision_room_closer_flush.tscn" id="18_rm6bl"]
+[ext_resource type="PackedScene" uid="uid://l7yraj3laps8" path="res://characters/Lutsch Mage/scenes/Mage enemy.tscn" id="19_0fxur"]
+[ext_resource type="PackedScene" uid="uid://bcfyuc5h8ls6c" path="res://characters/brute/scenes/brute_enemy.tscn" id="19_enemy"]
+[ext_resource type="PackedScene" uid="uid://d4652yx8sra6" path="res://scenes/minimap_function.tscn" id="20_aewt2"]
+[ext_resource type="PackedScene" uid="uid://v2xsrn82r0ms" path="res://characters/Lutsch Mage/scenes/Mage player.tscn" id="20_d6h67"]
+[ext_resource type="PackedScene" uid="uid://d04gl1k0hjs8f" path="res://characters/brute/scenes/brute_player.tscn" id="20_player"]
+[ext_resource type="PackedScene" uid="uid://c74dso0smyxog" path="res://scenes/pause_menu_function.tscn" id="21_iavkn"]
+[ext_resource type="Texture2D" uid="uid://b203hxay337or" path="res://Music & background images/jumpsc.png" id="22_p2bln"]
+[ext_resource type="PackedScene" uid="uid://dk4tv3ejbrxnx" path="res://scenes/dungeon_generation_function.tscn" id="22_qjuv4"]
+[ext_resource type="AudioStream" uid="uid://di3pc7bgsttn" path="res://Music & background images/Sound Effects/Woman Scream 004.wav" id="23_4rj3w"]
+[ext_resource type="Script" uid="uid://dtrcc6y31gd0h" path="res://scripts/lighting_manager.gd" id="30_light"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_m5olk"]
+size = Vector3(5831.737, 0, 5538.4917)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ceil"]
+cull_mode = 2
+albedo_color = Color(0.42, 0.42, 0.42, 1)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ceil"]
+material = SubResource("StandardMaterial3D_ceil")
+size = Vector2(5831.737, 5538.4917)
+
+[node name="Node3D" type="Node3D" unique_id=1107521940]
+script = ExtResource("1_ix1po")
+starter_module = ExtResource("2_5tq5w")
+branch_modules = Array[PackedScene]([ExtResource("3_irgxc"), ExtResource("5_y74jw"), ExtResource("6_3oefq"), ExtResource("7_rg17w"), ExtResource("8_5k3n1"), ExtResource("9_opeb5"), ExtResource("11_p0j2q"), ExtResource("12_kr6p4"), ExtResource("13_w61mj"), ExtResource("14_d6no3"), ExtResource("15_5lg3e"), ExtResource("16_nmwft"), ExtResource("15_l3he5")])
+room_connector_module = ExtResource("15_17fdp")
+end_cap_module = ExtResource("18_rm6bl")
+brute_enemy_scene = ExtResource("19_enemy")
+mage_enemy_scene = ExtResource("19_0fxur")
+barbarian_scene = ExtResource("20_player")
+mage_scene = ExtResource("20_d6h67")
+target_piece_count = 110
+attempts_per_connection = 35
+jumpscare_texture = ExtResource("22_p2bln")
+jumpscare_sound = ExtResource("23_4rj3w")
+
+[node name="LightingManager" type="Node3D" parent="." unique_id=999000001]
+script = ExtResource("30_light")
+
+[node name="Player" parent="." unique_id=566537546 instance=ExtResource("20_player")]
+
+[node name="Antifall mesh floor" type="StaticBody3D" parent="." unique_id=1150214167]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Antifall mesh floor" unique_id=1105697396]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -720.624, 0, -1021.0222)
+shape = SubResource("BoxShape3D_m5olk")
+
+[node name="Dungeon ceiling" type="StaticBody3D" parent="." unique_id=19986993]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.5, 0)
+collision_layer = 2
+collision_mask = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Dungeon ceiling" unique_id=1417601882]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -720.624, 0, -1021.0222)
+shape = SubResource("BoxShape3D_m5olk")
+
+[node name="CeilingMesh" type="MeshInstance3D" parent="Dungeon ceiling" unique_id=1704412596]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -720.624, 0, -1021.0222)
+mesh = SubResource("PlaneMesh_ceil")
+
+[node name="minimap_function" parent="." unique_id=113223907 instance=ExtResource("20_aewt2")]
+
+[node name="pause_menu_function" parent="." unique_id=1417776468 instance=ExtResource("21_iavkn")]
+
+[node name="DungeonGenerationFunction" parent="." unique_id=609045340 instance=ExtResource("22_qjuv4")]
+
+[node name="HUD" type="CanvasLayer" parent="." unique_id=300000001]
+
+[node name="KillCounterMargin" type="MarginContainer" parent="HUD" unique_id=300000002]
+offset_left = 18.0
+offset_top = 72.0
+offset_right = 210.0
+offset_bottom = 118.0
+
+[node name="KillCounterVBox" type="VBoxContainer" parent="HUD/KillCounterMargin" unique_id=300000003]
+layout_mode = 2
+
+[node name="KillCounterLabel" type="Label" parent="HUD/KillCounterMargin/KillCounterVBox" unique_id=300000004]
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Kills: 0"

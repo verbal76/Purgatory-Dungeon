@@ -1,0 +1,27 @@
+Create a new file called CLAUDE.md in the project root with the following exact content. Make sure it's saved at the same level as project.godot.
+
+# CLAUDE.md - Purgatory Dungeon Optimization Rules
+
+## Project Goals
+- Godot 4.x dungeon game (2D or 3D — detect from project.godot)
+- Target: Stable 60+ FPS on mid-range hardware
+- Priority: Reduce CPU usage, lower frame time, eliminate bottlenecks
+
+## Performance Rules (Always follow these)
+- Minimize _process() calls; prefer _physics_process() for movement/physics
+- Use object pooling for enemies, bullets, particles, effects
+- Avoid per-frame allocations (no `new` objects, strings, or arrays in hot loops)
+- Use MultiMeshInstance, OcclusionCulling, LOD, and VisibilityNotifier where possible
+- Profile with Godot's built-in Profiler before and after every change
+- Keep node count and draw calls low
+- Prefer GDScript best practices for performance (typed variables, @onready, etc.)
+
+## How to Work With Me
+- discuss findings before creating code, wait for permission before creation
+- First explore the full project structure and key files
+- Identify high _process/_physics_process time, high draw calls, or frequent allocations
+- Simulate code execution paths and suggest streamlined versions
+- Always show clear before/after code diffs
+- Suggest small, testable changes first
+
+After creating the file, confirm it was saved and then summarize the project structure and any obvious FPS/CPU issues you see.

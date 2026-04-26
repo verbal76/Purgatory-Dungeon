@@ -1,0 +1,241 @@
+[gd_scene format=3 uid="uid://b1du6x8d4nk1n"]
+
+[ext_resource type="Script" uid="uid://d1qrsrc3g0x4s" path="res://archive/run_setup_screen.gd" id="1_4qyjr"]
+[ext_resource type="Texture2D" uid="uid://cxu0n1v36yipg" path="res://dungeon modules/temp_menu_screen_background.png" id="2_7is2l"]
+[ext_resource type="Script" uid="uid://bs4fd5n1j8suu" path="res://scripts/virtual_keyboard.gd" id="3_e5rpo"]
+
+[node name="RunSetupScreen" type="Control" unique_id=1975990801]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_4qyjr")
+
+[node name="BackgroundImage" type="TextureRect" parent="." unique_id=2101723660]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("2_7is2l")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="BackgroundShade" type="ColorRect" parent="." unique_id=1825263893]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.34)
+
+[node name="Panel" type="Panel" parent="." unique_id=359274413]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -450.0
+offset_top = -340.0
+offset_right = 450.0
+offset_bottom = 340.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Margin" type="MarginContainer" parent="Panel" unique_id=112297573]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 28
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 28
+theme_override_constants/margin_bottom = 20
+
+[node name="VBox" type="VBoxContainer" parent="Panel/Margin" unique_id=1508948047]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="TitleLabel" type="Label" parent="Panel/Margin/VBox" unique_id=1329909905]
+layout_mode = 2
+theme_override_font_sizes/font_size = 30
+text = "Purgetory"
+horizontal_alignment = 1
+
+[node name="SlotGrid" type="GridContainer" parent="Panel/Margin/VBox" unique_id=1568287744]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/h_separation = 10
+theme_override_constants/v_separation = 10
+columns = 2
+
+[node name="HSeparator" type="HSeparator" parent="Panel/Margin/VBox" unique_id=1482656520]
+layout_mode = 2
+
+[node name="CharacterNameRow" type="HBoxContainer" parent="Panel/Margin/VBox" unique_id=432296535]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="NameLabel" type="Label" parent="Panel/Margin/VBox/CharacterNameRow" unique_id=1923648048]
+custom_minimum_size = Vector2(170, 0)
+layout_mode = 2
+text = "Character Name:"
+
+[node name="CharacterNameValue" type="Label" parent="Panel/Margin/VBox/CharacterNameRow" unique_id=792008850]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "[NO CHARACTER]"
+clip_text = true
+
+[node name="EditNameButton" type="Button" parent="Panel/Margin/VBox/CharacterNameRow" unique_id=1460155745]
+custom_minimum_size = Vector2(120, 40)
+layout_mode = 2
+text = "Edit"
+
+[node name="SeedRow" type="HBoxContainer" parent="Panel/Margin/VBox" unique_id=1006416046]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="SeedLabel" type="Label" parent="Panel/Margin/VBox/SeedRow" unique_id=1634025453]
+custom_minimum_size = Vector2(90, 0)
+layout_mode = 2
+text = "Seed:"
+
+[node name="SeedValue" type="Label" parent="Panel/Margin/VBox/SeedRow" unique_id=1189868249]
+custom_minimum_size = Vector2(180, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+text = "[RANDOM]"
+horizontal_alignment = 1
+clip_text = true
+
+[node name="RandomButton" type="Button" parent="Panel/Margin/VBox/SeedRow" unique_id=168665984]
+custom_minimum_size = Vector2(140, 40)
+layout_mode = 2
+text = "Random Seed"
+
+[node name="CustomSeedButton" type="Button" parent="Panel/Margin/VBox/SeedRow" unique_id=226029317]
+custom_minimum_size = Vector2(140, 40)
+layout_mode = 2
+text = "Custom Seed"
+
+[node name="StatusLabel" type="Label" parent="Panel/Margin/VBox" unique_id=2123528044]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="BottomButtonRow" type="HBoxContainer" parent="Panel/Margin/VBox" unique_id=274690925]
+layout_mode = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="StartButton" type="Button" parent="Panel/Margin/VBox/BottomButtonRow" unique_id=1933248551]
+custom_minimum_size = Vector2(170, 50)
+layout_mode = 2
+text = "Start Run"
+
+[node name="AlchemistButton" type="Button" parent="Panel/Margin/VBox/BottomButtonRow" unique_id=971760866]
+custom_minimum_size = Vector2(170, 50)
+layout_mode = 2
+text = "Alchemist Store"
+
+[node name="ExitButton" type="Button" parent="Panel/Margin/VBox/BottomButtonRow" unique_id=1948442618]
+custom_minimum_size = Vector2(170, 50)
+layout_mode = 2
+text = "Exit Game"
+
+[node name="VirtualKeyboard" type="Control" parent="." unique_id=685600625]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("3_e5rpo")
+
+[node name="BlurOverlay" type="ColorRect" parent="VirtualKeyboard" unique_id=937820566]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 0.28)
+
+[node name="Panel" type="Panel" parent="VirtualKeyboard" unique_id=1605473225]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -520.0
+offset_top = -235.0
+offset_right = 520.0
+offset_bottom = 235.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="VirtualKeyboard/Panel" unique_id=1517281342]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 18.0
+offset_top = 18.0
+offset_right = -18.0
+offset_bottom = -18.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 14
+
+[node name="InputDisplay" type="Label" parent="VirtualKeyboard/Panel/VBox" unique_id=2030790749]
+custom_minimum_size = Vector2(0, 60)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "[TEXT HERE]"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="KeyboardRows" type="VBoxContainer" parent="VirtualKeyboard/Panel/VBox" unique_id=266733796]
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_override_constants/separation = 10
+
+[node name="Row1" type="HBoxContainer" parent="VirtualKeyboard/Panel/VBox/KeyboardRows" unique_id=1024160816]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="Row2" type="HBoxContainer" parent="VirtualKeyboard/Panel/VBox/KeyboardRows" unique_id=1448232319]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="Row3" type="HBoxContainer" parent="VirtualKeyboard/Panel/VBox/KeyboardRows" unique_id=1182911956]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="Row4" type="HBoxContainer" parent="VirtualKeyboard/Panel/VBox/KeyboardRows" unique_id=1321267064]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="Row5" type="HBoxContainer" parent="VirtualKeyboard/Panel/VBox/KeyboardRows" unique_id=532430341]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1

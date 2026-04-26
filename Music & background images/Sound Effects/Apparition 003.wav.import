@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://bcfmdl7l175ap"
+path="res://godot/imported/Apparition 003.wav-2cdc5fdb334e7811afc0fdc48e5985b5.sample"
+
+[deps]
+
+source_file="res://Music & background images/Sound Effects/Apparition 003.wav"
+dest_files=["res://godot/imported/Apparition 003.wav-2cdc5fdb334e7811afc0fdc48e5985b5.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

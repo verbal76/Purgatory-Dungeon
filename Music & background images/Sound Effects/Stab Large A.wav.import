@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://behml3b08ejtq"
+path="res://godot/imported/Stab Large A.wav-c7b55d7df2d91e5cd4b6aab903e666b7.sample"
+
+[deps]
+
+source_file="res://Music & background images/Sound Effects/Stab Large A.wav"
+dest_files=["res://godot/imported/Stab Large A.wav-c7b55d7df2d91e5cd4b6aab903e666b7.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

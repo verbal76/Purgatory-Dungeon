@@ -1,0 +1,141 @@
+[gd_scene format=3 uid="uid://d04gl1k0hjs8f"]
+
+[ext_resource type="Script" uid="uid://cnc07omvpkvyp" path="res://characters/brute/scripts/brute_player.gd" id="1_6u5e6"]
+[ext_resource type="PackedScene" uid="uid://cphtd2300recq" path="res://characters/brute/Brute_multi.gltf" id="2_3atva"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_vhw6n"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_weapon"]
+size = Vector3(21.657959, 64.44964, 111.023445)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_right_foot_kick"]
+size = Vector3(32.87081, 45.916107, 51.225243)
+
+[node name="BrutePlayer" type="CharacterBody3D" unique_id=1978569325 node_paths=PackedStringArray("weapon_hitbox", "kick_hitbox") groups=["player"]]
+script = ExtResource("1_6u5e6")
+gamepad_turn_speed = 5.0
+jump_anim_speed = 1.5
+attack_speed_scale = 1.2
+kick_speed_scale = 1.2
+weapon_hitbox = NodePath("Mesh/Brute/Node/Skeleton3D/WeaponBoneAttach/WeaponHitbox")
+kick_hitbox = NodePath("Mesh/Brute/Node/Skeleton3D/RightFootKickAttach/KickHitbox")
+block_knockback_force = 10.0
+rapid_attack_duration = 5.0
+max_health = 150.0
+footstep_volume_db = 15.0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1761834214]
+shape = SubResource("CapsuleShape3D_vhw6n")
+
+[node name="SpringArm3D" type="SpringArm3D" parent="." unique_id=1814797792]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
+spring_length = 0.0
+
+[node name="Camera3D" type="Camera3D" parent="SpringArm3D" unique_id=1510000821]
+current = true
+
+[node name="Mesh" type="Node3D" parent="." unique_id=1244882395]
+
+[node name="Brute" parent="Mesh" unique_id=854276834 instance=ExtResource("2_3atva")]
+
+[node name="Skeleton3D" parent="Mesh/Brute/Node" parent_id_path=PackedInt32Array(854276834, 1210213306) index="1" unique_id=287432750]
+bones/0/position = Vector3(-0.0037375093, 103.74491, -0.007284671)
+bones/0/rotation = Quaternion(0.051244643, -0.42351446, 0.046178453, 0.90325916)
+bones/9/rotation = Quaternion(0.022086943, 0.027471336, -0.013196646, 0.9992914)
+bones/18/rotation = Quaternion(0.051301055, 0.05496545, -0.02697248, 0.99680465)
+bones/27/rotation = Quaternion(0.021196967, 0.05576429, -0.025279624, 0.99789876)
+bones/36/rotation = Quaternion(0.019975308, 0.081649974, -0.00065702014, 0.99646074)
+bones/45/rotation = Quaternion(-0.041593354, 0.19943699, -0.037355345, 0.9783146)
+bones/117/rotation = Quaternion(0.52457565, 0.46747604, -0.508862, 0.49733907)
+bones/126/rotation = Quaternion(0.38502917, -0.047170654, 0.12876208, 0.9126597)
+bones/135/rotation = Quaternion(0.08810694, -0.16115446, 0.24328868, 0.952406)
+bones/144/rotation = Quaternion(-0.05795286, 0.020203441, 0.021278802, 0.9978881)
+bones/153/rotation = Quaternion(0.14941323, 0.25783426, 0.30435532, 0.90474594)
+bones/162/rotation = Quaternion(0.05698622, -0.08997788, -0.062251206, 0.99236155)
+bones/171/rotation = Quaternion(0.029619284, 0.0033342415, -0.083931915, 0.9960257)
+bones/189/rotation = Quaternion(-0.0002543237, -0.0104257, 0.05210001, 0.9985875)
+bones/198/rotation = Quaternion(0.04009991, 0.0011222214, 0.0016272236, 0.9991938)
+bones/207/rotation = Quaternion(0.06599601, 0.0007653673, 0.0038818982, 0.9978121)
+bones/225/rotation = Quaternion(0.03795972, 0.0148907695, -0.039517205, 0.9983866)
+bones/234/rotation = Quaternion(0.11311677, 0.0051199514, 0.008240116, 0.9935344)
+bones/243/rotation = Quaternion(0.14401609, 0.0070831925, 0.010693776, 0.9894923)
+bones/261/rotation = Quaternion(0.119185336, 0.017954677, -0.0701128, 0.9902307)
+bones/270/rotation = Quaternion(0.16412334, -0.0052881725, 0.005659871, 0.9864095)
+bones/279/rotation = Quaternion(0.19127718, -0.004642229, 0.0069260905, 0.9815006)
+bones/297/rotation = Quaternion(0.19145574, 0.006964378, -0.055765018, 0.97989106)
+bones/306/rotation = Quaternion(0.14560589, -0.0068036406, 0.0027796966, 0.98931545)
+bones/315/rotation = Quaternion(0.29793787, -0.018680155, 0.0054854364, 0.9543867)
+bones/333/rotation = Quaternion(0.53532124, -0.42310378, 0.47777873, 0.553301)
+bones/342/rotation = Quaternion(0.44337878, 0.04578017, 0.18372309, 0.87610793)
+bones/351/rotation = Quaternion(0.08897277, 0.10118717, -0.39850804, 0.90721357)
+bones/360/rotation = Quaternion(0.06317566, -0.01969973, -0.3033506, 0.9505784)
+bones/369/rotation = Quaternion(0.13064367, -0.53471, -0.36141825, 0.7525918)
+bones/378/rotation = Quaternion(0.05105679, 0.09254544, 0.09023716, 0.9902959)
+bones/387/rotation = Quaternion(0.11077183, 0.004613591, 0.28821954, 0.95112455)
+bones/405/rotation = Quaternion(0.31655464, -0.068388045, -0.048708856, 0.94485116)
+bones/414/rotation = Quaternion(0.56560475, -0.026430326, -0.022266457, 0.8239521)
+bones/423/rotation = Quaternion(0.51642275, -0.017369496, -0.020297566, 0.85591704)
+bones/441/rotation = Quaternion(0.38127694, -0.006022604, -0.017306546, 0.9242793)
+bones/450/rotation = Quaternion(0.5617294, -0.007286871, -0.028791822, 0.82678777)
+bones/459/rotation = Quaternion(0.3509115, 0.002094476, -0.017646173, 0.93624)
+bones/477/rotation = Quaternion(0.4865154, 0.034283895, -0.033528548, 0.87235504)
+bones/486/rotation = Quaternion(0.40669012, 2.0108651e-05, -0.015893094, 0.9134279)
+bones/495/rotation = Quaternion(0.451226, -0.0008929403, -0.017497486, 0.89223766)
+bones/513/rotation = Quaternion(0.40252715, 0.09376193, 0.045889426, 0.9094366)
+bones/522/rotation = Quaternion(0.38742527, -0.00098138, -0.0141358245, 0.92179227)
+bones/531/rotation = Quaternion(0.21628867, 0.0028128794, -0.007779834, 0.9762945)
+bones/558/rotation = Quaternion(-0.06660744, 0.28405598, 0.9360951, 0.19647308)
+bones/567/rotation = Quaternion(-0.48271403, -0.04005674, -0.046207726, 0.87364036)
+bones/576/rotation = Quaternion(0.58755815, 0.08392155, 0.17438012, 0.78569984)
+bones/585/rotation = Quaternion(0.39594957, 0.020007778, 0.049397346, 0.91672444)
+bones/603/rotation = Quaternion(0.37910604, 0.40670347, 0.8131205, -0.17235407)
+bones/612/rotation = Quaternion(-0.4107238, 0.17259964, -0.035451204, 0.8945718)
+bones/621/rotation = Quaternion(0.38127205, -0.06987333, -0.037678063, 0.9210482)
+bones/630/rotation = Quaternion(0.4082736, 0.013042677, -0.06442276, 0.91049016)
+
+[node name="MaleBruteA_Hair" parent="Mesh/Brute/Node/Skeleton3D" index="1" unique_id=1227433287]
+visible = false
+
+[node name="MaleBruteA_Moustaches" parent="Mesh/Brute/Node/Skeleton3D" index="4" unique_id=1565088944]
+visible = false
+
+[node name="MaleBruteA_Eyes" parent="Mesh/Brute/Node/Skeleton3D" index="5" unique_id=1184855738]
+visible = false
+
+[node name="MaleBruteA_Eyelashes" parent="Mesh/Brute/Node/Skeleton3D" index="6" unique_id=942257537]
+visible = false
+
+[node name="MaleBruteA_Body" parent="Mesh/Brute/Node/Skeleton3D" index="7" unique_id=280415228]
+visible = false
+
+[node name="MaleBruteA_Earrings" parent="Mesh/Brute/Node/Skeleton3D" index="8" unique_id=915257288]
+visible = false
+
+[node name="WeaponBoneAttach" type="BoneAttachment3D" parent="Mesh/Brute/Node/Skeleton3D" index="9" unique_id=111222333]
+transform = Transform3D(0.6652496, -0.72705173, -0.16981862, 0.63792604, 0.43532342, 0.6352508, -0.38793427, -0.5309323, 0.75340414, -61.081318, 100.73547, -10.51445)
+bone_name = "mixamorigWeapon"
+bone_idx = 549
+
+[node name="WeaponHitbox" type="Area3D" parent="Mesh/Brute/Node/Skeleton3D/WeaponBoneAttach" unique_id=444555666]
+collision_layer = 0
+monitoring = false
+monitorable = false
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Mesh/Brute/Node/Skeleton3D/WeaponBoneAttach/WeaponHitbox" unique_id=777888999]
+transform = Transform3D(-0.034890294, -0.9994592, 2.2351742e-07, 0.9994601, -0.034898713, -7.8231096e-08, 2.2444874e-06, -4.8726797e-06, 1.0000793, -4.5020943, 5.387353, 64.80119)
+shape = SubResource("BoxShape3D_weapon")
+debug_color = Color(0.94777876, 0.12394298, 0.4881748, 0.41960785)
+
+[node name="RightFootKickAttach" type="BoneAttachment3D" parent="Mesh/Brute/Node/Skeleton3D" index="10" unique_id=111222334]
+transform = Transform3D(-0.42793578, -0.63834864, -0.6398298, 0.049916573, -0.7235379, 0.6884773, -0.9024297, 0.26268604, 0.341492, -20.725805, 15.548851, -38.932083)
+bone_name = "mixamorigRightFoot"
+bone_idx = 576
+
+[node name="KickHitbox" type="Area3D" parent="Mesh/Brute/Node/Skeleton3D/RightFootKickAttach" unique_id=444555667]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Mesh/Brute/Node/Skeleton3D/RightFootKickAttach/KickHitbox" unique_id=777889000]
+transform = Transform3D(0.991835, -0.077636346, -0.10116252, 0.122627646, 0.7983274, 0.5896052, 0.034986317, -0.59719664, 0.8013306, -0.29179382, 17.67881, 2.3843994)
+shape = SubResource("BoxShape3D_right_foot_kick")
+debug_color = Color(0.9633779, 1.347661e-06, 0.50190455, 0.41960785)
+
+[editable path="Mesh/Brute"]

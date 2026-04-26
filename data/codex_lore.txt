@@ -1,0 +1,57 @@
+# ==============================================================================
+#  codex_lore.txt
+#  Path: res://data/codex_lore.txt
+#
+#  Purgetory Dungeon — Codex Lore File
+#
+#  FORMAT:
+#    One lore entry per line.
+#    Lines beginning with # are comments and are ignored.
+#    Blank lines are ignored.
+#    Entries are revealed one per completed run (death or day-30 finish),
+#    in order from top to bottom.
+#
+#  ADDING LORE:
+#    Append new lines at the bottom of this file.
+#    Existing players will see new entries unlock as they complete more runs.
+#
+#  EDITING LORE:
+#    You may freely edit existing lines. Changes take effect immediately
+#    the next time a player opens the Codex Screen — no save migration needed.
+#
+#  REMOVING LORE:
+#    If you remove lines, the unlocked count will clamp to the new file size.
+#    Already-unlocked slots beyond the new end will simply not display.
+#
+#  MOD NOTES:
+#    This file is plain text. Any text editor can modify it safely.
+#    Do not add commas or special formatting — each line is its own entry.
+# ==============================================================================
+
+You wake in darkness with no memory of your name or how you arrived.
+The only certainty is the cold stone beneath your boots and the axe heavy in your hands.
+A voice inside your skull whispers the only law that matters: get up… fight… or die.
+This place has no name you can remember. Time feels wrong here — stretched, compressed, broken. One brutal day can feel like a lifetime, yet the stars above never move.
+You fight.
+You bleed.
+You kill.
+Room after room, floor after floor, the Dungeon tests you. Traps twist your mind and body. Glowing orbs appear only once per chamber. Doorways seal with an eerie light until every enemy lies dead. Flasks taken from the fallen buy fleeting power in the moments between slaughter.
+With every swing you grow sharper.
+With every death you inflict, something inside you awakens.
+You do not know why you fight.
+You only know that stopping is worse than dying.
+Day by day the Dungeon changes. Enemies grow stronger, more numerous, more vicious. The walls themselves seem to watch. The air grows heavier with every floor.
+On the thirtieth day the final portal opens.
+The truth floods in like blood from a fresh wound.
+You have been dead the entire time.
+This was never a dungeon.
+This was Purgatory — a forge built to strip souls bare and hammer what remains into something greater… or something monstrous.
+Every kill, every choice, every moment of rage or restraint has been recorded.
+Now the portal offers you two futures.
+The Redeemer
+Your soul has been honed into a blade of light. You will return to the living world as a true savior — a warrior who stands against evil, protects the innocent, and cuts down the monsters that prey on the weak. The living need you. The dead have prepared you.
+The Eternal Killer
+Or the bloodlust never left you. The Dungeon did not purify you — it freed you. You have become the perfect predator, addicted to the hunt, the kill, the endless slaughter. You turn your back on the portal and choose to remain here forever, carving through eternity in this playground of violence, seeing how deep the Dungeon truly goes and how many souls you can send screaming into the void.
+There is no middle path.
+There never was.
+Your soul has already chosen.

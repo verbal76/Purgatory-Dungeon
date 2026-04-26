@@ -1,0 +1,4 @@
+[gd_scene format=3 uid="uid://byfi5jjguap6t"]
+
+[node name="2 segment hall" type="Node3D" unique_id=1796514445]
+visible = false
