@@ -272,22 +272,20 @@ func _update_los(player: Node3D, delta: float) -> void:
 	_los_query.from    = start
 	_los_query.to      = end
 
-	var result := space.intersect_ray(_los_query)
-	
-	if result.is_empty() or result.get("collider") == player:
+	# Line of sight is blocked by level geometry only. Allies, props and chests between
+	# the brute and the player used to cut sight (the old ally branch set false in both
+	# arms), dropping crowds of brutes to waypoint pathing with a clear view.
+	var player_rid : Array[RID] = []
+	if player is CollisionObject3D:
+		player_rid.append(player.get_rid())
+	var result := PhysicsUtil.ray_world(space, _los_query, player_rid)
+
+	if result.is_empty():
 		if not _has_los:
 			_approach_boost = false   # First sighting — drop the approach speed bonus
 		_has_los = true
 	else:
-		var col = result.get("collider")
-		if col != null and col.is_in_group("enemy"):
-			var ally_speed : float = col.velocity.length() if "velocity" in col else 0.0
-			if ally_speed < 1.5:
-				_has_los = false
-			else:
-				_has_los = false
-		else:
-			_has_los = false
+		_has_los = false
 
 
 func _update_nav_target(player_pos: Vector3, _delta: float) -> void:

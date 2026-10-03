@@ -492,7 +492,9 @@ func take_damage(amount: float, source_node: Node3D = null) -> void:
 		var q     : PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(from, to)
 		q.collision_mask = 1   # World geometry only
 		q.exclude         = [source_node.get_rid(), get_rid()]
-		if not space.intersect_ray(q).is_empty():
+		# Only level geometry blocks damage; an ally, prop or chest in the line must not
+		# make the mage invulnerable.
+		if not PhysicsUtil.ray_world(space, q).is_empty():
 			return  # Wall between attacker and mage — damage blocked
 
 	# SURGICAL FIX: Apply front block validation identical to the Brute 

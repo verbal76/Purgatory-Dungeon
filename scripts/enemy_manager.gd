@@ -600,8 +600,10 @@ func _snap_to_floor(pos: Vector3) -> Vector3:
 	var from  := pos + Vector3(0.0, 1.5, 0.0)   # 1.5 m up — stays below the 3.5 m ceiling
 	var to    := pos + Vector3(0.0, -6.0, 0.0)
 	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.collision_mask = 1   # Static geometry only — ignore enemy capsules
-	var result := space.intersect_ray(query)
+	query.collision_mask = 1
+	# mask 1 also contains props/enemies/chests; ray_world skips those so a prop at the
+	# spawn point cannot lift the enemy onto its top.
+	var result := PhysicsUtil.ray_world(space, query)
 	if not result.is_empty():
 		return result.position + Vector3(0.0, 0.15, 0.0)
 	return pos + Vector3(0.0, 0.1, 0.0)
@@ -622,9 +624,10 @@ func _player_can_see_spawn(pos: Vector3) -> bool:
 	var from  := _player.global_position + Vector3(0.0, 1.6, 0.0)  # Eye height
 	var to    := pos + Vector3(0.0, 1.0, 0.0)
 	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.collision_mask = 1   # Static geometry only
+	query.collision_mask = 1
 	query.exclude        = [_player.get_rid()]
-	var result := space.intersect_ray(query)
+	# Only level geometry hides a spawn point; an enemy or prop in the line must not.
+	var result := PhysicsUtil.ray_world(space, query)
 	return result.is_empty()   # Empty = nothing blocking = player can see it
 
 
