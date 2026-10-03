@@ -25,6 +25,7 @@ var _portal_manager : Node  = null
 var _fade_rect      : ColorRect = null
 var _choice_root    : Control   = null
 var _fade_done      : bool  = false
+var _exiting        : bool  = false   # one-shot guard: a second button press must do nothing
 
 
 func _ready() -> void:
@@ -157,6 +158,9 @@ func _run_fade() -> void:
 # ── Button callbacks ──────────────────────────────────────────────────────────
 
 func _on_leave_pressed() -> void:
+	if _exiting:
+		return
+	_exiting = true
 	# Record the completion.
 	if SaveManager.current_profile_is_valid():
 		var prev : int = int(SaveManager.current_profile.get("dungeon_completions", 0))
@@ -170,12 +174,24 @@ func _on_leave_pressed() -> void:
 	RunLifecycle.end_run_cleanup()
 
 	get_tree().change_scene_to_file(ALCHEMIST_SCENE)
+	# This screen is a child of the root, so it survives the scene change; without this it
+	# stayed on top of the Alchemist with live buttons (double-counting completions and, via
+	# "Stay Below", restarting the day clock inside a menu).
+	queue_free()
 
 
 func _on_legendary_pressed() -> void:
+	if _exiting:
+		return
+	_exiting = true
 	# Enter legendary mode — run continues indefinitely.
 	if has_node("/root/GameClock"):
 		GameClock.enter_legendary_mode()
+
+	# Reinforcements were stopped when the run ended; Legendary Mode needs them back.
+	for spawner in get_tree().get_nodes_in_group("enemy_spawner"):
+		if spawner.has_method("resume_spawning"):
+			spawner.resume_spawning()
 
 	# Disable the portal so it can't be re-entered.
 	if is_instance_valid(_portal_manager) and _portal_manager.has_method("disable_portal"):

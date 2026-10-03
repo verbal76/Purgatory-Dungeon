@@ -174,5 +174,29 @@ func _ready() -> void:
 	for m in fake_mods:
 		m.free()
 
+	# Portal entry: killing the last enemy while already standing in the portal must enter it.
+	var portal3 := Node3D.new()
+	portal3.set_script(load("res://scripts/portal_manager.gd"))
+	add_child(portal3)
+	var stub_mgr := Node.new()
+	var stub_src := GDScript.new()
+	stub_src.source_code = "extends Node\nvar _live_count: int = 1\n"
+	stub_src.reload()
+	stub_mgr.set_script(stub_src)
+	add_child(stub_mgr)
+	var root3 := Node3D.new()
+	add_child(root3)
+	root3.global_position = player.global_position
+	portal3._portal_root = root3
+	portal3._player = player
+	portal3._enemy_mgr = stub_mgr
+	portal3._recheck_entry()
+	_check(not portal3._entry_shown, "portal stays closed while enemies remain")
+	stub_mgr._live_count = 0
+	portal3._entry_shown = false
+	var shown_before: bool = portal3._entry_shown
+	portal3._recheck_entry()
+	_check(portal3._entry_shown and not shown_before, "portal opens when the last enemy dies while the player is already inside it")
+
 	print("test_placement: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)

@@ -876,6 +876,11 @@ func stop_spawning() -> void:
 	_spawning_locked = true
 
 
+# Legendary Mode: the run continues past Day 30, so reinforcements must come back.
+func resume_spawning() -> void:
+	_spawning_locked = false
+
+
 func _top_up_population() -> void:
 	if _spawning_locked:
 		return

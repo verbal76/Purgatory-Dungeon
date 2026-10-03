@@ -243,6 +243,10 @@ func _process(delta: float) -> void:
 		return
 
 	_anim_t += delta
+	_entry_check_timer += delta
+	if _entry_check_timer >= 0.5:
+		_entry_check_timer = 0.0
+		_recheck_entry()
 
 	# Pulse the light energy between 60% and 140% of base.
 	if _portal_light != null:
@@ -262,27 +266,50 @@ func _process(delta: float) -> void:
 
 # ── Entry detection ───────────────────────────────────────────────────────────
 
-func _on_entry_area_body_entered(body: Node3D) -> void:
-	if _entry_shown:
-		return
-	if not body.is_in_group("player"):
-		return
-
-	# Count living portal guards.
+func _enemies_remaining() -> int:
+	# Living portal guards.
 	var guards_alive : int = 0
 	for e in _portal_enemies:
 		if is_instance_valid(e) and e.get("_is_dead") != true:
 			guards_alive += 1
 
-	# Count enemies still managed by EnemyManager.
+	# Enemies still managed by EnemyManager.
 	var mgr_live : int = 0
 	if _enemy_mgr != null and "_live_count" in _enemy_mgr:
 		mgr_live = int(_enemy_mgr._live_count)
+	return guards_alive + mgr_live
 
-	if guards_alive > 0 or mgr_live > 0:
-		_show_not_ready_hint(guards_alive + mgr_live)
+
+func _on_entry_area_body_entered(body: Node3D) -> void:
+	if _entry_shown or _disabled:
+		return
+	if not body.is_in_group("player"):
 		return
 
+	var remaining : int = _enemies_remaining()
+	if remaining > 0:
+		_show_not_ready_hint(remaining)
+		return
+
+	_entry_shown = true
+	_show_end_screen()
+
+
+# body_entered only fires on entering the radius. If the last enemy dies while the player is
+# already standing in the portal, nothing would happen until they stepped out and back in.
+# Re-check periodically (cheap: a distance test, no hint spam).
+var _entry_check_timer : float = 0.0
+var _disabled          : bool  = false
+
+func _recheck_entry() -> void:
+	if _entry_shown or _disabled or _portal_root == null:
+		return
+	if _player == null or not is_instance_valid(_player) or get_tree().paused:
+		return
+	if _player.global_position.distance_to(_portal_root.global_position) > ENTRY_RADIUS:
+		return
+	if _enemies_remaining() > 0:
+		return
 	_entry_shown = true
 	_show_end_screen()
 
@@ -363,6 +390,7 @@ func _show_announce(portal_pos: Vector3) -> void:
 # ── Public: called by RunEndScreen if player enters legendary mode ─────────────
 
 func disable_portal() -> void:
+	_disabled = true
 	if _entry_area != null:
 		_entry_area.set_deferred("monitoring", false)
 	if _minimap != null and _minimap.has_method("clear_portal_marker"):

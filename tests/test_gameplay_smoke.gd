@@ -132,5 +132,15 @@ func _ready() -> void:
 		await get_tree().create_timer(4.0).timeout
 		_check(not victim.visible or not is_instance_valid(victim) or victim.is_queued_for_deletion(), "corpse is hidden/pooled/freed after death animation")
 
+	# Legendary Mode brings reinforcements back (spawning is locked when the run ends).
+	if manager != null:
+		manager.stop_spawning()
+		var end_screen := CanvasLayer.new()
+		end_screen.set_script(load("res://scripts/run_end_screen.gd"))
+		add_child(end_screen)
+		end_screen._on_legendary_pressed()
+		_check(not manager._spawning_locked, "choosing Legendary Mode re-enables enemy spawning")
+		_check(GameClock.legendary_mode, "legendary mode active")
+
 	print("test_gameplay_smoke: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)

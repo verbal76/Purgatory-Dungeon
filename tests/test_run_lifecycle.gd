@@ -73,5 +73,16 @@ func _run() -> void:
 	_check(not GlobeManager._is_running, "Alchemist start resets globes")
 	_check(int(SaveManager.current_profile.get("run_count", 0)) == runs_before + 1, "run_count incremented exactly once")
 
+	# Run-end "Return" must act once and remove itself (it is a root child that survives the
+	# scene change; it used to stay on top of the Alchemist with live buttons).
+	var screen := CanvasLayer.new()
+	screen.set_script(load("res://scripts/run_end_screen.gd"))
+	add_child(screen)
+	var completions_before := int(SaveManager.current_profile.get("dungeon_completions", 0))
+	screen._on_leave_pressed()
+	screen._on_leave_pressed()
+	_check(int(SaveManager.current_profile.get("dungeon_completions", 0)) == completions_before + 1, "pressing Return twice records the completion once")
+	_check(screen.is_queued_for_deletion(), "run-end screen removes itself after Return")
+
 	print("test_run_lifecycle: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)
