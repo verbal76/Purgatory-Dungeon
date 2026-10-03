@@ -550,6 +550,7 @@ func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -
 	_visited_wp_set.clear()
 	_nav_timer             = randf() * nav_refresh_interval
 	_los_timer             = randf() * los_check_interval
+	_frustration_timer     = randf() * 4.0   # a reborn brute must not inherit the old life's stuck timer
 	_last_global_pos       = new_pos
 	_smoothed_actual_speed = 0.0
 	# Reset movement state so stale directions from the previous life don't carry over.
