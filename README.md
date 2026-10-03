@@ -14,9 +14,11 @@ an Android landscape port is planned (see `docs/ANDROID_PORT_ASSESSMENT.md`).
 ```bash
 tests/run_tests.sh /path/to/Godot_v4.6-stable_linux.x86_64   # or: GODOT=... tests/run_tests.sh
 ```
-Headless; runs the project parse/load validator, save-system tests, a fireball regression test,
-a gameplay smoke test (boots the real game, spawns, kills with credit) and multi-seed dungeon
-validation. Saves are redirected to a scratch dir via `PURGATORY_SAVE_ROOT`, never your real saves.
+Headless; runs a static `res://` path/case check, the project parse/load validator, and
+regression/characterization tests for saves, pause/Options, enemy pooling, clock/buffs, run
+lifecycle, audio buses, pause freeze, physics queries, settings remap, placement (portal, orbs,
+props, globes), a gameplay smoke test (boots the real game for both classes) and multi-seed
+dungeon validation. Saves are redirected to a scratch dir via `PURGATORY_SAVE_ROOT`, never your real saves.
 `tests/perf_probe.tscn` prints a headless performance snapshot (informational).
 
 ## Build (Windows)
