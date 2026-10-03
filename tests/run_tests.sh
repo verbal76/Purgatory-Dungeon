@@ -20,6 +20,8 @@ run() {
 	if [ "$code" -ne 0 ]; then echo "!!! FAILED (exit $code): $label"; rc=1
 	elif grep -q 'SCRIPT ERROR' "$LOG"; then echo "!!! FAILED (script errors): $label"; rc=1; fi
 }
+echo "=== check_res_paths"
+python3 tests/check_res_paths.py || { echo "!!! FAILED: res:// path check"; rc=1; }
 # Refresh the import cache + global class registry (needed on a fresh clone).
 echo "=== import"
 "$GODOT" --headless --path . --import >/dev/null 2>&1 || true
