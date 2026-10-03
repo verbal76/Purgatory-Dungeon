@@ -712,7 +712,9 @@ func _update_footsteps(delta: float) -> void:
 		footstep_player.volume_db   = _get_footstep_db()
 		footstep_player.pitch_scale = randf_range(footstep_pitch_min, footstep_pitch_max)
 		footstep_player.play()
-		_footstep_timer = footstep_interval_seconds / clampf(h_speed / _get_effective_move_speed(), 0.65, 1.35)
+		# Buffs add to footstep_interval_seconds as an absolute (Footstep Stalker is -0.5 on a 0.38
+		# default), which could go to or below 0 and retrigger the sound every frame. Floor it.
+		_footstep_timer = maxf(footstep_interval_seconds, 0.12) / clampf(h_speed / _get_effective_move_speed(), 0.65, 1.35)
 
 
 func _apply_head_bob(delta: float) -> void:
@@ -721,7 +723,7 @@ func _apply_head_bob(delta: float) -> void:
 	var h_speed := Vector2(velocity.x, velocity.z).length()
 	if is_on_floor() and h_speed > minimum_movement_for_footsteps and not _is_blocking:
 		_head_bob_time += delta * h_speed * head_bob_speed
-		var bob_offset := sin(_head_bob_time) * head_bob_intensity
+		var bob_offset := sin(_head_bob_time) * maxf(head_bob_intensity, 0.0)   # a buff must not invert the bob
 		camera_3d.position.y = lerp(camera_3d.position.y, _default_cam_y + bob_offset, delta * 10.0)
 	else:
 		_head_bob_time = 0.0
