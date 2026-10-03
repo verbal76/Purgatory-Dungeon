@@ -356,6 +356,7 @@ func take_damage(amount: float, _source: Node = null) -> void:
 
 
 func _play_hit_react() -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	if anim_player == null: return
 	_is_reacting  = true
 	_is_attacking = false
@@ -379,6 +380,7 @@ func _play_hit_react() -> void:
 	anim_player.speed_scale = react_anim_speed
 	_play_anim(anim_to_play)
 	await anim_player.animation_finished
+	if _life != _life_id: return
 	anim_player.speed_scale = 1.0
 	_is_reacting = false
 	if not _is_dead:
@@ -448,6 +450,7 @@ func _build_stun_indicator() -> void:
 
 
 func _on_die() -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	var main = get_tree().current_scene
 	if main and main.has_method("register_enemy_kill"):
 		main.register_enemy_kill()
@@ -497,6 +500,7 @@ func _on_die() -> void:
 
 	await get_tree().create_timer(_current_anim_length()).timeout
 	if not is_instance_valid(self): return
+	if _life != _life_id: return
 
 	# Pool path: return to EnemyManager's pool instead of freeing.
 	# Falls back to queue_free() if this enemy was not spawned from a pool
@@ -516,6 +520,10 @@ func set_pool_return(cb: Callable) -> void:
 # Called by EnemyManager when re-activating this enemy from the pool.
 # Resets all AI and CharacterBase state so the enemy behaves as freshly spawned.
 func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -> void:
+	_life_id += 1                      # invalidate any delayed work from the previous life
+	_state = ""                        # force the idle transition below to actually play
+	if anim_player != null:
+		anim_player.speed_scale = 1.0  # death/react/attack speed must not leak into the new life
 	# ── CharacterBase state ──────────────────────────────────────────────────
 	_buff_multiplier = 1.0
 	max_health       = _base_max_health
@@ -815,6 +823,7 @@ func _set_horizontal_velocity(target: Vector3, accel: float, delta: float) -> vo
 
 
 func _do_attack(player: Node3D) -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	_is_attacking = true
 	var player_mod : float = 1.0
 	if player and "enemy_speed_modifier" in player:
@@ -825,6 +834,7 @@ func _do_attack(player: Node3D) -> void:
 	var anim_len : float = _current_anim_length() / (attack_speed_scale * player_mod)
 
 	await get_tree().create_timer(anim_len * 0.5).timeout
+	if _life != _life_id: return
 
 	# SURGICAL FIX: Re-check range at the moment of impact.
 	# The attack started when the player was in range, but the timer delay
@@ -840,6 +850,7 @@ func _do_attack(player: Node3D) -> void:
 			player.take_damage(attack_damage * player_damage_mod * _cached_damage_mod, self)
 
 	await get_tree().create_timer(anim_len * 0.5).timeout
+	if _life != _life_id: return
 	anim_player.speed_scale = 1.0
 	_is_attacking           = false
 	_attack_cooldown_timer  = attack_cooldown
@@ -847,6 +858,7 @@ func _do_attack(player: Node3D) -> void:
 
 
 func _do_ai_kick(player: Node3D) -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	_is_kicking_ai = true
 	_is_attacking  = true
 
@@ -866,6 +878,7 @@ func _do_ai_kick(player: Node3D) -> void:
 	var anim_len : float = _current_anim_length()
 
 	await get_tree().create_timer(anim_len * 0.50).timeout
+	if _life != _life_id: return
 
 	if not _is_dead and is_instance_valid(player):
 		var dist : float = global_position.distance_to(player.global_position)
@@ -882,6 +895,7 @@ func _do_ai_kick(player: Node3D) -> void:
 				player.take_knockback(push_dir, enemy_kick_force, enemy_kick_stun)
 
 	await get_tree().create_timer(anim_len * 0.50).timeout
+	if _life != _life_id: return
 	_is_kicking_ai       = false
 	_is_attacking        = false
 	_kick_cooldown_timer  = enemy_kick_cooldown

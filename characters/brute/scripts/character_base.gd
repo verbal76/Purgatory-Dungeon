@@ -71,6 +71,11 @@ signal health_changed(new_health: float, max_val: float)
 signal died
 
 static var GLOBAL_KILL_COUNT : int = 0
+
+# Incremented every time a pooled enemy is reborn (reset_for_pool). Delayed behaviour
+# (attacks, hit reactions, death-return timers) captures it before awaiting and aborts
+# if it changed, so nothing from a previous life can touch the new one.
+var _life_id : int = 0
 # World position of the most recent enemy kill — used by on-kill effects
 # (spark_damage AOE, poison cloud, light flash) to know where to spawn.
 static var GLOBAL_LAST_KILL_POS : Vector3 = Vector3.ZERO
