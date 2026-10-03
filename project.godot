@@ -10,7 +10,7 @@ config_version=5
 
 [application]
 
-config/name="A Purggy Dee 4-4-26"
+config/name="Purgatory Dungeon"
 config/version="2.5"
 run/main_scene="uid://cfam6hq7todh3"
 config/use_hidden_project_data_directory=false

@@ -381,9 +381,11 @@ func _try_attach_wall_plug(target: Node3D) -> bool:
 # refuse to fit at a connection, build a thin box wall in code directly at the
 # connection's transform. Has no geometry constraints of its own, so it's
 # guaranteed to land; the player can never see outside the dungeon.
-# 1.6 m wide × 3.5 m tall × 0.15 m thick — wide enough to cover a doorway,
-# tall enough to reach the ceiling, thin enough to not overlap anything on
-# the other side of the wall.
+# Connection markers sit 2 m above the module floor (local y = 2) and doorways
+# are ~4 m wide, so the box is 4.2 m wide × 4.15 m tall × 0.15 m thick and is
+# centred at the marker's height offset so it spans floor level to ceiling.
+# (It used to be 1.6 × 3.5 centred 1.75 m above the marker, which left the
+# lower half of the doorway open.)
 func _force_attach_code_plug(target: Node3D) -> bool:
 	if target == null or not is_instance_valid(target) or _main_root == null:
 		return false
@@ -400,9 +402,9 @@ func _force_attach_code_plug(target: Node3D) -> bool:
 
 	var col := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(1.6, 3.5, 0.15)
+	box.size = Vector3(4.2, 4.15, 0.15)
 	col.shape = box
-	col.position = Vector3(0.0, 1.75, 0.0)   # centre the height 0..3.5
+	col.position = Vector3(0.0, 0.075, 0.0)   # local y -2.0 (floor) .. +2.15 (ceiling)
 	plug.add_child(col)
 
 	# Mark the connection used so it doesn't show up in later sweeps.

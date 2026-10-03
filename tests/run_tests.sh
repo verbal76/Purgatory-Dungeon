@@ -17,4 +17,11 @@ for scene in res://tests/validate_project.tscn res://tests/test_save_manager.tsc
 	timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
 	[ "${PIPESTATUS[0]}" -eq 0 ] || { echo "!!! FAILED: $scene"; rc=1; }
 done
+# Dungeon generation: one seed per process (several generate/free cycles in a
+# single headless process can abort the engine; see docs/BASELINE.md).
+for seed in 1 2 3 7 42 123 2024 98765; do
+	echo "=== res://tests/test_dungeon_generation.tscn (seed $seed)"
+	GEN_TEST_SEEDS="$seed" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_dungeon_generation.tscn 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+	[ "${PIPESTATUS[0]}" -eq 0 ] || { echo "!!! FAILED: dungeon generation seed $seed"; rc=1; }
+done
 exit $rc
