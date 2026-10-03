@@ -96,10 +96,22 @@ func _pick_portal_position() -> Vector3:
 	var far_count : int = maxi(3, int(rooms.size() * 0.20))
 	var candidates : Array = rooms.slice(0, mini(far_count, rooms.size()))
 	candidates.shuffle()
-	var chosen : Node3D = candidates[0]
-	if _dungeon_gen.has_method("get_random_safe_interior_point"):
-		return _dungeon_gen.get_random_safe_interior_point(chosen, 1.5, 2.0)
-	return chosen.global_position + Vector3(0.0, 1.5, 0.0)
+	if not _dungeon_gen.has_method("get_random_safe_interior_point"):
+		return candidates[0].global_position + Vector3(0.0, 1.5, 0.0)
+	# get_random_safe_interior_point() returns Vector3.ZERO when a room has no clear point
+	# (e.g. obstructed interior). Never place the portal at the world origin: try the far
+	# rooms first, then any room (farthest first); tighter margin on the second pass.
+	var ordered : Array = candidates.duplicate()
+	for r in rooms:
+		if not ordered.has(r):
+			ordered.append(r)
+	for margin in [2.0, 1.0]:
+		for room in ordered:
+			var p : Vector3 = _dungeon_gen.get_random_safe_interior_point(room, 1.5, margin)
+			if p != Vector3.ZERO:
+				return p
+	push_warning("PortalManager: no clear portal position found; using a room origin.")
+	return candidates[0].global_position + Vector3(0.0, 1.5, 0.0)
 
 
 # ── Portal visual ─────────────────────────────────────────────────────────────

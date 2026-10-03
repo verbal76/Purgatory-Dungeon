@@ -150,5 +150,29 @@ func _ready() -> void:
 	portal.free()
 	_audit("portal candidates", candidates.keys(), 0.0, 6.0)
 
+	# When a room has no clear point the portal must try other rooms, never the world origin.
+	var fake_src := GDScript.new()
+	fake_src.source_code = "extends Node\nvar placed_modules: Array = []\nfunc get_random_safe_interior_point(m, _y, _margin):\n\tif m.name == 'Good':\n\t\treturn Vector3(1, 2, 3)\n\treturn Vector3.ZERO\n"
+	fake_src.reload()
+	var fake_gen := Node.new()
+	fake_gen.set_script(fake_src)
+	var fake_mods: Array = []
+	for n in ["Start", "Bad1", "Bad2", "Bad3", "Bad4", "Good"]:
+		var m := Node3D.new()
+		m.name = n
+		m.set_meta("counts_toward_goal", true)
+		add_child(m)
+		m.global_position = Vector3(10.0 * fake_mods.size(), 0, 0)
+		fake_mods.append(m)
+	fake_gen.placed_modules = fake_mods
+	var portal2 := Node3D.new()
+	portal2.set_script(load("res://scripts/portal_manager.gd"))
+	portal2._dungeon_gen = fake_gen
+	_check(portal2._pick_portal_position() == Vector3(1, 2, 3), "portal keeps searching other rooms when the first has no clear point (never the world origin)")
+	portal2.free()
+	fake_gen.free()
+	for m in fake_mods:
+		m.free()
+
 	print("test_placement: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)
