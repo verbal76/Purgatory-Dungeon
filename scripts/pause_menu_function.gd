@@ -212,6 +212,10 @@ func _on_options_closed() -> void:
 func open_menu() -> void:
 	if _is_open:
 		return
+	# A buff pick is modal. Opening the pause menu over it let a second Escape "resume"
+	# the tree while the pick UI was still up, so the world ran behind it.
+	if has_node("/root/BuffManager") and BuffManager.is_picking():
+		return
 
 	_initialize_pause_menu_values()
 	get_tree().paused = true

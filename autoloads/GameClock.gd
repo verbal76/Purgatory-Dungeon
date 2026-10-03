@@ -117,6 +117,9 @@ var _paused        : bool = false
 var legendary_mode : bool = false
 # max_days as configured in the inspector; enter_legendary_mode() overrides max_days.
 var _default_max_days : int = 0
+# True once run_ended has fired for the current run. The signal must fire exactly once:
+# resume() (buff picks, chest picks) and the still-running Timer both used to re-fire it.
+var _run_end_emitted : bool = false
 
 # The internal repeating timer. Built in code — no scene needed.
 var _timer      : Timer
@@ -241,7 +244,7 @@ func advance_day() -> void:
 	# Legendary mode disables the end trigger — the run continues indefinitely.
 	if current_day >= max_days and not legendary_mode:
 		pause()
-		emit_signal("run_ended")
+		_emit_run_ended_once()
 
 
 # Pauses the day timer.
@@ -257,12 +260,24 @@ func pause() -> void:
 # If the run ended on the same tick as a buff pick triggered,
 # run_ended fires here so it is never skipped.
 func resume() -> void:
+	# Once the run is over the clock must stay stopped: a late buff/chest pick calling
+	# resume() used to restart ticking and fire run_ended again (a second portal).
+	if _run_end_emitted and not legendary_mode:
+		return
 	_paused = false
 
 	# Handle the edge case where a buff pick fires on the final day.
 	# We deferred run_ended until the pick resolved — fire it now.
 	if current_day >= max_days and not legendary_mode:
-		emit_signal("run_ended")
+		_paused = true
+		_emit_run_ended_once()
+
+
+func _emit_run_ended_once() -> void:
+	if _run_end_emitted:
+		return
+	_run_end_emitted = true
+	emit_signal("run_ended")
 
 
 # Starts the clock for a new run. Resets to day 1, shows the HUD,
@@ -271,6 +286,7 @@ func resume() -> void:
 func start_run() -> void:
 	# A previous Legendary run must not leak into this one.
 	legendary_mode = false
+	_run_end_emitted = false
 	max_days       = _default_max_days
 	current_day    = 1
 	_paused        = false
@@ -288,7 +304,9 @@ func enter_legendary_mode() -> void:
 	legendary_mode = true
 	max_days       = 99999
 	_paused        = false
-	_timer.start()
+	# Keep the day's elapsed progress: the Timer never stopped, restarting it threw it away.
+	if _timer.is_stopped():
+		_timer.start()
 	_refresh_day_label()
 
 

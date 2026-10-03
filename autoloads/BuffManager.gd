@@ -178,6 +178,10 @@ func _process(delta: float) -> void:
 		# Skip timed-buff expiry while the pick is open — same as old system.
 		return
 
+	# Timed buffs must not run down while the pause menu (or any other pause) is open.
+	if get_tree().paused:
+		return
+
 	# ── Timed buff expiry ──────────────────────────────────────
 	var any_expired : bool = false
 	for i in range(_active_buffs.size() - 1, -1, -1):
@@ -729,14 +733,14 @@ func _apply_single_stat(stat_name: String, value: float, apply: bool) -> void:
 			var new_max : float = float(player.get("max_health"))
 			if hp > new_max:
 				player.set("_current_health", new_max)
-			if player.has_user_signal("health_changed"):
+			if player.has_signal("health_changed"):
 				player.emit_signal("health_changed", player.get("_current_health"), new_max)
 		elif not apply:
 			var hp      = player.get("_current_health")
 			var new_max = player.get("max_health")
 			if hp > new_max:
 				player.set("_current_health", new_max)
-			if player.has_user_signal("health_changed"):
+			if player.has_signal("health_changed"):
 				player.emit_signal("health_changed", player.get("_current_health"), new_max)
 
 # ── Custom effect handlers ─────────────────────────────────
@@ -774,8 +778,13 @@ func _get_rarity_color(ranking: String) -> Color:
 func get_active_buffs() -> Array:
 	return _active_buffs.duplicate()
 
+func is_picking() -> bool:
+	return _is_picking
+
+
 func reset() -> void:
 	_active_buffs.clear()
+	_queued_picks = 0
 	if _is_picking:
 		get_tree().paused = false
 	_is_picking   = false
