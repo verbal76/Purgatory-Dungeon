@@ -115,6 +115,8 @@ var _paused        : bool = false
 # True after the player chooses Legendary Mode at the end portal.
 # Prevents run_ended from firing again so the run continues indefinitely.
 var legendary_mode : bool = false
+# max_days as configured in the inspector; enter_legendary_mode() overrides max_days.
+var _default_max_days : int = 0
 
 # The internal repeating timer. Built in code — no scene needed.
 var _timer      : Timer
@@ -128,6 +130,7 @@ var _day_shadow      : Label       = null
 # ── Lifecycle ──────────────────────────────────────────────
 
 func _ready() -> void:
+	_default_max_days = max_days
 	# Build the timer entirely in code so this autoload
 	# has no external scene dependency and is fully portable.
 	_timer           = Timer.new()
@@ -266,8 +269,11 @@ func resume() -> void:
 # and begins ticking. Call this from your main game file after
 # the player spawns.
 func start_run() -> void:
-	current_day = 1
-	_paused     = false
+	# A previous Legendary run must not leak into this one.
+	legendary_mode = false
+	max_days       = _default_max_days
+	current_day    = 1
+	_paused        = false
 	_refresh_day_label()
 	_timer.start()
 

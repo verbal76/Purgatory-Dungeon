@@ -62,6 +62,8 @@ var perks_def : Array = [
 
 
 func _ready() -> void:
+	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_total_pages = int(ceil(float(perks_def.size()) / float(PERKS_PER_PAGE)))
 	_hide_legacy_back_button()
 	_build_parchment()

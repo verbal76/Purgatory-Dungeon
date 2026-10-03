@@ -21,6 +21,8 @@ var alchemist_btn: Button
 var quit_btn: Button
 
 func _ready() -> void:
+	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_bind_nodes()
 	_connect_signals()
 	_reorder_buttons()

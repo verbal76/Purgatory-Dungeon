@@ -173,6 +173,10 @@ func _ready() -> void:
 func _spawn_selected_character() -> Node3D:
 	var existing_player := get_node_or_null("Player")
 	if existing_player != null:
+		# Detach first: queue_free() alone leaves the old node in the tree until
+		# end of frame, so the new "Player" would be auto-renamed (@Node3D@N) and
+		# every get_node_or_null("Player") lookup would fail.
+		remove_child(existing_player)
 		existing_player.queue_free()
 
 	var chosen_class := "barbarian"

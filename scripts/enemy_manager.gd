@@ -182,6 +182,11 @@ func boot_up(
 	print("Player valid: ", player_node != null)
 	print("Brute scene: ", brute_scene != null, "  Mage scene: ", mage_scene != null)
 
+	# GLOBAL_PLAYER_LAST_DAMAGE_TIME is static and starts at 0 (or holds the last
+	# run's value), which made the "no damage for 30s" pressure spawn fire the
+	# moment a run began. Treat run start as the last "damage" moment.
+	CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME = Time.get_ticks_msec() * 0.001
+
 	_player            = player_node
 	_brute_scene       = brute_scene
 	_mage_scene        = mage_scene

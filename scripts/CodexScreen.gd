@@ -69,6 +69,8 @@ var _progress_label : Label           = null
 # ══════════════════════════════════════════════════════════════════════════════
 
 func _ready() -> void:
+	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	# Clear any stale children from the .tscn (placeholder nodes).
 	for child in get_children():
 		remove_child(child)

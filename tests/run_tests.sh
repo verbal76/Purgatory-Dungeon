@@ -12,7 +12,7 @@ rc=0
 # Refresh the import cache + global class registry (needed on a fresh clone).
 echo "=== import"
 "$GODOT" --headless --path . --import >/dev/null 2>&1 || true
-for scene in res://tests/validate_project.tscn res://tests/test_save_manager.tscn; do
+for scene in res://tests/validate_project.tscn res://tests/test_save_manager.tscn res://tests/test_fireball_pool.tscn res://tests/test_gameplay_smoke.tscn; do
 	echo "=== $scene"
 	timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
 	[ "${PIPESTATUS[0]}" -eq 0 ] || { echo "!!! FAILED: $scene"; rc=1; }

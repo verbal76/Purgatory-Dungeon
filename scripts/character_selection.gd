@@ -47,6 +47,8 @@ var _btn_buffs          : Button = null
 var _btn_traps          : Button = null
 
 func _ready() -> void:
+	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	# Bind all UI nodes to variables
 	_bind_nodes()
 	# Connect button presses and UI events

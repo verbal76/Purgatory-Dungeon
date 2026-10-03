@@ -831,7 +831,7 @@ func _do_attack(player: Node3D) -> void:
 	# means the player may have moved away by the time damage fires.
 	# A 1.5× tolerance handles the brief overlap at the edge of attack_range
 	# while still blocking phantom hits on players who clearly dodged.
-	if not _is_stunned and player and is_instance_valid(player) and player.has_method("take_damage"):
+	if not _is_dead and not _is_stunned and player and is_instance_valid(player) and player.has_method("take_damage"):
 		var current_dist : float = global_position.distance_to(player.global_position)
 		if current_dist <= attack_range * 1.5:
 			var player_damage_mod : float = 1.0
