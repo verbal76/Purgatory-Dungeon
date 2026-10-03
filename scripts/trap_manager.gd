@@ -85,6 +85,13 @@ func _ready() -> void:
 		get_tree().root.add_child(_banner_hud)
 
 
+# The banner HUD is parented to the scene root (so it renders over gameplay), which means it
+# would otherwise outlive this manager: one leaked CanvasLayer per run.
+func _exit_tree() -> void:
+	if is_instance_valid(_banner_hud):
+		_banner_hud.queue_free()
+
+
 # ── Boot ──────────────────────────────────────────────────────────────────────
 
 # Called from Purgatory_Dungeon_main_game_file.gd after dungeon generation.

@@ -184,6 +184,10 @@ func _tick_chasing(delta: float) -> void:
 	if player == null:
 		return
 	_cached_player = player
+	# A dead player cannot collect globes: the death screen has just converted kills into
+	# potions, and a late "Grave Whispers" globe wiped them.
+	if player.get("_is_dead") == true:
+		return
 
 	var to_player : Vector3 = player.global_position - global_position
 	var dist      : float   = Vector3(to_player.x, 0.0, to_player.z).length()

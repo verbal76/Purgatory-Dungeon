@@ -132,6 +132,36 @@ func _ready() -> void:
 		await get_tree().create_timer(4.0).timeout
 		_check(not victim.visible or not is_instance_valid(victim) or victim.is_queued_for_deletion(), "corpse is hidden/pooled/freed after death animation")
 
+	# A dead player cannot collect globes (Grave Whispers used to wipe the death-screen reward),
+	# and no new globes wake up over the death screen.
+	if player != null and GlobeManager._all_globes.size() > 0:
+		var woken_before := 0
+		for g in GlobeManager._all_globes:
+			if is_instance_valid(g) and not g.is_dormant():
+				woken_before += 1
+		player._is_dead = true
+		GlobeManager._activate_next_globe()
+		var woken_after := 0
+		for g in GlobeManager._all_globes:
+			if is_instance_valid(g) and not g.is_dormant():
+				woken_after += 1
+		_check(woken_after == woken_before, "no new globe wakes up while the player is dead")
+		var globe = GlobeManager._all_globes[0]
+		globe.global_position = player.global_position
+		globe._state = globe.GlobeState.CHASING
+		globe._tick_chasing(0.1)
+		_check(globe._state == globe.GlobeState.CHASING, "a chasing globe does not collect from a dead player")
+		player._is_dead = false
+
+	# The trap banner HUD lives on the root; it must go away with the trap manager.
+	var trap_mgr = main.get_node_or_null("TrapManager")
+	if trap_mgr != null and is_instance_valid(trap_mgr._banner_hud):
+		var banner = trap_mgr._banner_hud
+		trap_mgr.free()
+		await get_tree().process_frame
+		await get_tree().process_frame
+		_check(not is_instance_valid(banner), "trap banner HUD is freed with the trap manager")
+
 	# Legendary Mode brings reinforcements back (spawning is locked when the run ends).
 	if manager != null:
 		manager.stop_spawning()

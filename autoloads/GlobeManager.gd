@@ -198,6 +198,9 @@ func _process(delta: float) -> void:
 # ── Sequential activation ──────────────────────────────────
 
 func _activate_next_globe() -> void:
+	var living_player = get_tree().get_first_node_in_group("player")
+	if living_player != null and living_player.get("_is_dead") == true:
+		return   # no new globes over the death screen
 	var dormant : Array = []
 	for globe in _all_globes:
 		if is_instance_valid(globe) and globe.is_dormant():
