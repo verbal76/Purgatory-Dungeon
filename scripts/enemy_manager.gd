@@ -128,6 +128,7 @@ var _spawning_locked      : bool  = false
 
 # ── Timers — all updated in _physics_process ──────────────────────────────────
 var _cull_timer       : float = 0.0
+var _paused_since_msec : int  = 0     # wall-clock start of the current pause (0 = not paused)
 var _respawn_timer    : float = 0.0
 var _diff_timer       : float = 0.0
 var _pressure_timer   : float = 0.0   # Tracks seconds since player last took damage
@@ -708,6 +709,21 @@ func _physics_process(delta: float) -> void:
 	if not is_instance_valid(_player):
 		return
 
+	# This node is PROCESS_MODE_ALWAYS only so it can build enemies during the loading
+	# screen (that work is coroutine-driven, not timer-driven). Gameplay timers must
+	# freeze while the game is paused (pause menu, buff pick), otherwise enemies spawn
+	# behind the menu and the pressure-spawn timeout runs down while the player is away.
+	if get_tree().paused:
+		if _paused_since_msec == 0:
+			_paused_since_msec = Time.get_ticks_msec()
+		return
+	if _paused_since_msec != 0:
+		var paused_sec : float = (Time.get_ticks_msec() - _paused_since_msec) * 0.001
+		_paused_since_msec = 0
+		CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME = minf(
+			CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME + paused_sec,
+			Time.get_ticks_msec() * 0.001)
+
 	_cull_timer    += delta
 	_respawn_timer += delta
 	_diff_timer    += delta
@@ -893,6 +909,10 @@ func _staggered_spawn_wave(zone_copy: Array, limit: int) -> void:
 		if spawned >= limit:
 			break
 		
+		# A top-up wave that was mid-flight when the game paused must not keep spawning.
+		if get_tree().paused:
+			break
+
 		# Build the heavy enemy hierarchy
 		if _spawn_enemy_from_data(entry):
 			spawned += 1

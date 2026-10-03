@@ -368,6 +368,11 @@ func _fly_homing(fb: Area3D, player: Node3D) -> void:
 		var tree := get_tree()
 		if tree == null:
 			break
+		# This manager is PROCESS_MODE_ALWAYS, so without this the fireball keeps flying
+		# (and aging) behind the pause menu, then hits the moment the game resumes.
+		if tree.paused:
+			await tree.process_frame
+			continue
 		var dt := get_process_delta_time()
 		lifetime -= dt
 
