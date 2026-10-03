@@ -11,6 +11,9 @@ on:
 env:
   GODOT_VERSION: "4.6"
   GODOT_RELEASE: "4.6-stable"
+  # On pull_request events github.sha is a synthetic merge commit that exists on no
+  # branch; record the real head commit so builds are traceable to checkable source.
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   validate-and-export:
@@ -68,7 +71,7 @@ jobs:
           cd build/windows
           {
             echo "Purgatory Dungeon - Windows build"
-            echo "source_sha=${GITHUB_SHA}"
+            echo "source_sha=${SOURCE_SHA}"
             echo "ref=${GITHUB_REF}"
             echo "run_id=${GITHUB_RUN_ID}"
             echo "godot=$("$GODOT" --version)"
@@ -81,7 +84,7 @@ jobs:
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
-          name: PurgatoryDungeon-windows-${{ github.sha }}
+          name: PurgatoryDungeon-windows-${{ env.SOURCE_SHA }}
           path: |
             build/windows/PurgatoryDungeon.exe
             build/windows/PurgatoryDungeon.pck
