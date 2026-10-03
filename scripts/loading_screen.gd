@@ -151,3 +151,15 @@ func _start_fade_in() -> void:
 
 func _set_vol(vol: float) -> void:
 	AudioServer.set_bus_volume_db(bus_idx, vol)
+
+
+# If this screen is freed before its fade finishes (scene change, death, quit to menu)
+# the tween dies with it and Master would stay at -80 dB: the whole game silent until
+# a slider is touched. Always put the Master bus back where the settings say it belongs.
+func _exit_tree() -> void:
+	if bus_idx < 0:
+		return
+	var target : float = original_volume
+	if has_node("/root/AudioManager") and "master_volume_linear" in AudioManager:
+		target = AudioManager._linear_to_db(AudioManager.master_volume_linear)
+	AudioServer.set_bus_volume_db(bus_idx, target)
