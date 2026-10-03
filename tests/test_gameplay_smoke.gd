@@ -26,7 +26,11 @@ func _ready() -> void:
 		printerr("FAIL: refusing to run without PURGATORY_SAVE_ROOT")
 		get_tree().quit(2)
 		return
-	GlobalRunData.character_class = "barbarian"
+	var char_class := OS.get_environment("SMOKE_CLASS")
+	if char_class == "":
+		char_class = "barbarian"
+	GlobalRunData.character_class = char_class
+	print("smoke class: ", char_class)
 	var main: Node = (load(MAIN_SCENE) as PackedScene).instantiate()
 	add_child(main)
 	await _frames(240)
@@ -59,11 +63,30 @@ func _ready() -> void:
 			_check(player._current_health < hp_before, "player takes damage")
 
 	# --- enemies -----------------------------------------------------------
+	# Spawning is staggered (initial wave + periodic top-ups), so poll with a bound.
 	var live: Array = []
-	for e in get_tree().get_nodes_in_group("enemy"):
-		if e is CharacterBase and e.visible and not e._is_dead:
-			live.append(e)
+	var waited := 0
+	while live.size() < 2 and waited < 900:
+		live.clear()
+		for e in get_tree().get_nodes_in_group("enemy"):
+			if e is CharacterBase and e.visible and not e._is_dead:
+				live.append(e)
+		if live.size() < 2:
+			await _frames(10)
+			waited += 10
+	print("metric: %d live enemies after %d extra physics frames" % [live.size(), waited])
 	_check(live.size() > 0, "enemies spawned (%d live)" % live.size())
+
+	var fallen := 0
+	for e in live:
+		if e.global_position.y < -1.0:
+			fallen += 1
+	_check(fallen == 0, "no live enemy fell through the floor (%d fell)" % fallen)
+	var explored := 0
+	for m in gen.placed_modules:
+		if m.has_meta("explored") and bool(m.get_meta("explored")):
+			explored += 1
+	_check(explored > 0, "exploration reveals modules around the player (%d explored)" % explored)
 
 	# --- combat: kill with credit, kill without credit ---------------------
 	if live.size() >= 2 and player != null:

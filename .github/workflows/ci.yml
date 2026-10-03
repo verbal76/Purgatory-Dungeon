@@ -1,0 +1,90 @@
+name: CI
+
+# Validate the project headlessly, then export a Windows build and upload it as a
+# workflow artifact traceable to the exact commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.6"
+  GODOT_RELEASE: "4.6-stable"
+
+jobs:
+  validate-and-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot editor + export templates
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_RELEASE }}-windows-templates-v1
+
+      - name: Install Godot ${{ env.GODOT_RELEASE }}
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}"
+          mkdir -p ~/godot-bin && cd ~/godot-bin
+          curl -fsSL -O "${base}/SHA512-SUMS.txt"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          grep -E "Godot_v${GODOT_RELEASE}_(linux.x86_64.zip|export_templates.tpz)$" SHA512-SUMS.txt | sha512sum -c -
+          unzip -q "Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          tpl="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$tpl"
+          unzip -q "Godot_v${GODOT_RELEASE}_export_templates.tpz" 'templates/windows_*' 'templates/version.txt' -d tmp
+          mv tmp/templates/* "$tpl"/
+          rm -rf tmp *.zip *.tpz
+
+      - name: Locate Godot
+        run: echo "GODOT=$HOME/godot-bin/Godot_v${GODOT_RELEASE}_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: Verify Godot version
+        run: |
+          "$GODOT" --version
+          "$GODOT" --version | grep -q "^${GODOT_VERSION}.stable"
+
+      - name: Validate project and run tests
+        run: tests/run_tests.sh "$GODOT"
+
+      - name: Export Windows build
+        run: |
+          mkdir -p build/windows
+          "$GODOT" --headless --path . --export-release "Windows Desktop" build/windows/PurgatoryDungeon.exe
+          test -s build/windows/PurgatoryDungeon.exe
+          test -s build/windows/PurgatoryDungeon.pck
+
+      - name: Write build info
+        run: |
+          cd build/windows
+          {
+            echo "Purgatory Dungeon - Windows build"
+            echo "source_sha=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "godot=$("$GODOT" --version)"
+            echo "built_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "export_preset=Windows Desktop (release, x86_64, external PCK)"
+            echo "sha256:"
+            sha256sum PurgatoryDungeon.exe PurgatoryDungeon.pck
+          } | tee BUILD_INFO.txt
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: PurgatoryDungeon-windows-${{ github.sha }}
+          path: |
+            build/windows/PurgatoryDungeon.exe
+            build/windows/PurgatoryDungeon.pck
+            build/windows/BUILD_INFO.txt
+          retention-days: 7
+          compression-level: 6

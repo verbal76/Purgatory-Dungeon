@@ -4,13 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Purgatory Dungeon** (v2.5) is a 3D dungeon-crawler roguelike built in **Godot 4.6** (Forward Plus, Jolt Physics). Language is 100% GDScript. Players choose Barbarian or Mage, run procedurally generated dungeons of 125 modules, pick daily buffs, and survive 30 in-game days (~30 min). Target: stable 60+ FPS on mid-range hardware.
+**Purgatory Dungeon** (v2.5) is a 3D dungeon-crawler roguelike built in **Godot 4.6** (Forward Plus, Jolt Physics). Language is 100% GDScript. Players choose Barbarian or Mage, run procedurally generated dungeons of ~110 rooms, pick daily buffs, and survive 30 in-game days (~30 min). Target: stable 60+ FPS on mid-range hardware.
 
 ## How to Run
 
-- Open `project.godot` in Godot 4.6+. No build scripts or CLI tooling exist.
+- Open `project.godot` in Godot 4.6+.
+- Headless tests: `tests/run_tests.sh <godot-binary>` (see README). CI: `.github/workflows/ci.yml`.
+- Windows export: `godot --headless --export-release "Windows Desktop" build/windows/PurgatoryDungeon.exe`.
 - Entry point: `MainMenu.tscn` → `CharacterSelection.tscn` → `Purgatory_Dungeon_main_game_file.tscn`
-- Settings persist to `~/Documents/PurgetoryDungeon/settings.json`; save slots persist alongside it.
+- Settings persist to `<Documents>/PurgetoryDungeon/settings.json` (path logic in `scripts/storage_paths.gd`); save slots persist alongside it. Keep the misspelled folder name (compatibility).
 
 ## How to Work With Claude
 
@@ -39,7 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `scripts/Purgatory_Dungeon_main_game_file.gd` boots the level:
 1. Spawns player (Barbarian or Mage from `GlobalRunData`)
-2. Runs `DungeonGenerationFunction` — places ~125 module `.tscn` rooms, registers typed spawn points (`brute`/`mage`/`buffed`), builds waypoint graph
+2. Runs `DungeonGenerationFunction` — places ~110 rooms (`target_piece_count` in the main scene; ~310-340 modules including connectors/end caps), registers typed spawn points (`brute`/`mage`/`buffed`), builds waypoint graph
 3. Instantiates `EnemyManager` (proximity spawner using typed spawn data + waypoints)
 4. Instantiates `HealthOrbManager`, `TrapManager`
 5. Starts `GameClock`
@@ -51,7 +53,7 @@ Exploration tracking is throttled to 0.5 s intervals (not every frame).
 - `characters/brute/scripts/character_base.gd` — Abstract base for all characters. Handles health, buffs, animation blending with LOD, stun, physics. Caches animation map once (not per frame). Maintains a **static player LOD cache** shared across all enemy instances to avoid per-enemy tree scans.
 - `characters/brute/scripts/brute_player.gd` — Barbarian: 1st-person with head-bob, swing/rapid_attack/kick/AOE/block
 - `characters/Lutsch Mage/scripts/mage_player.gd` — Mage: projectile firing, area spells
-- `*_ai.gd` variants implement enemy AI with **LOD tick rates**: <12 m = 60 Hz, 12–25 m = 30 Hz, >25 m = 10 Hz
+- `*_ai.gd` variants implement enemy AI with **LOD tick intervals** (nominally 60/30/10 Hz; physics runs at 30 ticks/s so effective rates are 30/15/5 Hz): <12 m, 12–25 m, >25 m
 
 ### Procedural Generation
 
