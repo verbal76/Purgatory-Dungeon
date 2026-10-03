@@ -7,7 +7,7 @@
 #    - PlayerWallet  (autoload)
 #    - BuffManager   (autoload)
 #    - Globe.gd      (res://objects/globe/Globe.gd)
-#    - Globe.tscn    (res://objects/globe/Globe.tscn)
+#    - Globe.tscn    (res://objects/globe/globe.tscn)
 #    - res://data/globe_effects.json
 #
 #  DESCRIPTION:
@@ -28,7 +28,7 @@ signal globe_collected(effect: Dictionary)
 # ── File paths ─────────────────────────────────────────────
 
 const EFFECT_DATA_PATH : String = "res://data/globe_effects.json"
-const GLOBE_SCENE_PATH : String = "res://objects/globe/Globe.tscn"
+const GLOBE_SCENE_PATH : String = "res://objects/globe/globe.tscn"
 
 
 # ── Rarity spawn weights ────────────────────────────────────

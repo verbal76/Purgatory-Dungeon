@@ -19,3 +19,6 @@
 Thumbs.db
 .idea/
 .vscode/
+
+# Stray save dir created if a build runs with an unresolved Documents path
+/PurgetoryDungeon/

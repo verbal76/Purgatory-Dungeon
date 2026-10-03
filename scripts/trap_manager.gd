@@ -286,7 +286,7 @@ func _apply_effect(player: Node3D, effect: String, trap_pos: Vector3) -> void:
 			# scene's Inspector, add to scene root so it covers the full screen.
 			# setup() is called before add_child so resources are ready when
 			# _ready() fires and builds the overlay.
-			var scare_script := load("res://scripts/jumpscare.gd")
+			var scare_script := load("res://scripts/Jumpscare.gd")
 			if scare_script != null:
 				var scare : CanvasLayer = CanvasLayer.new()
 				scare.set_script(scare_script)

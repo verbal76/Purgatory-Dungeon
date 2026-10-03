@@ -43,7 +43,7 @@ signal profile_loaded
 #   Windows: C:/Users/<name>/Documents/PurgetoryDungeon/saves/
 #   macOS:   ~/Documents/PurgetoryDungeon/saves/
 #   Linux:   ~/Documents/PurgetoryDungeon/saves/
-const GAME_FOLDER    := "PurgetoryDungeon"
+const GAME_FOLDER    := StoragePaths.GAME_FOLDER
 const MAX_NAME_LENGTH := 20
 const MAX_SEED_LENGTH := 20
 const SLOT_COUNT := 10
@@ -86,9 +86,9 @@ func _build_paths() -> void:
 	# OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS) returns the real Documents
 	# folder on Windows/macOS/Linux regardless of whether you are running
 	# inside the Godot editor or from an exported build.
-	var docs : String = OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
-	SAVE_DIR      = docs.path_join(GAME_FOLDER).path_join("saves") + "/"
-	SETTINGS_PATH = docs.path_join(GAME_FOLDER).path_join("settings.json")
+	var game_dir : String = StoragePaths.root()
+	SAVE_DIR      = game_dir.path_join("saves") + "/"
+	SETTINGS_PATH = game_dir.path_join("settings.json")
 	print("SaveManager: save dir → ", SAVE_DIR)
 
 
@@ -103,15 +103,12 @@ func _ensure_save_dir() -> void:
 # cause the wrong character to appear.
 
 func _last_slot_pref_path() -> String:
-	var docs : String = OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
-	return docs.path_join(GAME_FOLDER).path_join("last_slot.json")
+	return StoragePaths.root().path_join("last_slot.json")
 
 
 func _save_last_slot_pref() -> void:
-	var path : String = _last_slot_pref_path()
-	var file = FileAccess.open(path, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify({"slot": active_slot_index}))
+	StoragePaths.write_text_atomic(_last_slot_pref_path(),
+		JSON.stringify({"slot": active_slot_index}))
 
 
 func _load_last_slot_pref() -> int:
@@ -122,6 +119,7 @@ func _load_last_slot_pref() -> int:
 	if file == null:
 		return 0
 	var parsed = JSON.parse_string(file.get_as_text())
+	file.close()
 	if parsed is Dictionary:
 		return int(parsed.get("slot", 0))
 	return 0
@@ -168,31 +166,43 @@ func get_default_profile() -> Dictionary:
 #  SLOT LOADING / SAVING / DELETING
 # ══════════════════════════════════════════════════════════════
 
+# Reads a slot file and returns its profile dictionary (missing keys backfilled).
+# Returns an empty Dictionary if the file is absent, unreadable or not valid JSON.
+# Has NO side effects: it does not change the active slot, the last-slot
+# preference, current_profile, or emit signals. Use this to inspect slots.
+func peek_slot(slot_index: int) -> Dictionary:
+	var path := get_file_path(slot_index)
+	if not FileAccess.file_exists(path):
+		return {}
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var json := JSON.new()
+	var err := json.parse(file.get_as_text())
+	file.close()
+	if err != OK or typeof(json.data) != TYPE_DICTIONARY:
+		return {}
+	var profile: Dictionary = json.data
+	var defaults := get_default_profile()
+	for key in defaults.keys():
+		if not profile.has(key):
+			profile[key] = defaults[key]
+	return profile
+
+
 # Loads a slot into current_profile. If the file does not exist or
 # is corrupt, a fresh default profile is loaded instead.
 func load_slot(slot_index: int) -> void:
 	active_slot_index = slot_index
 	# Persist the choice so the next launch pre-selects this character.
 	_save_last_slot_pref()
-	var path = get_file_path(slot_index)
 
-	if not FileAccess.file_exists(path):
+	var profile := peek_slot(slot_index)
+	if profile.is_empty():
 		current_profile = get_default_profile()
-		emit_signal("profile_loaded")
-		return
-
-	var file := FileAccess.open(path, FileAccess.READ)
-	var parsed = JSON.parse_string(file.get_as_text())
-	file.close()
-
-	if typeof(parsed) == TYPE_DICTIONARY:
-		current_profile = parsed
-		# Backfill any keys that older save files might be missing.
-		# This keeps the game forward-compatible when new fields are added.
-		_backfill_missing_keys()
 	else:
-		current_profile = get_default_profile()
-	
+		current_profile = profile
+
 	emit_signal("profile_loaded")
 
 
@@ -204,12 +214,8 @@ func save_profile() -> bool:
 	current_profile["updated_at_unix"] = Time.get_unix_time_from_system()
 
 	var path = get_file_path(active_slot_index)
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	if file == null:
+	if not StoragePaths.write_text_atomic(path, JSON.stringify(current_profile, "\t")):
 		return false
-
-	file.store_string(JSON.stringify(current_profile, "\t"))
-	file.close()
 	# Always keep the last-slot preference in sync.
 	_save_last_slot_pref()
 	return true
@@ -236,36 +242,25 @@ func slot_has_file(slot_index: int) -> bool:
 
 
 # Tier 2: Does the slot contain a fully initialized character?
-# Temporarily loads the slot to inspect it, then restores the
-# previously active slot so nothing is disturbed.
+# Reads the slot via peek_slot(), so nothing else is disturbed.
 func slot_has_valid_character(slot_index: int) -> bool:
-	if not slot_has_file(slot_index):
-		return false
-
-	# Remember where we were so we can restore after peeking.
-	var previous_slot := active_slot_index
-	var previous_profile := current_profile.duplicate(true)
-
-	load_slot(slot_index)
-	var is_valid := current_profile_is_valid()
-
-	# Restore the original state.
-	active_slot_index = previous_slot
-	current_profile = previous_profile
-
-	return is_valid
+	return _profile_is_valid(peek_slot(slot_index))
 
 
 # Tier 3: Is the currently loaded profile a complete, valid character?
 # Checks all three identity fields: name, class, and initialized flag.
 func current_profile_is_valid() -> bool:
-	if current_profile.is_empty():
+	return _profile_is_valid(current_profile)
+
+
+func _profile_is_valid(profile: Dictionary) -> bool:
+	if profile.is_empty():
 		return false
-	if not bool(current_profile.get("initialized", false)):
+	if not bool(profile.get("initialized", false)):
 		return false
-	if str(current_profile.get("character_name", "")).strip_edges() == "":
+	if str(profile.get("character_name", "")).strip_edges() == "":
 		return false
-	if str(current_profile.get("character_class", "")) not in VALID_CLASSES:
+	if str(profile.get("character_class", "")) not in VALID_CLASSES:
 		return false
 	return true
 

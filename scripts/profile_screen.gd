@@ -216,20 +216,14 @@ func _populate_slots() -> void:
 	for child in slot_grid.get_children():
 		child.queue_free()
 
-	# Remember the currently active slot so we can restore it after peeking.
-	var original_slot := SaveManager.active_slot_index
-	var original_profile := SaveManager.current_profile.duplicate(true)
-
+	# Slots are inspected with SaveManager.peek_slot(), which has no side
+	# effects, so the active slot and last-slot preference are untouched.
 	for i in range(SaveManager.SLOT_COUNT):
 		var btn = Button.new()
 		btn.custom_minimum_size = Vector2(300, 50)
 		btn.text = _build_slot_label(i)
 		btn.pressed.connect(_on_slot_clicked.bind(i))
 		slot_grid.add_child(btn)
-
-	# Restore the original slot so peeking didn't disturb anything.
-	SaveManager.active_slot_index = original_slot
-	SaveManager.current_profile = original_profile
 
 
 # Builds the display label for a single slot based on its state.
@@ -243,11 +237,11 @@ func _build_slot_label(slot_index: int) -> String:
 
 		"valid":
 			# Peek into the slot to grab name and class for display.
-			SaveManager.load_slot(slot_index)
-			var char_name := SaveManager.get_character_name()
-			var char_class := SaveManager.get_character_class().capitalize()
-			var run_count := int(SaveManager.current_profile.get("run_count", 0))
-			var death_count := int(SaveManager.current_profile.get("death_count", 0))
+			var peeked := SaveManager.peek_slot(slot_index)
+			var char_name := str(peeked.get("character_name", "")).strip_edges()
+			var char_class := str(peeked.get("character_class", "")).capitalize()
+			var run_count := int(peeked.get("run_count", 0))
+			var death_count := int(peeked.get("death_count", 0))
 			return "Slot " + slot_num + ": " + char_name + " (" + char_class + ") — Runs: " + str(run_count) + " Deaths: " + str(death_count)
 
 		"broken":

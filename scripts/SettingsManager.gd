@@ -14,7 +14,7 @@
 # ==============================================================================
 extends Node
 
-const GAME_FOLDER := "PurgetoryDungeon"
+const GAME_FOLDER := StoragePaths.GAME_FOLDER
 
 # All settings in one dictionary. Keys match slider/control names used by
 # the options screen. Defaults are applied on first launch (no file yet).
@@ -44,10 +44,7 @@ func _ready() -> void:
 
 
 func _build_settings_path() -> void:
-	var docs : String = OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
-	var game_dir : String = docs.path_join(GAME_FOLDER)
-	if not DirAccess.dir_exists_absolute(game_dir):
-		DirAccess.make_dir_recursive_absolute(game_dir)
+	var game_dir : String = StoragePaths.ensure_root()
 	_settings_path = game_dir.path_join("settings.json")
 	print("SettingsManager: settings → ", _settings_path)
 
@@ -78,12 +75,8 @@ func load_settings() -> void:
 func save_settings() -> void:
 	if _settings_path.is_empty():
 		return
-	var file := FileAccess.open(_settings_path, FileAccess.WRITE)
-	if file == null:
+	if not StoragePaths.write_text_atomic(_settings_path, JSON.stringify(gameplay_settings, "\t")):
 		push_warning("SettingsManager: could not write settings to " + _settings_path)
-		return
-	file.store_string(JSON.stringify(gameplay_settings, "\t"))
-	file.close()
 
 
 # ── Apply a single setting ──────────────────────────────────────────────────
