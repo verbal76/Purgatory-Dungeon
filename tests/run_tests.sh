@@ -32,6 +32,9 @@ done
 for cls in barbarian mage; do
 	PHYS_CLASS="$cls" run "res://tests/test_physics_queries.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_physics_queries.tscn
 done
+for seed in 11 5 2024; do
+	PLACE_SEED="$seed" run "res://tests/test_placement.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_placement.tscn
+done
 # Dungeon generation: one seed per process (several generate/free cycles in a
 # single headless process can abort the engine; see docs/BASELINE.md).
 for seed in 1 2 3 7 42 123 2024 98765; do

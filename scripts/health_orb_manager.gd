@@ -329,5 +329,15 @@ func _pick_fresh_spawn_point() -> Vector3:
 		if not _exhausted_spawn_points.has(str(pt)):
 			fresh_list.append(pt)
 	if fresh_list.is_empty():
-		return Vector3.ZERO
+		# Every point has been used once (long/Legendary runs): start a new cycle instead
+		# of permanently ending orb respawns. Points currently holding a live orb stay used.
+		_exhausted_spawn_points.clear()
+		for o in _orbs:
+			if o.is_active:
+				_exhausted_spawn_points[str(o.spawn_pos)] = true
+		for pt in _spawn_points:
+			if not _exhausted_spawn_points.has(str(pt)):
+				fresh_list.append(pt)
+		if fresh_list.is_empty():
+			return Vector3.ZERO
 	return fresh_list[randi() % fresh_list.size()]

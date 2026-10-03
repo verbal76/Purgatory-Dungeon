@@ -845,6 +845,56 @@ func get_module_aabb(mod: Node3D) -> AABB:
 	return _get_module_cached_aabb(mod)
 
 
+# A candidate point is usable if a small sphere there touches no level geometry (module
+# boxes are axis-aligned, so L/T-shaped rooms contain wall volume) and there is floor
+# beneath it. Only possible once the colliders are in the physics space; callers run a
+# couple of frames after generation. Without a physics space the point is accepted as-is.
+var _clear_query : PhysicsShapeQueryParameters3D = null
+
+func _point_is_clear(p: Vector3, probe_y: float) -> bool:
+	if not is_inside_tree():
+		return true
+	var world : World3D = get_viewport().world_3d if get_viewport() != null else null
+	var space : PhysicsDirectSpaceState3D = world.direct_space_state if world != null else null
+	if space == null:
+		return true
+	if _clear_query == null:
+		_clear_query = PhysicsShapeQueryParameters3D.new()
+		var s := SphereShape3D.new()
+		s.radius = 0.35
+		_clear_query.shape = s
+		_clear_query.collision_mask = 1
+	_clear_query.transform = Transform3D(Basis(), Vector3(p.x, probe_y, p.z))
+	for hit in space.intersect_shape(_clear_query, 8):
+		if PhysicsUtil.is_world_geometry(hit.get("collider")):
+			return false
+	var rq := PhysicsRayQueryParameters3D.create(Vector3(p.x, probe_y, p.z), Vector3(p.x, probe_y - 4.0, p.z))
+	rq.collision_mask = 1
+	return not PhysicsUtil.ray_world(space, rq).is_empty()
+
+
+# True if a sphere of `radius` at p touches no level geometry (walls, floors, door plugs).
+# Used for objects that are deliberately placed near walls (flush furniture) where the
+# larger clearance of _point_is_clear() would be wrong.
+func is_position_clear(p: Vector3, radius: float = 0.1) -> bool:
+	if not is_inside_tree():
+		return true
+	var world : World3D = get_viewport().world_3d if get_viewport() != null else null
+	var space : PhysicsDirectSpaceState3D = world.direct_space_state if world != null else null
+	if space == null:
+		return true
+	var q := PhysicsShapeQueryParameters3D.new()
+	var s := SphereShape3D.new()
+	s.radius = radius
+	q.shape = s
+	q.transform = Transform3D(Basis(), p)
+	q.collision_mask = 1
+	for hit in space.intersect_shape(q, 8):
+		if PhysicsUtil.is_world_geometry(hit.get("collider")):
+			return false
+	return true
+
+
 func get_random_safe_interior_point(mod: Node3D, y: float = 0.9, margin: float = 1.25) -> Vector3:
 	var a = _get_module_cached_aabb(mod)
 	if a.size == Vector3.ZERO:
@@ -855,26 +905,33 @@ func get_random_safe_interior_point(mod: Node3D, y: float = 0.9, margin: float =
 	# enemy spawn marker — prevents props from materialising on top of a
 	# typed_spawn so enemies can never pop out of a prop on frame 1.
 	const SPAWN_MIN_DIST_SQ : float = 4.0   # 2 m squared
-	const MAX_RETRIES : int = 5
+	const SPAWN_FILTER_TRIES : int = 5      # spawn-marker distance is a soft preference
+	const MAX_RETRIES : int = 24            # not being inside a wall is not
+	var probe_y : float = mod.global_position.y + maxf(y, 0.7)
 	for _i in MAX_RETRIES:
 		var candidate := Vector3(
 			randf_range(a.position.x + mx, a.position.x + a.size.x - mx),
 			mod.global_position.y + y,
 			randf_range(a.position.z + mz, a.position.z + a.size.z - mz)
 		)
+		if not _point_is_clear(candidate, probe_y):
+			continue
 		var clear : bool = true
-		for spawn in registered_typed_spawns:
-			var p : Vector3 = spawn.get("position", Vector3.ZERO)
-			var dx : float = p.x - candidate.x
-			var dz : float = p.z - candidate.z
-			if dx * dx + dz * dz < SPAWN_MIN_DIST_SQ:
-				clear = false
-				break
+		if _i < SPAWN_FILTER_TRIES:
+			for spawn in registered_typed_spawns:
+				var p : Vector3 = spawn.get("position", Vector3.ZERO)
+				var dx : float = p.x - candidate.x
+				var dz : float = p.z - candidate.z
+				if dx * dx + dz * dz < SPAWN_MIN_DIST_SQ:
+					clear = false
+					break
 		if clear:
 			return candidate
-	# All retries failed — return the last candidate anyway; the filter is a
-	# soft preference, not a hard guarantee, to avoid infinite retries in
-	# rooms densely packed with spawn markers.
+	# No candidate was clear of the level geometry after MAX_RETRIES: report "no safe point"
+	# (Vector3.ZERO, which every caller skips) instead of returning a point known to be in a
+	# wall. Without a physics space nothing could be validated, so keep the old behaviour.
+	if is_inside_tree():
+		return Vector3.ZERO
 	return Vector3(
 		randf_range(a.position.x + mx, a.position.x + a.size.x - mx),
 		mod.global_position.y + y,

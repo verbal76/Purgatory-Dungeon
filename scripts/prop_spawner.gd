@@ -288,6 +288,10 @@ func _try_spawn_wall_furniture(gen: Node, mod: Node3D) -> int:
 			y_rot = 0.0
 
 	var model : String = WALL_FURNITURE_MODELS[randi() % WALL_FURNITURE_MODELS.size()]
+	# Furniture is meant to sit against a wall, but the wall position comes from the room's
+	# bounding box; in non-rectangular rooms that can be inside a wall. Skip those.
+	if gen.has_method("is_position_clear") and not gen.is_position_clear(pos + Vector3(0.0, 0.6, 0.0), 0.1):
+		return 0
 	return _place_prop(pos, model, y_rot)
 
 

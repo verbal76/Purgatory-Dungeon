@@ -78,19 +78,27 @@ func _pick_portal_position() -> Vector3:
 	if modules.is_empty():
 		return Vector3(50.0, 0.0, 50.0)
 
-	# Pick from the far 20% of the module list — farthest from the start.
-	var start_idx : int = max(int(modules.size() * 0.80), modules.size() - 20)
-	var candidates : Array = []
-	for i in range(start_idx, modules.size()):
-		var m : Node3D = modules[i]
-		if is_instance_valid(m):
-			candidates.append(m)
-
-	if candidates.is_empty():
-		candidates = [modules[modules.size() - 1]]
-
+	# Far from the start, in a real room, at a point that is actually walkable.
+	# (This used to take the origin of one of the last 20 *placed* modules: connectors,
+	# end caps and door plugs included, and an origin is often outside the module's
+	# footprint or inside a wall, so the Day-30 portal could be unreachable.)
+	var start : Node3D = modules[0]
+	var rooms : Array = []
+	for m in modules:
+		if is_instance_valid(m) and m is Node3D and m.has_meta("counts_toward_goal") \
+				and bool(m.get_meta("counts_toward_goal")):
+			rooms.append(m)
+	if rooms.is_empty():
+		rooms = [modules[modules.size() - 1]]
+	var from : Vector3 = start.global_position
+	rooms.sort_custom(func(a, b):
+		return a.global_position.distance_squared_to(from) > b.global_position.distance_squared_to(from))
+	var far_count : int = maxi(3, int(rooms.size() * 0.20))
+	var candidates : Array = rooms.slice(0, mini(far_count, rooms.size()))
 	candidates.shuffle()
 	var chosen : Node3D = candidates[0]
+	if _dungeon_gen.has_method("get_random_safe_interior_point"):
+		return _dungeon_gen.get_random_safe_interior_point(chosen, 1.5, 2.0)
 	return chosen.global_position + Vector3(0.0, 1.5, 0.0)
 
 
