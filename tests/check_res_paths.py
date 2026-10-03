@@ -14,7 +14,9 @@ lower = {}
 for f in files:
     lower.setdefault(f.lower(), []).append(f)
 
-load_re = re.compile(r'\b(?:pre)?load\(\s*"res://([^"]+)"')
+# Any "res://dir/file.ext" string literal in code (consts, load(), preload(), ResourceLoader
+# calls...). Directories (no extension) and templated paths are skipped.
+load_re = re.compile(r'"res://([^"]+\.[A-Za-z0-9]+)"')
 ext_re = re.compile(r'^\[ext_resource [^\]]*\bpath="res://([^"]+)"', re.M)
 problems = []
 
