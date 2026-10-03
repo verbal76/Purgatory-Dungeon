@@ -251,14 +251,12 @@ func _do_quick_restart() -> void:
 			int(SaveManager.current_profile.get("run_count", 0)) + 1
 		SaveManager.save_profile()
 
+	RunLifecycle.sync_run_data_from_profile()
 	var run_data := get_node_or_null("/root/GlobalRunData")
 	if run_data != null:
 		run_data.seed_hash = 0
 
-	GameClock.hide_hud()
-	BuffManager.reset()
-	GlobeManager.reset()
-	PlayerWallet.hide_hud()
+	RunLifecycle.end_run_cleanup()
 
 	get_tree().change_scene_to_file(QUICK_RESTART_SCENE)
 	queue_free()

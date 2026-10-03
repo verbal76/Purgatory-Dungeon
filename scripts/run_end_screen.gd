@@ -166,12 +166,8 @@ func _on_leave_pressed() -> void:
 	if has_node("/root/CodexManager"):
 		CodexManager.increment_completions()
 
-	# Clean up run systems.
-	if has_node("/root/GameClock"):
-		GameClock.hide_hud()
-	if has_node("/root/BuffManager"):
-		BuffManager.reset()
-	PlayerWallet.hide_hud()
+	# Clean up run systems (including globes, which used to keep ticking in the Alchemist).
+	RunLifecycle.end_run_cleanup()
 
 	get_tree().change_scene_to_file(ALCHEMIST_SCENE)
 

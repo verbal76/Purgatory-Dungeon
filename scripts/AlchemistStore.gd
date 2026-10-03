@@ -347,15 +347,14 @@ func _start_new_run() -> void:
 			int(SaveManager.current_profile.get("run_count", 0)) + 1
 		SaveManager.save_profile()
 
+	# Class/difficulty/name must come from the profile: GlobalRunData is only filled by
+	# character select, so a fresh launch -> Alchemist -> start ran as a default Barbarian.
+	RunLifecycle.sync_run_data_from_profile()
 	var run_data := get_node_or_null("/root/GlobalRunData")
 	if run_data != null:
 		run_data.seed_hash = 0
 
-	if has_node("/root/GameClock"):
-		GameClock.hide_hud()
-	if has_node("/root/BuffManager"):
-		BuffManager.reset()
-	PlayerWallet.hide_hud()
+	RunLifecycle.end_run_cleanup()
 
 	get_tree().change_scene_to_file(DUNGEON_SCENE)
 

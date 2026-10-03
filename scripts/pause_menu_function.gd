@@ -461,6 +461,9 @@ func _on_resume_button_pressed() -> void:
 func _on_exit_to_main_menu_button_pressed() -> void:
 	_set_pause_menu_visible(false)
 	get_tree().paused = false
+	# Leaving the run: stop the day clock/buffs/globes so a buff pick or day HUD cannot
+	# appear over the main menu a minute later.
+	RunLifecycle.end_run_cleanup()
 
 	if has_node("/root/AudioManager"):
 		AudioManager.play_menu_music()
