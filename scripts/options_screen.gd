@@ -26,6 +26,12 @@ extends Control
 # Set by the caller before changing scene here.  Cleared when Back fires.
 static var _return_scene : String = ""
 
+# When true the screen is an overlay inside a running scene (e.g. opened from the
+# in-game pause menu). Back then emits `closed` and frees itself instead of changing
+# scene, so the active run is left untouched. Set before adding to the tree.
+var embedded : bool = false
+signal closed
+
 # ── Palette ────────────────────────────────────────────────────────────────────
 const COL_BG     := Color(0.07, 0.07, 0.09, 0.98)
 const COL_PANEL  := Color(0.13, 0.13, 0.17, 1.0)
@@ -706,6 +712,10 @@ func _load_settings() -> void:
 # ══════════════════════════════════════════════════════════════════════════════
 
 func _go_back() -> void:
+	if embedded:
+		closed.emit()
+		queue_free()
+		return
 	var dest : String = _return_scene
 	_return_scene = ""
 	get_tree().change_scene_to_file(dest if not dest.is_empty() else main_menu_scene)

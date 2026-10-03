@@ -173,17 +173,40 @@ func _inject_options_button() -> void:
 		vbox.move_child(options_btn, exit_idx)
 
 
-func _on_options_button_pressed() -> void:
-	# Tell the options screen to return here (dungeon) when Back is pressed.
-	# We use the static var on options_screen so no scene reference is needed.
-	if ResourceLoader.exists(OPTIONS_SCENE):
-		var OptionsScreen = load("res://scripts/options_screen.gd")
-		if OptionsScreen:
-			OptionsScreen._return_scene = DUNGEON_SCENE
+# Options opens as an overlay on top of the paused run. It must NOT change scene:
+# change_scene_to_file() frees the whole dungeon, and returning would reload a fresh one,
+# silently abandoning the run (world, enemies, clock, player position).
+var _options_layer : CanvasLayer = null
 
-	_set_pause_menu_visible(false)
-	get_tree().paused = false
-	get_tree().change_scene_to_file(OPTIONS_SCENE)
+func _on_options_button_pressed() -> void:
+	if _options_layer != null or not ResourceLoader.exists(OPTIONS_SCENE):
+		return
+	var options_scene : PackedScene = load(OPTIONS_SCENE)
+	var options : Control = options_scene.instantiate() as Control
+	if options == null:
+		return
+	options.set("embedded", true)
+	options.process_mode = Node.PROCESS_MODE_ALWAYS
+	options.connect("closed", _on_options_closed)
+	_options_layer = CanvasLayer.new()
+	_options_layer.name = "OptionsOverlay"
+	_options_layer.layer = 128
+	_options_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_options_layer)
+	_options_layer.add_child(options)
+	if pause_menu != null:
+		pause_menu.visible = false
+
+
+func _on_options_closed() -> void:
+	if _options_layer != null:
+		_options_layer.queue_free()
+		_options_layer = null
+	if pause_menu != null and _is_open:
+		pause_menu.visible = true
+		if resume_button != null:
+			resume_button.grab_focus()
+	_initialize_pause_menu_values()   # reflect any audio/display changes made in Options
 
 
 func open_menu() -> void:
@@ -198,6 +221,9 @@ func open_menu() -> void:
 func close_menu() -> void:
 	if not _is_open:
 		return
+	if _options_layer != null:   # never leave the Options overlay behind a resumed game
+		_options_layer.queue_free()
+		_options_layer = null
 
 	_set_pause_menu_visible(false)
 	get_tree().paused = false
