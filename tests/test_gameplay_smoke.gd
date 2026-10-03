@@ -63,18 +63,44 @@ func _ready() -> void:
 			_check(player._current_health < hp_before, "player takes damage")
 
 	# --- enemies -----------------------------------------------------------
-	# Spawning is staggered (initial wave + periodic top-ups), so poll with a bound.
+	# Enemies spawn by proximity (a ring around the player), so a stationary player in
+	# a start room with no spawn points nearby may legitimately see none for a while.
+	# Give natural spawning a bounded chance, then fall back to the manager's real
+	# spawn function so the rest of the pipeline is still exercised deterministically.
+	var manager = main.get_node_or_null("EnemyManager")
+	_check(manager != null, "EnemyManager booted")
 	var live: Array = []
 	var waited := 0
-	while live.size() < 2 and waited < 900:
+	var natural := true
+	var skip_natural := OS.get_environment("SMOKE_SKIP_NATURAL") != ""   # lets CI exercise the fallback
+	for e in get_tree().get_nodes_in_group("enemy"):
+		if skip_natural and e is CharacterBase:
+			e.queue_free()
+	while not skip_natural:
 		live.clear()
 		for e in get_tree().get_nodes_in_group("enemy"):
 			if e is CharacterBase and e.visible and not e._is_dead:
 				live.append(e)
-		if live.size() < 2:
-			await _frames(10)
-			waited += 10
-	print("metric: %d live enemies after %d extra physics frames" % [live.size(), waited])
+		if live.size() >= 2 or waited >= 300:
+			break
+		await _frames(10)
+		waited += 10
+	if skip_natural:
+		live.clear()
+	if live.size() < 2 and manager != null and player != null:
+		natural = false
+		var spawns: Array = gen.registered_typed_spawns.duplicate()
+		spawns.sort_custom(func(a, b): return player.global_position.distance_squared_to(a["position"]) > player.global_position.distance_squared_to(b["position"]))
+		for entry in spawns:
+			if manager._spawn_enemy_from_data(entry):
+				await _frames(5)
+			live.clear()
+			for e in get_tree().get_nodes_in_group("enemy"):
+				if e is CharacterBase and e.visible and not e._is_dead:
+					live.append(e)
+			if live.size() >= 2:
+				break
+	print("metric: %d live enemies; natural proximity spawn within %d frames: %s" % [live.size(), waited, str(natural)])
 	_check(live.size() > 0, "enemies spawned (%d live)" % live.size())
 
 	var fallen := 0

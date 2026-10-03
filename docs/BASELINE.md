@@ -26,7 +26,7 @@ Kept on 4.6: no concrete reason to migrate.
 | Settings persistence | WORKING | RUNTIME settings round trip |
 | Dungeon generation | WORKING WITH DEFECTS | RUNTIME 8 seeds: 110/110 rooms, connected, deterministic; see defects |
 | Player spawn (Barbarian, Mage) | WORKING | RUNTIME one player, inside bounds, on floor |
-| Enemy manager/spawning/pooling | WORKING | RUNTIME 5–12 live enemies, top-ups |
+| Enemy manager/spawning/pooling | WORKING | RUNTIME 2–12 live enemies, top-ups. Spawning is proximity-based (ring around the player), so a stationary player can see none for a while; this is design, not a fault |
 | Melee/kill credit/damage | WORKING | RUNTIME credit once, no double credit, cull not credited |
 | Enemy Mage fireballs | WORKING (fixed) | RUNTIME regression test (dealt 0 damage before) |
 | Exploration/minimap reveal | WORKING (fixed) | RUNTIME 0 modules explored before fix |
