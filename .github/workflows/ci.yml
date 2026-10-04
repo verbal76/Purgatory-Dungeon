@@ -8,35 +8,16 @@ name: CI
 #   * Push a tag v<N> (N = the number in ./VERSION): this workflow builds that exact commit
 #     and publishes the Release (title "Purgatory Dungeon v<N>", file
 #     Purgatory-Dungeon-v<N>-Windows.zip, marked Latest).
-#   * Or run it manually (workflow_dispatch) with from_run_id/publish_version/source_sha to
-#     promote an artifact that an earlier CI run already built, without rebuilding it.
+#   * To publish a build an earlier CI run already made WITHOUT rebuilding it, push a
+#     helper tag  promote/v<N>/<run_id>/<full_sha>[/notlatest]  on a commit that contains this
+#     workflow, then delete that helper tag. (Tag pushes are used because workflow_dispatch
+#     only works for workflows on the default branch.)
 on:
   push:
     branches: [main]
-    tags: ['v[0-9]*']
+    tags: ['v[0-9]*', 'promote/**']
   pull_request:
   workflow_dispatch:
-    inputs:
-      from_run_id:
-        description: "Promote the artifact built by this earlier CI run id (leave empty for a normal CI run)"
-        required: false
-        default: ""
-      publish_version:
-        description: "Public version number N to publish as 'Purgatory Dungeon vN'"
-        required: false
-        default: ""
-      source_sha:
-        description: "Full commit SHA that earlier run built (checked against the artifact's BUILD_INFO)"
-        required: false
-        default: ""
-      make_latest:
-        description: "Mark the release as Latest"
-        type: boolean
-        default: true
-      notes:
-        description: "Optional text for the top of the release notes"
-        required: false
-        default: ""
 
 env:
   GODOT_VERSION: "4.6"
@@ -50,8 +31,8 @@ permissions:
 
 jobs:
   validate-and-export:
-    # A promote-only dispatch (from_run_id set) must not rebuild anything.
-    if: github.event_name != 'workflow_dispatch' || inputs.from_run_id == ''
+    # A promote tag publishes an existing artifact; it must not rebuild anything.
+    if: ${{ !startsWith(github.ref, 'refs/tags/promote/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -160,18 +141,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: tools/publish_release.sh "${GITHUB_REF_NAME#v}" "$SOURCE_SHA" artifact "$GITHUB_RUN_ID" true
 
-  # Manual dispatch -> promote an artifact an earlier run already built (no rebuild).
+  # Helper tag promote/v<N>/<run_id>/<full_sha>[/notlatest] -> publish an artifact an earlier
+  # run already built (no rebuild; the exact verified binary is attached).
   promote:
-    if: github.event_name == 'workflow_dispatch' && inputs.from_run_id != ''
+    if: startsWith(github.ref, 'refs/tags/promote/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: read
     steps:
       - uses: actions/checkout@v4
+      - name: Parse and validate the promote tag
+        id: p
+        run: |
+          IFS=/ read -r _ ver run sha flag <<<"$GITHUB_REF_NAME"
+          [[ "$ver" =~ ^v[1-9][0-9]*$ ]] || { echo "bad version in tag"; exit 1; }
+          [[ "$run" =~ ^[0-9]+$ ]] || { echo "bad run id in tag"; exit 1; }
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "bad sha in tag"; exit 1; }
+          [[ -z "$flag" || "$flag" == "notlatest" ]] || { echo "bad flag in tag"; exit 1; }
+          echo "version=${ver#v}" >> "$GITHUB_OUTPUT"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if [[ "$flag" == "notlatest" ]]; then echo "latest=false" >> "$GITHUB_OUTPUT"; else echo "latest=true" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/download-artifact@v4
         with:
-          run-id: ${{ inputs.from_run_id }}
+          run-id: ${{ steps.p.outputs.run }}
           github-token: ${{ github.token }}
           pattern: PurgatoryDungeon-windows-*
           merge-multiple: true
@@ -179,7 +173,4 @@ jobs:
       - name: Publish "Purgatory Dungeon v<N>" from the existing artifact
         env:
           GH_TOKEN: ${{ github.token }}
-          NOTES_INPUT: ${{ inputs.notes }}
-        run: |
-          printf '%s\n' "$NOTES_INPUT" > extra_notes.md
-          tools/publish_release.sh "${{ inputs.publish_version }}" "${{ inputs.source_sha }}" artifact "${{ inputs.from_run_id }}" "${{ inputs.make_latest }}" extra_notes.md
+        run: tools/publish_release.sh "${{ steps.p.outputs.version }}" "${{ steps.p.outputs.sha }}" artifact "${{ steps.p.outputs.run }}" "${{ steps.p.outputs.latest }}"
