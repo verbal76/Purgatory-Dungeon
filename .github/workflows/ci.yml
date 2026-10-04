@@ -5,9 +5,10 @@ name: CI
 #
 # RELEASES (see docs/RELEASES.md): the owner only ever downloads "Purgatory Dungeon v<N>"
 # from the GitHub Releases page.
-#   * Push a tag v<N> (N = the number in ./VERSION): this workflow builds that exact commit
-#     and publishes the Release (title "Purgatory Dungeon v<N>", file
-#     Purgatory-Dungeon-v<N>-Windows.zip, marked Latest).
+#   * Push a tag v<N> (N = the number in ./VERSION), or - where tags cannot be pushed - the branch
+#     release/v<N>: this workflow builds that exact commit and publishes the Release (title
+#     "Purgatory Dungeon v<N>", file Purgatory-Dungeon-v<N>-Windows.zip, marked Latest). The build
+#     is stamped as the release build, so the game shows plainly "Purgatory Dungeon v<N>".
 #   * To publish a build an earlier CI run already made WITHOUT rebuilding it, push a
 #     helper BRANCH  promote/v<N>/<run_id>/<full_sha>[/notlatest]  (created from a commit that
 #     contains this workflow), wait for the `promote` job, then delete that helper branch.
@@ -15,7 +16,7 @@ name: CI
 #     branch, and the agent environment cannot push tags.)
 on:
   push:
-    branches: [main, 'promote/**']
+    branches: [main, 'promote/**', 'release/v[0-9]*']
     tags: ['v[0-9]*']
   pull_request:
   workflow_dispatch:
@@ -75,19 +76,25 @@ jobs:
 
       - name: Check public version consistency
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            python3 tools/release_tool.py check --tag "$GITHUB_REF_NAME"
+          rel=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then rel="$GITHUB_REF_NAME"; fi
+          if [[ "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="v${GITHUB_REF_NAME#release/v}"; fi
+          if [[ -n "$rel" ]]; then
+            python3 tools/release_tool.py check --tag "$rel"
           else
             python3 tools/release_tool.py check
           fi
 
       - name: Validate project and run tests
+        env:
+          # A release build must contain the canonical studio logo (docs/RELEASES.md).
+          REQUIRE_STUDIO_LOGO: ${{ (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')) && '1' || '' }}
         run: tests/run_tests.sh "$GODOT"
 
       - name: Write build_info.json (shipped inside the game)
         run: |
           rel=""
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then rel="--release"; fi
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="--release"; fi
           python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" $rel
 
       - name: Export Windows build
@@ -123,10 +130,10 @@ jobs:
           retention-days: 7
           compression-level: 6
 
-  # Tag push -> publish the release built by this very run.
+  # Tag push or release/v<N> branch push -> publish the release built by this very run.
   publish:
     needs: validate-and-export
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -140,7 +147,9 @@ jobs:
       - name: Publish "Purgatory Dungeon v<N>"
         env:
           GH_TOKEN: ${{ github.token }}
-        run: tools/publish_release.sh "${GITHUB_REF_NAME#v}" "$SOURCE_SHA" artifact "$GITHUB_RUN_ID" true
+        run: |
+          ver="${GITHUB_REF_NAME#release/}"
+          tools/publish_release.sh "${ver#v}" "$SOURCE_SHA" artifact "$GITHUB_RUN_ID" true
 
   # Helper branch promote/v<N>/<run_id>/<full_sha>[/notlatest] -> publish an artifact an earlier
   # run already built (no rebuild; the exact verified binary is attached).

@@ -153,11 +153,11 @@ func _display_loaded_profile() -> void:
 	# Friendly display names matching AlchemistStore perk definitions.
 	var perk_names : Dictionary = {
 		"magnitude":   "Magnitude",   "persistence": "Persistence",
-		"sanctuary":   "Sanctuary",   "vitality":    "Vitality",
-		"adrenaline":  "Adrenaline",  "ferocity":    "Ferocity",
-		"scavenge":    "Scavenge",    "greed":       "Greed",
-		"swiftness":   "Swiftness",   "elevation":   "Elevation",
-		"cyclone":     "Cyclone",     "trap_sense":  "Trap Sense"
+		"vitality":    "Vitality",    "adrenaline":  "Adrenaline",
+		"ferocity":    "Ferocity",    "scavenge":    "Scavenge",
+		"greed":       "Greed",       "swiftness":   "Swiftness",
+		"health_regen": "Regeneration", "cyclone":   "Cyclone",
+		"trap_sense":  "Trap Sense"
 	}
 
 	# ── Snapshot — what was shown last visit ──────────────────────────────────
@@ -654,7 +654,7 @@ func _on_start_run() -> void:
 		GlobalRunData.seed_hash       = final_seed.hash()
 
 		# Step 5: Grant starter potion AFTER identity is locked
-		SaveManager.current_profile["meta_currency"] = int(SaveManager.current_profile.get("meta_currency", 0)) + 1
+		RunLifecycle.grant_starter_potion()
 		SaveManager.save_profile()
 
 	else:
@@ -676,7 +676,7 @@ func _on_start_run() -> void:
 		GlobalRunData.seed_hash       = final_seed.hash()
 
 		# Step 4: Grant starter potion
-		SaveManager.current_profile["meta_currency"] = int(SaveManager.current_profile.get("meta_currency", 0)) + 1
+		RunLifecycle.grant_starter_potion()
 		SaveManager.save_profile()
 
 	# ── COMMON (both paths) ─────────────────────────────

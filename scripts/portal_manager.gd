@@ -20,6 +20,13 @@ const PORTAL_LIGHT_ENERGY  : float = 6.0
 const PORTAL_SPHERE_RADIUS : float = 1.2
 const ENTRY_RADIUS         : float = 2.5     # metres — how close to trigger entry
 const ANNOUNCE_FONT_SIZE   : int   = 28
+const KILL_PLANE_Y         : float = -15.0   # Below this a guard fell out of the world
+# Failsafe: if only a few enemies are left and none has died for this long, they are treated
+# as unreachable (sealed in geometry, stuck) and the portal opens anyway. The run must never
+# become unwinnable because of one enemy.
+const STALL_MAX_REMAINING  : int   = 3
+const STALL_SECONDS        : float = 180.0
+const HINT_SECONDS         : float = 3.0
 
 # ── Runtime references ────────────────────────────────────────────────────────
 var _dungeon_gen    : Node    = null
@@ -44,6 +51,14 @@ var _anim_t         : float  = 0.0
 
 # ── HUD announce ──────────────────────────────────────────────────────────────
 var _announce_layer : CanvasLayer = null
+# One reusable "enemies remain" hint (re-entering the portal used to stack a new layer each time).
+var _hint_layer     : CanvasLayer = null
+var _hint_label     : Label       = null
+var _hint_timer     : float       = 0.0
+
+# Stall failsafe state (see STALL_*).
+var _stall_count    : int   = -1
+var _stall_time     : float = 0.0
 
 
 # ── Boot ──────────────────────────────────────────────────────────────────────
@@ -205,15 +220,34 @@ func _spawn_elite_enemies(portal_pos: Vector3) -> void:
 			continue
 
 		get_parent().add_child(enemy)
-		enemy.global_position = origins[i % origins.size()] + Vector3(
-			randf_range(-2.0, 2.0), 0.0, randf_range(-2.0, 2.0))
+		enemy.global_position = _valid_guard_position(origins[i % origins.size()], portal_pos)
+		# Counted from the moment it exists (it used to be added only after the await below).
+		_portal_enemies.append(enemy)
 
 		# Wait one frame so _ready() has run, then apply the buff.
 		await get_tree().process_frame
 		if is_instance_valid(enemy) and enemy.has_method("apply_buff"):
 			enemy.apply_buff(PORTAL_BUFF_MULT)
 
-		_portal_enemies.append(enemy)
+
+# A guard placed in a wall or in the void can never be killed, which would keep the portal shut
+# for good. Jitter the origin, require it to be inside the dungeon, then snap it to the floor;
+# fall back to the unjittered origin and finally the portal point itself.
+func _valid_guard_position(origin: Vector3, portal_pos: Vector3) -> Vector3:
+	var candidates : Array[Vector3] = []
+	for _try in 4:
+		candidates.append(origin + Vector3(randf_range(-2.0, 2.0), 0.0, randf_range(-2.0, 2.0)))
+	candidates.append(origin)
+	candidates.append(portal_pos + Vector3(randf_range(-1.5, 1.5), 0.0, randf_range(-1.5, 1.5)))
+	candidates.append(portal_pos)
+	for c in candidates:
+		if _dungeon_gen != null and _dungeon_gen.has_method("is_position_inside_dungeon") \
+				and not _dungeon_gen.is_position_inside_dungeon(c):
+			continue
+		if _enemy_mgr != null and _enemy_mgr.has_method("_snap_to_floor"):
+			return _enemy_mgr._snap_to_floor(c)
+		return c
+	return portal_pos
 
 
 func _get_spawn_origins(center: Vector3, count: int) -> Array[Vector3]:
@@ -243,9 +277,13 @@ func _process(delta: float) -> void:
 		return
 
 	_anim_t += delta
+	_update_hint(delta)
 	_entry_check_timer += delta
 	if _entry_check_timer >= 0.5:
+		var dt : float = _entry_check_timer
 		_entry_check_timer = 0.0
+		_rescue_stranded()
+		_update_stall(dt)
 		_recheck_entry()
 
 	# Pulse the light energy between 60% and 140% of base.
@@ -273,11 +311,46 @@ func _enemies_remaining() -> int:
 		if is_instance_valid(e) and e.get("_is_dead") != true:
 			guards_alive += 1
 
-	# Enemies still managed by EnemyManager.
+	# Enemies still managed by EnemyManager. count_live_enemies() is exact; _live_count is
+	# only refreshed by a once-a-second sweep that does not run while paused.
 	var mgr_live : int = 0
-	if _enemy_mgr != null and "_live_count" in _enemy_mgr:
-		mgr_live = int(_enemy_mgr._live_count)
+	if _enemy_mgr != null:
+		if _enemy_mgr.has_method("count_live_enemies"):
+			mgr_live = int(_enemy_mgr.count_live_enemies())
+		elif "_live_count" in _enemy_mgr:
+			mgr_live = int(_enemy_mgr._live_count)
 	return guards_alive + mgr_live
+
+
+# Kills any guard or managed enemy that fell below the world.
+func _rescue_stranded() -> void:
+	for e in _portal_enemies:
+		if is_instance_valid(e) and e.get("_is_dead") != true \
+				and (e as Node3D).global_position.y < KILL_PLANE_Y and e.has_method("take_damage"):
+			e.take_damage(1.0e6, null)
+	if _enemy_mgr != null and _enemy_mgr.has_method("rescue_stranded_enemies"):
+		_enemy_mgr.rescue_stranded_enemies()
+
+
+# Tracks how long the last few enemies have gone without one dying (game time, not paused time).
+func _update_stall(dt: float) -> void:
+	var remaining : int = _enemies_remaining()
+	if remaining == 0 or remaining > STALL_MAX_REMAINING or remaining != _stall_count:
+		_stall_count = remaining
+		_stall_time  = 0.0
+		return
+	if not get_tree().paused:
+		_stall_time += dt
+
+
+func _entry_ready() -> bool:
+	var remaining : int = _enemies_remaining()
+	if remaining == 0:
+		return true
+	if remaining <= STALL_MAX_REMAINING and _stall_time >= STALL_SECONDS:
+		push_warning("PortalManager: %d enemies unaccounted for %.0f s — treating them as unreachable." % [remaining, _stall_time])
+		return true
+	return false
 
 
 func _on_entry_area_body_entered(body: Node3D) -> void:
@@ -286,9 +359,8 @@ func _on_entry_area_body_entered(body: Node3D) -> void:
 	if not body.is_in_group("player"):
 		return
 
-	var remaining : int = _enemies_remaining()
-	if remaining > 0:
-		_show_not_ready_hint(remaining)
+	if not _entry_ready():
+		_show_not_ready_hint(_enemies_remaining())
 		return
 
 	_entry_shown = true
@@ -308,32 +380,50 @@ func _recheck_entry() -> void:
 		return
 	if _player.global_position.distance_to(_portal_root.global_position) > ENTRY_RADIUS:
 		return
-	if _enemies_remaining() > 0:
+	if not _entry_ready():
 		return
 	_entry_shown = true
 	_show_end_screen()
 
 
 func _show_not_ready_hint(remaining: int) -> void:
-	# Flash a temporary warning on screen — all enemies must die first.
-	var layer     := CanvasLayer.new()
-	layer.layer    = 15
-	layer.process_mode = Node.PROCESS_MODE_ALWAYS
-	get_tree().root.add_child(layer)
+	# Flash a temporary warning on screen — all enemies must die first. One shared layer: walking
+	# in and out of the portal radius refreshes it instead of stacking more.
+	if not is_instance_valid(_hint_layer):
+		_hint_layer     = CanvasLayer.new()
+		_hint_layer.layer = 15
+		_hint_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+		get_tree().root.add_child(_hint_layer)
 
-	var lbl       := Label.new()
-	lbl.text       = "%d enemies remain — clear them all to enter the portal!" % remaining
-	lbl.add_theme_font_size_override("font_size", 22)
-	lbl.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2, 1.0))
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.set_anchors_preset(Control.PRESET_CENTER)
-	lbl.offset_top    = -80.0
-	lbl.offset_bottom =  80.0
-	lbl.offset_left   = -400.0
-	lbl.offset_right  =  400.0
-	layer.add_child(lbl)
+		_hint_label       = Label.new()
+		_hint_label.add_theme_font_size_override("font_size", 22)
+		_hint_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2, 1.0))
+		_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_hint_label.set_anchors_preset(Control.PRESET_CENTER)
+		_hint_label.offset_top    = -80.0
+		_hint_label.offset_bottom =  80.0
+		_hint_label.offset_left   = -400.0
+		_hint_label.offset_right  =  400.0
+		_hint_layer.add_child(_hint_label)
 
-	get_tree().create_timer(3.0).timeout.connect(layer.queue_free)
+	_hint_label.text = "%d enemies remain — clear them all to enter the portal!" % remaining
+	_hint_timer = HINT_SECONDS
+
+
+func _update_hint(delta: float) -> void:
+	if _hint_timer <= 0.0:
+		return
+	_hint_timer -= delta
+	if _hint_timer <= 0.0 and is_instance_valid(_hint_layer):
+		_hint_layer.queue_free()
+		_hint_layer = null
+		_hint_label = null
+
+
+# The hint layer is parented to the root, so it must not outlive the manager.
+func _exit_tree() -> void:
+	if is_instance_valid(_hint_layer):
+		_hint_layer.queue_free()
 
 
 # ── End screen ────────────────────────────────────────────────────────────────

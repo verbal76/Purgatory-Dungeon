@@ -24,6 +24,14 @@ static func sync_run_data_from_profile() -> void:
 	GlobalRunData.difficulty      = SaveManager.get_character_difficulty()
 
 
+## Every run, however it starts (character select, Alchemist, quick restart), begins with one
+## starter potion. Updates the profile in memory only; the caller saves once with its own changes.
+static func grant_starter_potion() -> void:
+	if SaveManager.current_profile.is_empty():
+		return
+	SaveManager.current_profile["meta_currency"] = int(SaveManager.current_profile.get("meta_currency", 0)) + 1
+
+
 ## Stops and clears every run-scoped autoload. Safe to call repeatedly.
 static func end_run_cleanup() -> void:
 	GameClock.hide_hud()

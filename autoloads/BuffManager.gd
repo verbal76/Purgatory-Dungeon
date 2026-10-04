@@ -352,7 +352,17 @@ func _on_buff_pick_triggered() -> void:
 # the final landed result — no separate winner pre-selection needed.
 func _build_slot_pool() -> void:
 	_slot_pool.clear()
+	# Only offer buffs this character can actually use (every stat the buff touches must exist on
+	# the player): a Mage is never offered Wrath Expansion, a Barbarian never Lightning Caller, and
+	# a buff whose stat exists on no player (an unimplemented one) is never offered at all.
+	var player : Node = get_tree().get_first_node_in_group("player")
+	var offerable : Array = []
 	for buff in _buff_pool:
+		if buff_is_applicable(buff, player):
+			offerable.append(buff)
+	if offerable.is_empty():
+		offerable = _buff_pool   # never leave the player without a card
+	for buff in offerable:
 		var w : int = RARITY_WEIGHTS.get(buff.get("ranking", "common"), 10)
 		for _j in w:
 			_slot_pool.append(buff)
@@ -715,6 +725,57 @@ func _apply_effect_dict(effect: Dictionary, apply: bool) -> void:
 		if t_stat != "":
 			_apply_single_stat(t_stat, t_val, apply)
 
+# Stats whose buff value is a FRACTION of the stat's base value for this player (0.25 = +25%),
+# matching the card text. Every other stat is an absolute amount (+9 attack damage) or already
+# a multiplier / fraction by its own definition (attack_speed 1.0, damage_reduction 0.0).
+const PERCENT_OF_BASE_STATS : Array[String] = [
+	"move_speed", "move_acceleration", "spell_damage", "spell_range", "fireball_speed",
+	"shove_force", "kick_force", "rapid_attack_cooldown", "block_knockback_force",
+	"head_bob_intensity", "react_anim_speed", "footstep_interval_seconds",
+]
+# The player's value for each percent stat the first time a buff touched it. Percentages stack
+# additively on that base (+25% and +25% = +50%) and are removed exactly when a timed buff ends.
+var _stat_base       : Dictionary = {}
+var _stat_base_owner : int        = 0
+
+
+func _percent_base(player: Node, stat_name: String) -> float:
+	var pid : int = player.get_instance_id()
+	if pid != _stat_base_owner:
+		_stat_base.clear()
+		_stat_base_owner = pid
+	if not _stat_base.has(stat_name):
+		_stat_base[stat_name] = float(player.get(stat_name))
+	return float(_stat_base[stat_name])
+
+
+# Every stat a buff or curse entry touches (main effect and tradeoff, single or multi-effect).
+func buff_stat_names(buff: Dictionary) -> Array[String]:
+	var names : Array[String] = []
+	var effects : Array = buff.get("effects", [buff]) if buff.has("effects") else [buff]
+	for effect in effects:
+		if not (effect is Dictionary):
+			continue
+		if str(effect.get("effect_type", "")) in ["stat_modifier", "on_kill", "max_health"]:
+			var st : String = str(effect.get("stat", ""))
+			if st != "":
+				names.append(st)
+		var tradeoff = effect.get("tradeoff", null)
+		if tradeoff is Dictionary and str(tradeoff.get("stat", "")) != "":
+			names.append(str(tradeoff.get("stat", "")))
+	return names
+
+
+# True when every stat the entry touches exists on `player` (a null player accepts everything).
+func buff_is_applicable(buff: Dictionary, player: Node) -> bool:
+	if player == null:
+		return true
+	for st in buff_stat_names(buff):
+		if not (st in player):
+			return false
+	return true
+
+
 func _apply_single_stat(stat_name: String, value: float, apply: bool) -> void:
 	var player = get_tree().get_first_node_in_group("player")
 	if player == null or not (stat_name in player):
@@ -722,7 +783,10 @@ func _apply_single_stat(stat_name: String, value: float, apply: bool) -> void:
 		return
 
 	var current_val : float = float(player.get(stat_name))
-	var change      : float = value if apply else -value
+	var amount      : float = value
+	if stat_name in PERCENT_OF_BASE_STATS:
+		amount = value * _percent_base(player, stat_name)
+	var change      : float = amount if apply else -amount
 	player.set(stat_name, current_val + change)
 
 	if stat_name == "max_health":
@@ -745,11 +809,22 @@ func _apply_single_stat(stat_name: String, value: float, apply: bool) -> void:
 
 # ── Custom effect handlers ─────────────────────────────────
 
+# The hallucination node is shared by every source (the timed buff, each schizophrenia trap), so
+# it is reference-counted: it stays attached until the LAST source ends. Re-triggering a trap while
+# it is active therefore extends the effect instead of the first timer cutting it short.
+var _schizo_refs : int = 0
+# Bumped by reset(): a trap timer left over from a previous run must not end this run's effect.
+var _run_serial  : int = 0
+
 func _handle_schizophrenia(apply: bool) -> void:
+	if apply:
+		_schizo_refs += 1
+	else:
+		_schizo_refs = maxi(_schizo_refs - 1, 0)
 	var player = get_tree().get_first_node_in_group("player")
 	if player == null:
 		return
-	if apply:
+	if _schizo_refs > 0:
 		if player.get_node_or_null("SchizophreniaEffect") == null:
 			var s = load("res://schizophrenia_audio.gd")
 			if s:
@@ -760,6 +835,15 @@ func _handle_schizophrenia(apply: bool) -> void:
 		var existing = player.get_node_or_null("SchizophreniaEffect")
 		if existing != null:
 			existing.queue_free()
+
+
+# Schizophrenia trap: hallucinations for `seconds` of game time (pauses with the game).
+func begin_timed_schizophrenia(seconds: float) -> void:
+	_handle_schizophrenia(true)
+	var serial : int = _run_serial
+	get_tree().create_timer(seconds, false).timeout.connect(func() -> void:
+		if serial == _run_serial:
+			_handle_schizophrenia(false))
 
 # ══════════════════════════════════════════════════════════════
 #  HELPERS
@@ -784,6 +868,10 @@ func is_picking() -> bool:
 
 func reset() -> void:
 	_active_buffs.clear()
+	_schizo_refs = 0
+	_run_serial += 1
+	_stat_base.clear()
+	_stat_base_owner = 0
 	_queued_picks = 0
 	if _is_picking:
 		get_tree().paused = false

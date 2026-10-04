@@ -206,6 +206,10 @@ func load_slot(slot_index: int) -> void:
 	emit_signal("profile_loaded")
 
 
+# Successful profile writes this session (lets tests assert how many writes an action costs).
+var save_count : int = 0
+
+
 # Writes the current profile to disk. Returns true on success.
 func save_profile() -> bool:
 	if current_profile.is_empty():
@@ -216,6 +220,7 @@ func save_profile() -> bool:
 	var path = get_file_path(active_slot_index)
 	if not StoragePaths.write_text_atomic(path, JSON.stringify(current_profile, "\t")):
 		return false
+	save_count += 1
 	# Always keep the last-slot preference in sync.
 	_save_last_slot_pref()
 	return true

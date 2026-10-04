@@ -137,6 +137,11 @@ var _status_drunk             : bool  = false
 var _status_reversed_controls : bool  = false
 var _status_acid              : bool  = false
 var _status_acid_timer        : float = 0.0
+var _status_acid_dps          : float = 1.0   # Set by the trap (TrapManager.acid_damage_per_sec)
+# Tracked timers (the brute's pattern) instead of fire-and-forget SceneTree timers: re-applying an
+# effect refreshes it, and the countdown pauses with the game.
+var _status_drunk_timer       : float = 0.0
+var _status_controls_timer    : float = 0.0
 var _status_day_effects_days  : int   = 0
 var passive_regen             : float = 0.0   # HP/sec from Regeneration perk
 
@@ -395,6 +400,7 @@ func _process(delta: float) -> void:
 		receive_heal(passive_regen * delta)
 
 	_check_kill_stats()
+	_tick_kill_haste(delta)
 
 
 # Mirrors brute_player._check_kill_streak() for stat effects only.
@@ -407,6 +413,7 @@ func _check_kill_stats() -> void:
 	_last_kill_count   = current
 	_kill_streak      += new_kills
 
+	_on_kill_haste_trigger()
 	if health_on_kill > 0.0:
 		receive_heal(health_on_kill * float(new_kills))
 
@@ -662,9 +669,17 @@ func _physics_tick(delta: float) -> void:
 	# ── Status effect ticks ────────────────────────────────────────────────────
 	if _status_acid and not _is_dead:
 		_status_acid_timer -= delta
-		take_damage(1.0 * delta)
+		take_damage(_status_acid_dps * delta)
 		if _status_acid_timer <= 0.0:
 			_status_acid = false
+	if _status_drunk and _status_drunk_timer > 0.0:
+		_status_drunk_timer -= delta
+		if _status_drunk_timer <= 0.0:
+			_status_drunk = false
+	if _status_reversed_controls and _status_controls_timer > 0.0:
+		_status_controls_timer -= delta
+		if _status_controls_timer <= 0.0:
+			_status_reversed_controls = false
 
 	# ── Dome cooldown ──────────────────────────────────────────────────────────
 	if _dome_cooldown > 0.0:
@@ -753,8 +768,9 @@ func _handle_movement(delta: float) -> void:
 		var right   : Vector3 = Vector3( cos(_yaw), 0.0, -sin(_yaw))
 		var dir     : Vector3 = (forward * -input_dir.y + right * input_dir.x).normalized()
 
-		var target_velocity_x : float = dir.x * move_speed
-		var target_velocity_z : float = dir.z * move_speed
+		var haste : float = kill_haste_multiplier()
+		var target_velocity_x : float = dir.x * move_speed * haste
+		var target_velocity_z : float = dir.z * move_speed * haste
 
 		velocity.x = move_toward(velocity.x, target_velocity_x, move_acceleration * delta)
 		velocity.z = move_toward(velocity.z, target_velocity_z, move_acceleration * delta)
@@ -1000,7 +1016,7 @@ func _launch_fireball(origin: Vector3, direction: Vector3, penetrate_walls: bool
 
 	# ── Hit detection — passing unique string to avoid Lambda capture bugs ─────
 	# attack_damage is the flat bonus/penalty applied by buffs (Berserker, Blunted, etc.)
-	var damage_val : float = maxf(0.0, spell_damage + attack_damage)
+	var damage_val : float = maxf(0.0, spell_damage + attack_damage + get_low_health_attack_bonus())
 	# direction is bound so _on_fireball_hit can place a scorch mark at the impact surface.
 	fireball.body_entered.connect(_on_fireball_hit.bind(fb_name, damage_val, direction, penetrate_walls))
 
@@ -1582,7 +1598,7 @@ func _apply_shove() -> void:
 		if to_enemy.normalized().dot(forward) <= 0.0:
 			continue
 		if enemy.has_method("take_damage"):
-			enemy.take_damage(shove_damage + maxf(0.0, attack_damage), self)
+			enemy.take_damage(shove_damage + maxf(0.0, attack_damage + get_low_health_attack_bonus()), self)
 		if enemy.has_method("take_knockback"):
 			enemy.take_knockback(forward, shove_force, shove_stun_time)
 
@@ -1676,7 +1692,9 @@ func _do_block() -> void:
 #  STATUS EFFECTS (TRAP SYSTEM)
 # ══════════════════════════════════════════════════════════════
 
-func apply_status(effect_name: String, days_duration: int) -> void:
+# days_duration: for the day-based effects it is the number of in-game days; for "acid_pool" it is
+# the duration in SECONDS (0 = default 15). strength: acid damage per second (0 = default 1.0).
+func apply_status(effect_name: String, days_duration: int, strength: float = 0.0) -> void:
 	match effect_name:
 		"reversed_view":
 			_status_reversed_view    = true
@@ -1691,14 +1709,15 @@ func apply_status(effect_name: String, days_duration: int) -> void:
 			if not GameClock.day_changed.is_connected(_on_day_changed):
 				GameClock.day_changed.connect(_on_day_changed)
 		"drunk":
-			_status_drunk = true
-			get_tree().create_timer(30.0).timeout.connect(func(): _status_drunk = false)
+			_status_drunk       = true
+			_status_drunk_timer = 30.0
 		"reversed_controls":
 			_status_reversed_controls = true
-			get_tree().create_timer(30.0).timeout.connect(func(): _status_reversed_controls = false)
+			_status_controls_timer    = 30.0
 		"acid_pool":
 			_status_acid       = true
-			_status_acid_timer = 15.0
+			_status_acid_timer = float(days_duration) if days_duration > 0 else 15.0
+			_status_acid_dps   = strength if strength > 0.0 else 1.0
 
 
 func _on_day_changed(_day: int) -> void:
@@ -1714,7 +1733,7 @@ func _on_day_changed(_day: int) -> void:
 
 
 func _get_effective_move_speed() -> float:
-	return maxf(move_speed, 0.001)
+	return maxf(move_speed * kill_haste_multiplier(), 0.001)
 
 
 # ── MageCharacter overrides (moved here now that we extend BruteCharacter) ────

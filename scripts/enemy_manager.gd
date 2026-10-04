@@ -133,6 +133,7 @@ var _respawn_timer    : float = 0.0
 var _diff_timer       : float = 0.0
 var _pressure_timer   : float = 0.0   # Tracks seconds since player last took damage
 const DIFF_CHECK_INTERVAL    : float = 10.0
+const KILL_PLANE_Y            : float = -15.0  # Same floor the player uses (brute_player.gd)
 const PRESSURE_THRESHOLD     : float = 30.0  # Seconds of no damage before pressure spawn
 const PRESSURE_CHECK_INTERVAL: float = 5.0   # How often to check pressure condition
 const BASE_RESPAWN_INTERVAL  : float = 4.0   # Baseline interval — compressed by day in _check_difficulty_escalation
@@ -760,6 +761,10 @@ func _physics_process(delta: float) -> void:
 # turtling by force-spawning a type-3 buffed enemy from the closest type-3
 # spawn point. This runs independently of the normal population cap.
 func _check_pressure_spawn() -> void:
+	# After Day 30 the dungeon must drain to zero (stop_spawning); a careful player who stays
+	# undamaged would otherwise be sent a fresh enemy every 5 s and could never clear the portal.
+	if _spawning_locked:
+		return
 	if _player == null or not is_instance_valid(_player):
 		return
 	# Only trigger if enough time has passed since the last damage event.
@@ -865,6 +870,30 @@ func _run_cull_sweep() -> void:
 			_live_count = maxi(_live_count - 1, 0)
 
 
+# Enemies that are alive right now. `_live_count` lags a kill by up to cull_check_interval and is
+# not refreshed while paused, so the Day-30 portal asks this instead.
+func count_live_enemies() -> int:
+	var n : int = 0
+	for e in _active_enemies:
+		if is_instance_valid(e) and e.get("_is_dead") != true:
+			n += 1
+	return n
+
+
+# Enemies have no kill plane (the player does): one that fell out of the world stays "alive"
+# forever and would keep the Day-30 portal shut. Kill any alive enemy below KILL_PLANE_Y.
+# Returns how many were rescued. take_damage(.., null) credits no kill to the player.
+func rescue_stranded_enemies() -> int:
+	var rescued : int = 0
+	for e in _active_enemies:
+		if not is_instance_valid(e) or e.get("_is_dead") == true:
+			continue
+		if (e as Node3D).global_position.y < KILL_PLANE_Y and e.has_method("take_damage"):
+			e.take_damage(1.0e6, null)
+			rescued += 1
+	return rescued
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  POPULATION TOP-UP
 # ══════════════════════════════════════════════════════════════════════════════
@@ -914,8 +943,9 @@ func _staggered_spawn_wave(zone_copy: Array, limit: int) -> void:
 		if spawned >= limit:
 			break
 		
-		# A top-up wave that was mid-flight when the game paused must not keep spawning.
-		if get_tree().paused:
+		# A top-up wave that was mid-flight when the game paused (or the Day-30 lock engaged)
+		# must not keep spawning.
+		if get_tree().paused or _spawning_locked:
 			break
 
 		# Build the heavy enemy hierarchy

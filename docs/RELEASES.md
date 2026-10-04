@@ -37,14 +37,18 @@ verifies they agree and that this document and `CLAUDE.md` still describe the co
 In the game, `BuildInfo` (`scripts/build_info.gd`) shows the version on the main menu and prints
 diagnostics (version, source commit, CI run, build time, engine) at startup. CI writes
 `build_info.json` into every build. A build is labelled plainly `Purgatory Dungeon vN` only when
-CI built it from tag `vN`; any other build says `development build after vN`.
+CI built it from tag `vN` or from the branch `release/vN`; any other build says `development build after vN`.
 
 ## Delivering the next build (N = current VERSION + 1)
 1. Finish and merge/test the work to be delivered; ensure `tests/run_tests.sh` is green.
 2. `python3 tools/release_tool.py set N` and commit it (this commit is the release commit).
-3. Push the tag: `git tag vN <release-commit> && git push origin vN`.
-4. CI (`.github/workflows/ci.yml`, job `publish`) tests and builds that exact commit and
-   publishes the Release "Purgatory Dungeon vN" as **Latest**, with the zip attached.
+3. Push the tag: `git tag vN <release-commit> && git push origin vN`. Where tags cannot be pushed
+   (the agent environment), push the branch `release/vN` at the release commit instead
+   (`git push origin <release-commit>:refs/heads/release/vN`); CI treats it exactly like the tag.
+4. CI (`.github/workflows/ci.yml`, job `publish`) tests and builds that exact commit, stamps the
+   build as the release build (so the game shows plainly "Purgatory Dungeon vN"), and
+   publishes the Release "Purgatory Dungeon vN" as **Latest**, with the zip attached. The version
+   check refuses the run if `VERSION` is not N.
 5. Tell the owner: "Purgatory Dungeon vN" and the exact file name. Nothing else.
 
 To publish a build CI already made, without rebuilding it: create a helper branch
@@ -54,6 +58,11 @@ the helper branch. The job downloads that run's artifact and publishes exactly t
 no binary drift. (A branch push is used because `workflow_dispatch` only works for workflows on the
 default branch, and the agent environment cannot push tags or download CI artifacts directly.)
 That is how v1 and v2 were published; their release notes were then edited to add a plain-English summary.
+
+## Studio splash requirement
+Every release build must contain the canonical Hot Attic Games logo
+`Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png` (see `CLAUDE.md`, "Studio splash"). CI sets
+`REQUIRE_STUDIO_LOGO=1` for tag and `release/v<N>` builds, so publishing fails if it is missing.
 
 ## History
 | Version | Source commit | What it was | Notes |

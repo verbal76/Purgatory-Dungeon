@@ -262,7 +262,7 @@ func _apply_effect(player: Node3D, effect: String, trap_pos: Vector3) -> void:
 		EFFECT_ACID_POOL:
 			# Ticking damage for acid_duration seconds. Handled by player.
 			if player.has_method("apply_status"):
-				player.apply_status("acid_pool", 0)
+				player.apply_status("acid_pool", int(acid_duration), acid_damage_per_sec)
 
 		EFFECT_FIREBALL_MINE:
 			# Half health immediately, then homing fireballs from coursec nodes.
@@ -273,16 +273,11 @@ func _apply_effect(player: Node3D, effect: String, trap_pos: Vector3) -> void:
 
 		EFFECT_SCHIZOPHRENIA:
 			# Attach the auditory hallucination script to the player for
-			# schizophrenia_duration seconds, then detach it cleanly.
-			# Routes through BuffManager._handle_schizophrenia() so the same
-			# node management logic is reused — no duplicate code.
+			# schizophrenia_duration seconds (game time), then detach it cleanly.
+			# BuffManager reference-counts the shared node, so triggering a second trap while the
+			# first is active extends the effect rather than being cut short by the first timer.
 			if has_node("/root/BuffManager"):
-				BuffManager._handle_schizophrenia(true)
-				get_tree().create_timer(schizophrenia_duration).timeout.connect(
-					func() -> void:
-						if has_node("/root/BuffManager"):
-							BuffManager._handle_schizophrenia(false)
-				)
+				BuffManager.begin_timed_schizophrenia(schizophrenia_duration)
 
 		EFFECT_JUMPSCARE:
 			# Only fire once per run — subsequent traps do nothing.
@@ -402,13 +397,15 @@ func _on_homing_hit(body: Node3D, fb: Area3D, damage_val: float) -> void:
 		return
 	if fb.has_meta("hit"):
 		return
+	# A trap fireball is aimed at the player. Enemies share the player's collision layers, so
+	# the mask cannot separate them: let it fly through enemies instead of exploding on (and
+	# damaging) the first one in its path.
+	if body.is_in_group("enemy") or body.is_in_group("enemies"):
+		return
 	fb.set_meta("hit", true)
 
-	var target := body
-	if not target.has_method("take_damage") and target.get_parent() != null:
-		target = target.get_parent()
-	if target != null and target.has_method("take_damage"):
-		target.take_damage(damage_val, null)
+	if body.is_in_group("player") and body.has_method("take_damage"):
+		body.take_damage(damage_val, null)
 
 	if is_instance_valid(fb):
 		fb.queue_free()

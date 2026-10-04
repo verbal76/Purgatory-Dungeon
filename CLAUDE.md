@@ -15,6 +15,20 @@ codenames, SHAs, build counters or CI artifact links in anything the owner sees;
 engineering metadata in the release notes. One number = one delivered binary; never reuse or overwrite.
 Full procedure, tooling and history: **docs/RELEASES.md** (`tools/release_tool.py`, tag `vN` triggers CI publishing).
 
+## Studio splash (Hot Attic Games standing requirement — do not remove)
+
+Every Hot Attic Games application opens with the studio splash before its own title screen:
+cold launch -> **Hot Attic Games splash** -> product title/menu -> normal game. The artwork is the
+owner-supplied canonical file **`Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png`** (look for exactly
+that name; the older `branding/Hot_Attic_Games_Master_Logo.png` path is obsolete). Never redraw,
+recreate, crop, stretch or substitute it, and do not wait for a differently named asset.
+Implementation: `scenes/StudioSplash.tscn` + `scripts/studio_splash.gd` (`StudioSplash`) is the
+project's main scene; it finds the file by name at the repo root, `branding/`, `assets/` or
+`Music & background images/`, fits the whole image with its aspect ratio and transparency, shows it
+about 2.4 s (fade in/hold/fade out) while the main menu loads behind it, plays only on cold launch,
+and can never strand the player (missing logo skips it; failsafe timer). `tests/test_studio_splash.gd`
+covers it; release builds set `REQUIRE_STUDIO_LOGO=1`, so a release without the logo fails CI.
+
 ## Human testing gate (Hot Attic Games rule — applies before asking the owner to test)
 
 Do not send the owner a build to test while confirmed, reproducible, repairable engineering defects
@@ -80,7 +94,7 @@ Exploration tracking is throttled to 0.5 s intervals (not every frame).
 
 ### Data Files
 
-- `data/buffs.json` — 8 buffs with `effect_type`, `stat`, `tradeoff` fields; extensible
+- `data/buffs.json` — 54 buffs with `effect_type`, `stat`, `tradeoff` fields; extensible. Percent-style stats (`BuffManager.PERCENT_OF_BASE_STATS`) are fractions of the player's base value; the pick pool only offers buffs whose stats exist on the current player (`tests/test_buffs.gd` enforces both)
 - `data/globe_effects.json` — Mystery sphere pickup effects
 - `data/codex_lore.txt` — Bestiary/lore entries
 

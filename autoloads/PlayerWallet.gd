@@ -80,11 +80,14 @@ func add_potions(amount: int) -> void:
 	_update_hud()
 	emit_signal("wallet_changed", SaveManager.current_profile["meta_currency"])
 
-func spend_potions(amount: int) -> bool:
+# save = false lets a caller that changes more of the profile in the same step (the Alchemist
+# also bumps a perk) write it once, after both changes, instead of twice.
+func spend_potions(amount: int, save: bool = true) -> bool:
 	var current = SaveManager.current_profile.get("meta_currency", 0)
 	if current < amount: return false
 	SaveManager.current_profile["meta_currency"] = current - amount
-	SaveManager.save_profile()
+	if save:
+		SaveManager.save_profile()
 	_update_hud()
 	emit_signal("wallet_changed", SaveManager.current_profile["meta_currency"])
 	return true

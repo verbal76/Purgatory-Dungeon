@@ -157,7 +157,7 @@ Every finding below was re-validated against the current source, reproduced wher
 - GameClock timer pauses with the tree; `start_run()` resets all run state.
 - Collision-layer naming is cosmetic once the ray masks are right.
 
-**Requires human judgment (not changed)**
+**Requires human judgment (not changed in round 2; most are resolved in round 3 below)**
 - Chests never spawn: the only end-cap module is a solid 2 m wall slab and `ChestManager` rejects it.
   Chest rewards, mimics and the keys that open them are inert until the owner decides where chests live.
 - Minimap action is bound to Escape (also pause).
@@ -181,6 +181,103 @@ Every finding below was re-validated against the current source, reproduced wher
 
 **Deferred for the Android port**: touch controls, window/resolution code, fixed-pixel UI and
 safe areas, renderer choice, asset size, storage root, package/API 36/16 KB/signing.
+
+## Round 3 (branch `purgatory-stabilization-round2`, toward v3)
+Every item the round-2 "Requires human judgment" and "Remaining, low" lists named was re-validated
+against the source. Fixes have regression tests that fail on the old code and pass on the new.
+
+**Chests / keys / mimics.** Root cause: `ChestManager` only accepted modules tagged `is_end_cap`,
+and the only end-cap module is a solid 2 m wall slab that its own size gate rejects, so no chest
+ever spawned and keys (5% enemy drop, saved in the profile) had nothing to open. Chests now live
+in **dead-end rooms** (a room with exactly one opening, never the start room, plugs or connectors);
+the spot is checked inside the dungeon and clear of walls, with a fallback to the generator's safe
+interior point. ~5-10 such rooms per dungeon x 40% = roughly 2-4 chests per run. The chest/key/mimic
+FBX files point at texture files that only exist on the artist's machine, so they import untextured:
+they now use the shipped `SM_Chests_Mat_Chests_*` textures (needs a visual check).
+Test: `test_chests` (3 seeds). *Owner confirmation wanted:* dead-end rooms as the chest locations.
+
+**Buffs (54 in `data/buffs.json`, 28 globe effects).** Audited every entry against both players.
+- Percent-like values (Blood Rush +25% was +3%) were added as absolutes. A fixed list of stats
+  (`BuffManager.PERCENT_OF_BASE_STATS`) is now scaled by the player's base value, stacks additively
+  and is removed exactly. `test_buffs` checks every card's text against its data and magnitude.
+- Class filtering: the pick pool (and the globe curse pool) only offers entries whose stats exist on
+  the current player, so a Mage is no longer offered Barbarian-only buffs and vice versa.
+- Adrenaline Spike now only applies below 30% health; Shadow Dancer now gives +18% speed for 5 s
+  after a kill (it was +2% permanently-on-pick, then removed after 5 s).
+- Slow the Horde / Enemy Weaken / Horde Caller now work for the Mage too (the stats moved to
+  `CharacterBase`); negative `damage_reduction` curses (Pain Mirror, Void Embrace) now make the
+  player take more damage instead of doing nothing.
+- Card texts that disagreed with behaviour were corrected (Wrath/Thunder Expansion, Radiant Sparks,
+  Slow the Horde, Enemy Weaken, Footstep Stalker, Horde Caller).
+- **Held out of the pool (owner decision):** Jump Master, Torchbearer, Dimming Legend (and the
+  curses Flickering Torment, Eternal Night): their stats (`jump_velocity`, `torch_duration`) exist
+  on no player; there is no jump and torches only dim on hardcore. `test_buffs` fails if any other
+  buff references a stat no player has.
+- Curses that adjust an opt-in effect (Dimmed Sparks, Blind Rage, Shattered Spark, Weakened Flame,
+  Blood Thirst) only bite while the player holds the matching buff.
+
+**Portal completion.** The portal could stay shut forever: after Day 30 the pressure spawner (and
+an in-flight top-up wave) kept sending a buffed enemy every 5 s to a player who stayed undamaged;
+the portal read a once-a-second cached count that lags kills and does not refresh while paused; an
+enemy that fell out of the world (they have no kill plane) or a guard placed in a wall/void stayed
+"alive" for good. Fixed: reinforcements honour the lock; the portal counts live enemies exactly;
+stranded enemies below y = -15 are rescued; guards are placed inside the dungeon and snapped to the
+floor and are counted from the moment they spawn; failsafe - if at most 3 enemies remain and none
+dies for 180 s of game time the portal opens (they are treated as unreachable). Test:
+`test_portal_completion`.
+
+**Trap fireballs** detonated on, and damaged, the first body in their path (usually an enemy).
+They now fly through enemies and only damage the player. Test: `test_trap_fireball`.
+
+**Lower-priority fixes**
+- Alchemist purchase: one profile write holding both the spent potions and the perk
+  (`SaveManager.save_count` lets a test assert it).
+- Duplicate key bindings: remapping an action to an input another action uses swaps the two (and
+  refuses when there is nothing to swap). The Block/AOE default gamepad overlap is unchanged.
+- Portal hint: one reusable layer instead of one per entry.
+- Mage drunk/reversed-controls: tracked timers (refresh on re-apply, pause with the game).
+- Schizophrenia: reference-counted hallucination node, game-time timers, stale timers from a
+  previous run ignored; a re-triggered trap extends the effect instead of being cut short.
+- Acid trap: duration and damage now come from `TrapManager.acid_duration` /
+  `acid_damage_per_sec` (1.0 dps x 15 s, the documented values). The Barbarian took a hard-coded
+  15 dps (225 damage over the effect, lethal at 100 HP) - **this changes the Barbarian's acid from
+  lethal to 15 total damage; retune the exports if more bite is wanted.**
+- Slide kick: each prop in range is kicked once per slide (it was re-kicked, re-rolling its 8%
+  potion/curse loot, every physics tick; the single-prop `break` also contradicted the comment).
+- Starter potion: granted by every run-start route (character select, Alchemist, quick restart)
+  through `RunLifecycle.grant_starter_potion()`.
+- Minimap key: the game's own controls reference lists Minimap = Tab and Pause = Esc, but the input
+  action was bound to Escape. Now Tab.
+- Perk texts: Scavenge +3% and Greed +5% (the live values); Magnitude/Persistence describe each
+  class; the stats screen knows `health_regen`.
+- Test fix: `test_physics_queries` probed a different ray than the brute's sight ray, so it failed
+  intermittently depending on the random start room.
+
+**Dungeon generation could leave a tiny dungeon.** Found when a CI run of `test_physics_queries`
+generated "Modules: 9, Rooms: 5 / target 110, Typed spawns: 0": the generator is random and every
+open doorway can end up closed by dead-end rooms early (about 0 of 168 probed seeds, so well under
+1% of runs, but a run with no enemies is unplayable). Fixed two ways: the last open doorway is
+never given a dead-end room while below target, and a finished layout under 80% of the room target
+is discarded and generated again (up to 6 times; `minimum_fill_fraction`, `max_layout_attempts`).
+Layouts for a given seed differ from v2 builds (the random draws changed); a seed still reproduces
+its own layout. Test: `test_generation_growth` (normal / recover / exhaust cases).
+
+**Studio splash.** The Hot Attic Games splash (`scenes/StudioSplash.tscn`, the main scene) is built
+and tested (`test_studio_splash`: launch order, 2-3 s timing, aspect/transparency/whole-logo layout,
+no replay on re-entry, no stranding). **The canonical logo `Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png`
+was not present in the repository when this was written**, so the card is skipped at runtime until it
+is added (project root or `branding/`); release builds refuse to publish without it.
+
+**Still open after round 3**
+- Persistence perk has no Barbarian effect (labelled as such in the Alchemist). Owner decision.
+- Jump Master / Torchbearer / Dimming Legend / Flickering Torment / Eternal Night (above). Owner
+  decision: build or remove.
+- Balance questions only the owner can answer: Quick Recovery +4 HP/s and Purgatory King +12 HP/s;
+  per-class buff rarity.
+- The Mage has no on-screen status panel for trap effects (the Barbarian does).
+- Frozen far-away enemies are never despawned and the minimap shows no enemy markers, so the last
+  enemies must be hunted by sight (the 180 s failsafe covers unreachable ones).
+- Chest/key/mimic and Mage visuals, and every subjective item, need the physical test.
 
 ## Repository hygiene
 `.git` ≈ 509 MB (binary assets, no LFS; history untouched). Removed: `claude.md.txt` (superseded

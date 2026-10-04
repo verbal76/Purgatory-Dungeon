@@ -108,6 +108,9 @@ var _slide_duration        : float   = 0.0
 var _slide_direction       : Vector3 = Vector3.ZERO
 var _slide_cam_lift        : float   = 0.0
 var _slide_knocked_enemies : Array   = []
+# Props already kicked by the current slide: a prop in range used to be kicked (and its 8% loot
+# roll re-rolled) on every physics tick of the slide.
+var _slide_kicked_props   : Array   = []
 
 # ── Status effects (from booby traps) ──────────────────────────────────────
 var _status_reversed_view     : bool  = false
@@ -116,6 +119,7 @@ var _status_drunk             : bool  = false
 var _status_reversed_controls : bool  = false
 var _status_acid              : bool  = false
 var _status_acid_timer        : float = 0.0
+var _status_acid_dps          : float = 1.0   # Set by the trap (TrapManager.acid_damage_per_sec)
 var _status_day_effects_days  : int   = 0
 
 # Tracked timers for timed effects (replacing fire-and-forget create_timer
@@ -152,8 +156,6 @@ var health_on_kill         : float = 0.0
 var passive_regen          : float = 0.0
 var move_speed_modifier    : float = 0.0
 var turn_speed_modifier    : float = 1.0
-var enemy_speed_modifier   : float = 1.0
-var enemy_damage_modifier  : float = 1.0
 var attack_speed           : float = 1.0
 # ── New buff stats ─────────────────────────────────────────────
 var currency_on_kill       : float = 0.0  # Soul Harvester: potions gained per kill
@@ -496,6 +498,7 @@ func _check_kill_streak() -> void:
 	_kill_streak        += new_kills
 
 	# ── Stat-based on-kill effects ─────────────────────────────────────────────
+	_on_kill_haste_trigger()
 	if health_on_kill > 0.0:
 		receive_heal(health_on_kill * float(new_kills))
 
@@ -700,7 +703,7 @@ func _on_weapon_hit(collider: Node3D) -> void:
 		return
 
 	if target.has_method("take_damage"):
-		var swing_dmg : float = attack_damage
+		var swing_dmg : float = attack_damage + get_low_health_attack_bonus()
 		# Executioner: +bonus% damage when target is below 30% health.
 		if low_health_damage > 0.0:
 			var cur_hp := float(target.get("_current_health") if "_current_health" in target else max_health)
@@ -968,6 +971,7 @@ func _physics_tick(delta: float) -> void:
 			_refresh_rapid_attack_bar()
 
 	_check_kill_streak()
+	_tick_kill_haste(delta)
 
 	if _aoe_cooldown > 0.0:
 		_aoe_cooldown -= delta
@@ -977,7 +981,7 @@ func _physics_tick(delta: float) -> void:
 
 	if _status_acid and not _is_dead:
 		_status_acid_timer -= delta
-		take_damage(15.0 * delta)
+		take_damage(_status_acid_dps * delta)
 		if _status_acid_timer <= 0.0:
 			_status_acid = false
 
@@ -1094,7 +1098,7 @@ func _handle_movement(delta: float) -> void:
 		var right   := Vector3( cos(_yaw), 0.0, -sin(_yaw))
 		var dir      := (forward * -input_dir.y + right * input_dir.x).normalized()
 
-		var current_move_speed : float = maxf(move_speed + move_speed_modifier, 1.0)
+		var current_move_speed : float = maxf((move_speed + move_speed_modifier) * kill_haste_multiplier(), 1.0)
 		velocity.x = move_toward(velocity.x, dir.x * current_move_speed, move_acceleration * delta)
 		velocity.z = move_toward(velocity.z, dir.z * current_move_speed, move_acceleration * delta)
 
@@ -1145,6 +1149,7 @@ func _handle_slide(delta: float) -> void:
 			velocity.x   = 0.0
 			velocity.z   = 0.0
 			_slide_knocked_enemies.clear()
+			_slide_kicked_props.clear()
 			_change_state(_get_idle_state())
 
 
@@ -1167,43 +1172,46 @@ func _start_slide() -> void:
 	_slide_duration  = 3.0 * slide_distance_clear / maxf(slide_power, 0.1)
 	_slide_cam_lift  = 0.0
 	_slide_knocked_enemies.clear()
+	_slide_kicked_props.clear()
 
 
 func _check_slide_knockback() -> void:
-	# Only knock one enemy per slide so the player doesn't chain-stun an entire room.
-	if _slide_knocked_enemies.size() >= 1:
-		return
-
 	var my_pos : Vector3 = global_position
-	for node in get_tree().get_nodes_in_group("enemies"):
-		if not (node is Node3D) or not is_instance_valid(node):
-			continue
-		var enemy : Node3D = node as Node3D
-		if enemy.get("_is_dead"):
-			continue
-		if my_pos.distance_to(enemy.global_position) > slide_knock_radius:
-			continue
-		if _slide_knocked_enemies.has(enemy):
-			continue
 
-		if enemy.has_method("take_knockback"):
-			enemy.take_knockback(_slide_direction, kick_force, 1.0)
-		_slide_knocked_enemies.append(enemy)
+	# Only knock one enemy per slide so the player doesn't chain-stun an entire room.
+	if _slide_knocked_enemies.size() < 1:
+		for node in get_tree().get_nodes_in_group("enemies"):
+			if not (node is Node3D) or not is_instance_valid(node):
+				continue
+			var enemy : Node3D = node as Node3D
+			if enemy.get("_is_dead"):
+				continue
+			if my_pos.distance_to(enemy.global_position) > slide_knock_radius:
+				continue
+			if _slide_knocked_enemies.has(enemy):
+				continue
 
-		# Shorten remaining travel to slide_distance_hit after the bump.
-		_slide_duration = _slide_timer + 3.0 * slide_distance_hit / maxf(slide_power, 0.1)
+			if enemy.has_method("take_knockback"):
+				enemy.take_knockback(_slide_direction, kick_force, 1.0)
+			_slide_knocked_enemies.append(enemy)
 
-	# Kickable props in the slide's radius take the same impulse treatment.
-	# No per-slide cap — kicking a whole pile of barrels on a good slide is intended.
+			# Shorten remaining travel to slide_distance_hit after the bump.
+			_slide_duration = _slide_timer + 3.0 * slide_distance_hit / maxf(slide_power, 0.1)
+
+	# Kickable props in the slide's radius take the same impulse treatment: every prop once per
+	# slide (kicking a whole pile of barrels on a good slide is intended), so one prop's loot
+	# roll is not re-rolled on every tick it stays in range.
 	for prop in get_tree().get_nodes_in_group("kickable_prop"):
 		if not (prop is Node3D) or not is_instance_valid(prop):
 			continue
 		var prop_node : Node3D = prop as Node3D
 		if my_pos.distance_to(prop_node.global_position) > slide_knock_radius:
 			continue
+		if _slide_kicked_props.has(prop_node):
+			continue
 		if prop_node.has_method("apply_kick"):
 			prop_node.apply_kick(_slide_direction, kick_force * 10.0)
-		break
+			_slide_kicked_props.append(prop_node)
 
 
 func _set_weapon_hitbox_active(active: bool) -> void:
@@ -1390,7 +1398,9 @@ func _process(_delta: float) -> void:
 #  STATUS EFFECTS (TRAP SYSTEM)
 # ══════════════════════════════════════════════════════════════
 
-func apply_status(effect_name: String, days_duration: int) -> void:
+# days_duration: for the day-based effects it is the number of in-game days; for "acid_pool" it is
+# the duration in SECONDS (0 = default 15). strength: acid damage per second (0 = default 1.0).
+func apply_status(effect_name: String, days_duration: int, strength: float = 0.0) -> void:
 	match effect_name:
 		"reversed_view":
 			_status_reversed_view    = true
@@ -1412,7 +1422,8 @@ func apply_status(effect_name: String, days_duration: int) -> void:
 			_status_controls_timer    = 30.0
 		"acid_pool":
 			_status_acid       = true
-			_status_acid_timer = 15.0
+			_status_acid_timer = float(days_duration) if days_duration > 0 else 15.0
+			_status_acid_dps   = strength if strength > 0.0 else 1.0
 
 	# Show the label immediately when an effect is applied.
 	_refresh_status_label()
@@ -1467,7 +1478,7 @@ func _on_day_changed(_day: int) -> void:
 
 
 func _get_effective_move_speed() -> float:
-	return maxf(move_speed + move_speed_modifier, 1.0)
+	return maxf((move_speed + move_speed_modifier) * kill_haste_multiplier(), 1.0)
 
 
 func _get_footstep_stream() -> AudioStream:

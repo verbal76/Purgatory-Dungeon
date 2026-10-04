@@ -583,29 +583,70 @@ func _handle_listen_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 
-func _apply_remap(action: String, bind_type: String, event: InputEvent) -> void:
-	var new_event := event.duplicate() as InputEvent
-	new_event.device = -1
+func _is_type_event(e: InputEvent, bind_type: String) -> bool:
+	if bind_type == "keyboard":
+		return e is InputEventKey or e is InputEventMouseButton
+	return e is InputEventJoypadButton or e is InputEventJoypadMotion
 
-	# Remove old bindings of this type
+
+# First binding of `bind_type` on `action`, or null.
+func _binding_of(action: String, bind_type: String) -> InputEvent:
+	for e in InputMap.action_get_events(action):
+		if _is_type_event(e, bind_type):
+			return e
+	return null
+
+
+# Another remappable action already using `event`, or "" if it is free.
+func _find_conflict(action: String, bind_type: String, event: InputEvent) -> String:
+	for entry in REMAPPABLE_ACTIONS:
+		var other : String = entry["name"]
+		if other == action or not InputMap.has_action(other):
+			continue
+		for e in InputMap.action_get_events(other):
+			if _is_type_event(e, bind_type) and e.is_match(event, true):
+				return other
+	return ""
+
+
+func _set_binding(action: String, bind_type: String, new_event: InputEvent) -> void:
 	var to_erase : Array = []
 	for e in InputMap.action_get_events(action):
-		if bind_type == "keyboard" and (e is InputEventKey or e is InputEventMouseButton):
-			to_erase.append(e)
-		elif bind_type == "gamepad" and (e is InputEventJoypadButton or e is InputEventJoypadMotion):
+		if _is_type_event(e, bind_type):
 			to_erase.append(e)
 	for e in to_erase:
 		InputMap.action_erase_event(action, e)
-
 	InputMap.action_add_event(action, new_event)
 
-	# Persist
 	var controls : Dictionary = SettingsManager.gameplay_settings.get("controls", {})
 	if not controls.has(action):
 		controls[action] = {}
 	controls[action][bind_type] = SettingsManager.serialize_event(new_event)
 	SettingsManager.gameplay_settings["controls"] = controls
+
+
+func _apply_remap(action: String, bind_type: String, event: InputEvent) -> void:
+	var new_event := event.duplicate() as InputEvent
+	new_event.device = -1
+
+	# One input must never drive two actions. If another action already uses it, the two actions
+	# swap bindings (so neither is left unbound); if this action has nothing to hand over, refuse.
+	var other : String = _find_conflict(action, bind_type, new_event)
+	if other != "":
+		var old_event : InputEvent = _binding_of(action, bind_type)
+		if old_event == null:
+			push_warning("OptionsScreen: that input is already used by '%s'." % other)
+			_cancel_listen()
+			return
+		var handed : InputEvent = old_event.duplicate() as InputEvent
+		handed.device = -1
+		_set_binding(other, bind_type, handed)
+
+	_set_binding(action, bind_type, new_event)
 	SettingsManager.save_settings()
+
+	if other != "" and _controls_tab_vb != null:
+		_rebuild_controls_rows()   # the other action's button label changed too
 
 	if _listening_btn != null:
 		_listening_btn.text = _event_label(new_event)
@@ -615,14 +656,22 @@ func _apply_remap(action: String, bind_type: String, event: InputEvent) -> void:
 
 
 func _reset_controls() -> void:
+	_cancel_listen()   # a pending 'Press key…' button is about to be freed
 	SettingsManager.gameplay_settings.erase("controls")
 	SettingsManager.save_settings()
 	InputMap.load_from_project_settings()
 	# Rebuild rows to show restored defaults
+	_rebuild_controls_rows()
+
+
+func _rebuild_controls_rows() -> void:
+	if _controls_tab_vb == null:
+		return
 	for child in _controls_tab_vb.get_children():
 		child.queue_free()
 	await get_tree().process_frame
-	_populate_controls_tab(_controls_tab_vb)
+	if is_instance_valid(_controls_tab_vb):
+		_populate_controls_tab(_controls_tab_vb)
 
 
 # ── Label helpers ──────────────────────────────────────────────────────────────

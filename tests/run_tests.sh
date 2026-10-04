@@ -27,17 +27,27 @@ python3 tests/check_res_paths.py || { echo "!!! FAILED: res:// path check"; rc=1
 # Refresh the import cache + global class registry (needed on a fresh clone).
 echo "=== import"
 "$GODOT" --headless --path . --import >/dev/null 2>&1 || true
-for scene in res://tests/validate_project.tscn res://tests/test_save_manager.tscn res://tests/test_fireball_pool.tscn res://tests/test_menu_scenes.tscn res://tests/test_pause_options.tscn res://tests/test_enemy_pooling.tscn res://tests/test_clock_buffs.tscn res://tests/test_run_lifecycle.tscn res://tests/test_audio_buses.tscn res://tests/test_pause_freeze.tscn res://tests/test_settings_controls.tscn res://tests/test_release_metadata.tscn; do
+for scene in res://tests/validate_project.tscn res://tests/test_save_manager.tscn res://tests/test_fireball_pool.tscn res://tests/test_menu_scenes.tscn res://tests/test_pause_options.tscn res://tests/test_enemy_pooling.tscn res://tests/test_clock_buffs.tscn res://tests/test_run_lifecycle.tscn res://tests/test_audio_buses.tscn res://tests/test_pause_freeze.tscn res://tests/test_settings_controls.tscn res://tests/test_release_metadata.tscn res://tests/test_trap_fireball.tscn res://tests/test_misc_fixes.tscn res://tests/test_portal_completion.tscn res://tests/test_studio_splash.tscn; do
 	run "$scene" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene"
 done
 for cls in barbarian mage; do
 	SMOKE_CLASS="$cls" run "res://tests/test_gameplay_smoke.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_gameplay_smoke.tscn
 done
 for cls in barbarian mage; do
+	BUFF_CLASS="$cls" run "res://tests/test_buffs.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_buffs.tscn
+done
+for seed in 11 5 2024; do
+	CHEST_SEED="$seed" run "res://tests/test_chests.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_chests.tscn
+done
+for cls in barbarian mage; do
 	PHYS_CLASS="$cls" run "res://tests/test_physics_queries.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_physics_queries.tscn
 done
 for seed in 11 5 2024; do
 	PLACE_SEED="$seed" run "res://tests/test_placement.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_placement.tscn
+done
+# Generation never leaves a tiny dungeon (one case per process, same engine quirk as below).
+for gcase in normal recover exhaust; do
+	GROWTH_CASE="$gcase" run "res://tests/test_generation_growth.tscn ($gcase)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_generation_growth.tscn
 done
 # Dungeon generation: one seed per process (several generate/free cycles in a
 # single headless process can abort the engine; see docs/BASELINE.md).

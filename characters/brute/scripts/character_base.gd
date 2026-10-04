@@ -66,6 +66,19 @@ var damage_reduction   : float = 0.0
 # Multiplies outgoing damage when the target is below 30% health.
 # Set by the Executioner buff.
 var low_health_damage  : float = 0.0
+# Adrenaline Spike: flat bonus damage added to the player's attacks while at or below
+# LOW_HEALTH_FRACTION of max health (see get_low_health_attack_bonus()).
+var low_hp_attack_bonus : float = 0.0
+const LOW_HEALTH_FRACTION := 0.3
+# Shadow Dancer: +kill_haste (a fraction, 0.18 = +18%) movement speed for KILL_HASTE_SECONDS after
+# each kill. The timer is ticked in the player's _physics_tick, so it freezes while paused.
+var kill_haste          : float = 0.0
+var _kill_haste_timer   : float = 0.0
+const KILL_HASTE_SECONDS := 5.0
+# Globe curses / buffs that scale how hard the dungeon hits back. enemy_*_modifier are multipliers
+# (1.0 = unchanged) read by the enemy AI; they live here so BOTH player classes can carry them.
+var enemy_speed_modifier  : float = 1.0
+var enemy_damage_modifier : float = 1.0
 
 signal health_changed(new_health: float, max_val: float)
 signal died
@@ -408,8 +421,9 @@ func take_damage(amount: float, _source_node: Node3D = null) -> void:
 		CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME = Time.get_ticks_msec() * 0.001
 		# Apply damage reduction (Iron Will buff).  Cap at 90% so the player
 		# always takes at least 10% of any hit — prevents full immunity stacking.
-		if damage_reduction > 0.0:
-			amount *= maxf(0.1, 1.0 - clampf(damage_reduction, 0.0, 0.9))
+		# A negative value (Pain Mirror, Void Embrace curses) makes the player take MORE damage.
+		if damage_reduction != 0.0:
+			amount *= maxf(0.1, 1.0 - clampf(damage_reduction, -1.0, 0.9))
 
 	_current_health = maxf(_current_health - amount, 0.0)
 	health_changed.emit(_current_health, max_health)
@@ -426,6 +440,29 @@ func receive_heal(amount: float) -> void:
 
 	_current_health = minf(_current_health + amount, max_health)
 	health_changed.emit(_current_health, max_health)
+
+
+# Bonus attack damage that depends on the player's current health (Adrenaline Spike).
+func get_low_health_attack_bonus() -> float:
+	if low_hp_attack_bonus > 0.0 and max_health > 0.0 \
+			and _current_health / max_health < LOW_HEALTH_FRACTION:
+		return low_hp_attack_bonus
+	return 0.0
+
+
+# Called by the player after kills are registered (Shadow Dancer).
+func _on_kill_haste_trigger() -> void:
+	if kill_haste > 0.0:
+		_kill_haste_timer = KILL_HASTE_SECONDS
+
+
+func _tick_kill_haste(delta: float) -> void:
+	if _kill_haste_timer > 0.0:
+		_kill_haste_timer = maxf(_kill_haste_timer - delta, 0.0)
+
+
+func kill_haste_multiplier() -> float:
+	return 1.0 + kill_haste if _kill_haste_timer > 0.0 and kill_haste > 0.0 else 1.0
 
 
 func take_knockback(direction: Vector3, force: float, stun_duration: float = 1.0) -> void:

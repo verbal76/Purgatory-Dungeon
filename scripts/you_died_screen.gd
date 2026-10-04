@@ -249,6 +249,7 @@ func _do_quick_restart() -> void:
 	if not SaveManager.current_profile.is_empty():
 		SaveManager.current_profile["run_count"] = \
 			int(SaveManager.current_profile.get("run_count", 0)) + 1
+		RunLifecycle.grant_starter_potion()
 		SaveManager.save_profile()
 
 	RunLifecycle.sync_run_data_from_profile()

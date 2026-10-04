@@ -47,13 +47,13 @@ var _new_run_btn     : Button   = null
 var _back_btn        : Button   = null   # hidden legacy button
 
 var perks_def : Array = [
-	{"key": "magnitude",   "name": "Magnitude",      "desc": "Dome Radius +10%"},
-	{"key": "persistence", "name": "Persistence",    "desc": "Dome Duration +15%"},
+	{"key": "magnitude",   "name": "Magnitude",      "desc": "Dome Radius +10%", "desc_mage": "+2 Dome Bolts", "desc_barbarian": "AOE Blast Radius +10%"},
+	{"key": "persistence", "name": "Persistence",    "desc": "Dome Duration +15%", "desc_mage": "Spell Range +15%", "desc_barbarian": "No effect for the Barbarian"},
 {"key": "vitality",    "name": "Vitality",        "desc": "Max Health +10"},
 	{"key": "adrenaline",  "name": "Adrenaline",      "desc": "Attack Speed +8%"},
 	{"key": "ferocity",    "name": "Ferocity",         "desc": "Attack Damage +10%"},
-	{"key": "scavenge",    "name": "Scavenge",         "desc": "Drop Rate +5%"},
-	{"key": "greed",       "name": "Greed",            "desc": "Double Drop Chance +10%"},
+	{"key": "scavenge",    "name": "Scavenge",         "desc": "Potion Drop Rate +3%"},
+	{"key": "greed",       "name": "Greed",            "desc": "Double Drop Chance +5%"},
 	{"key": "swiftness",   "name": "Swiftness",        "desc": "Move Speed +5%"},
 	{"key": "health_regen","name": "Regeneration",     "desc": "+0.5 HP/sec per level"},
 	{"key": "cyclone",     "name": "Cyclone",          "desc": "+0.5s Rapid Attack / -3s Cooldown"},
@@ -345,6 +345,7 @@ func _start_new_run() -> void:
 	if not SaveManager.current_profile.is_empty():
 		SaveManager.current_profile["run_count"] = \
 			int(SaveManager.current_profile.get("run_count", 0)) + 1
+		RunLifecycle.grant_starter_potion()
 		SaveManager.save_profile()
 
 	# Class/difficulty/name must come from the profile: GlobalRunData is only filled by
@@ -436,7 +437,7 @@ func _create_perk_card(key: String, data: Dictionary, lv: int, locked: bool) -> 
 		info.text = "Requires 5 runs"
 		info.add_theme_color_override("font_color", Color(0.35, 0.22, 0.08, 0.7))
 	else:
-		info.text = "Lv. %d\n%s" % [lv, data["desc"]]
+		info.text = "Lv. %d\n%s" % [lv, _perk_desc(data)]
 		info.add_theme_color_override("font_color", Color(0.25, 0.15, 0.05, 1.0))
 	info.add_theme_font_size_override("font_size", 12)
 	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -461,6 +462,12 @@ func _create_perk_card(key: String, data: Dictionary, lv: int, locked: bool) -> 
 	grid.add_child(vbox)
 
 
+# Perk text for the active character class when the perk works differently per class.
+func _perk_desc(data: Dictionary) -> String:
+	var cls := str(SaveManager.get_character_class()) if SaveManager.current_profile_is_valid() else ""
+	return str(data.get("desc_" + cls, data["desc"]))
+
+
 func _calculate_cost(lv: int) -> int:
 	var base := int(pow(2, lv))
 	if has_node("/root/GlobalRunData") and GlobalRunData.difficulty == "easy":
@@ -468,13 +475,21 @@ func _calculate_cost(lv: int) -> int:
 	return base
 
 
+# Spends the potions and grants the perk level in one profile write, so a crash between two
+# writes can never take the potions without granting the perk.
+func _purchase_perk(key: String, cost: int) -> bool:
+	if not PlayerWallet.spend_potions(cost, false):
+		return false
+	var profile = SaveManager.current_profile
+	if not profile.has("perks"):
+		profile["perks"] = {}
+	profile["perks"][key] = int(profile["perks"].get(key, 0)) + 1
+	SaveManager.save_profile()
+	return true
+
+
 func _on_upgrade_pressed(key: String, cost: int) -> void:
-	if PlayerWallet.spend_potions(cost):
-		var profile = SaveManager.current_profile
-		if not profile.has("perks"):
-			profile["perks"] = {}
-		profile["perks"][key] = int(profile["perks"].get(key, 0)) + 1
-		SaveManager.save_profile()
+	if _purchase_perk(key, cost):
 		# Defer the grid rebuild so the gamepad button-release event is fully
 		# processed before any nodes are queue_freed. Destroying the focused
 		# button mid-press leaves the joypad input system in a stuck state.

@@ -44,6 +44,42 @@ const _POTION_REWARD : Dictionary = {"bronze": 5, "silver": 10, "gold": 15}
 
 const _DEBRIS_TEX : String = "res://addons/kenney_particle_pack/smoke_07.png"
 
+# The chest/key/mimic FBX files point at texture files that exist only on the artist's machine
+# (Mat_Chests_*.tga), so they import untextured. The same textures ship in this folder under
+# an "SM_Chests_" prefix: build one shared material from them and apply it to every chest mesh
+# (the same approach prop_spawner.gd uses for the general props).
+const _TEX_DIR : String = "res://addons/props/chests and keys/SM_Chests_Mat_Chests_"
+static var _shared_mat : StandardMaterial3D = null
+
+
+static func _chest_material() -> StandardMaterial3D:
+	if _shared_mat != null:
+		return _shared_mat
+	var m := StandardMaterial3D.new()
+	if ResourceLoader.exists(_TEX_DIR + "AlbedoTransparency.tga"):
+		m.albedo_texture = load(_TEX_DIR + "AlbedoTransparency.tga")
+	if ResourceLoader.exists(_TEX_DIR + "MetallicSmoothness.tga"):
+		var mt : Texture2D = load(_TEX_DIR + "MetallicSmoothness.tga")
+		m.metallic                  = 1.0
+		m.metallic_texture          = mt
+		m.metallic_texture_channel  = BaseMaterial3D.TEXTURE_CHANNEL_RED
+		m.roughness                 = 1.0
+		m.roughness_texture         = mt
+		m.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_GREEN
+	if ResourceLoader.exists(_TEX_DIR + "Normal.tga"):
+		m.normal_enabled = true
+		m.normal_texture = load(_TEX_DIR + "Normal.tga")
+	_shared_mat = m
+	return m
+
+
+static func _apply_chest_material(root: Node) -> void:
+	if root == null:
+		return
+	var mat := _chest_material()
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).material_override = mat
+
 @export var interact_radius   : float = 2.0
 @export var mimic_damage      : float = 8.0
 @export var mimic_curse_count : int   = 5
@@ -206,6 +242,7 @@ func _play_unlock_sequence() -> void:
 				key_node.scale = Vector3(0.7, 0.7, 0.7)
 				key_node.position = Vector3(0.0, 1.2, 0.0)
 				add_child(key_node)
+				_apply_chest_material(key_node)
 
 	if key_node != null:
 		var tw : Tween = create_tween().set_parallel(true)
@@ -337,3 +374,4 @@ func _swap_mesh(new_path: String) -> void:
 	if _mesh_root != null:
 		_mesh_root.scale = Vector3(0.85, 0.85, 0.85)
 		add_child(_mesh_root)
+		_apply_chest_material(_mesh_root)

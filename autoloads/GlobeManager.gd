@@ -322,6 +322,17 @@ func _pick_random_effect() -> Dictionary:
 		push_warning("GlobeManager: All effect pools are empty. Check globe_effects.json.")
 		return {}
 
+	# A curse that touches a stat the player does not have (a Mage-only curse on the Barbarian)
+	# would do nothing: skip those when the player is known.
+	var player : Node = get_tree().get_first_node_in_group("player")
+	if player != null:
+		var usable : Array = []
+		for entry in pool:
+			if BuffManager.buff_is_applicable(entry, player):
+				usable.append(entry)
+		if not usable.is_empty():
+			pool = usable
+
 	return pool[randi() % pool.size()]
 
 

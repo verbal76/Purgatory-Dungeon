@@ -113,7 +113,44 @@ func setup_generation(
 	_end_cap_module        = end_cap_module
 
 
+## A layout that ends far short of the room target is thrown away and generated again (the
+## generator is random; a rare unlucky run closed itself in after a handful of rooms and left
+## a dungeon with no enemies). The last attempt is kept whatever its size.
+@export var minimum_fill_fraction : float = 0.8
+@export var max_layout_attempts   : int   = 6
+var layout_attempts : int = 0
+
+
 func generate_dungeon() -> Dictionary:
+	layout_attempts = 0
+	var result : Dictionary = {"success": false}
+	for i in maxi(max_layout_attempts, 1):
+		layout_attempts += 1
+		result = _generate_once()
+		if not bool(result.get("success", false)):
+			return result
+		if counted_piece_total >= int(ceil(float(target_piece_count) * minimum_fill_fraction)):
+			break
+		if i < maxi(max_layout_attempts, 1) - 1:
+			push_warning("DungeonGeneration: layout %d reached only %d of %d rooms - regenerating." % [
+				layout_attempts, counted_piece_total, target_piece_count])
+			_discard_layout()
+	return result
+
+
+# Removes every module of the current layout from the tree at once (their physics bodies and
+# markers must not linger while the replacement layout is built) and frees them.
+func _discard_layout() -> void:
+	for mod in placed_modules:
+		if is_instance_valid(mod):
+			var parent : Node = mod.get_parent()
+			if parent != null:
+				parent.remove_child(mod)
+			mod.queue_free()
+	placed_modules.clear()
+
+
+func _generate_once() -> Dictionary:
 	_reset_generation_state()
 
 	if _main_root == null:            return {"success": false}
@@ -452,11 +489,18 @@ func _try_attach_connector_then_piece(target: Node3D) -> Dictionary:
 		if entry == null:
 			conn_mod.queue_free()
 			continue
-		var scene: PackedScene = _pick_weighted_scene()
+		var scene: PackedScene = _pick_weighted_scene(counted_piece_total < target_piece_count and open_connections.size() <= 1)
 		var main_mod: Node3D = scene.instantiate()
 		_main_root.add_child(main_mod)
 		_reset_module_transform(main_mod)
 		var main_conns: Array[Node3D] = _get_connections(main_mod)
+		# A dead-end room placed on the LAST open doorway ends generation: a rare random run
+		# produced a 5-room dungeon with no enemy spawns. Below the target, only rooms that
+		# keep a doorway open may take the last one.
+		if main_conns.size() < 2 and counted_piece_total < target_piece_count and open_connections.size() <= 1:
+			main_mod.queue_free()
+			conn_mod.queue_free()
+			continue
 		main_conns.shuffle()
 		var main_entry: Node3D = null
 		for mc in main_conns:
@@ -732,9 +776,20 @@ func _try_attach_specific_module_to_connection(target: Node3D, scene: PackedScen
 	return null
 
 
-func _pick_weighted_scene() -> PackedScene:
+func _pick_weighted_scene(avoid_dead_ends: bool = false) -> PackedScene:
 	if weighted_scene_pool.is_empty(): return null
+	if avoid_dead_ends:
+		# Weighted draws that skip one-doorway rooms (classified by file name like the weights are).
+		for _i in 40:
+			var pick: PackedScene = weighted_scene_pool[randi() % weighted_scene_pool.size()]
+			if not _is_dead_end_scene(pick):
+				return pick
 	return weighted_scene_pool[randi() % weighted_scene_pool.size()]
+
+
+func _is_dead_end_scene(scene: PackedScene) -> bool:
+	var path: String = scene.resource_path.to_lower()
+	return path.contains("1_opening") or path.contains("end")
 
 
 func _matches_excluded_keyword(path: String) -> bool:
