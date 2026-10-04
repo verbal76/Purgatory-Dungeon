@@ -1,0 +1,73 @@
+# Releases and public version numbers
+
+**Product:** Purgatory Dungeon  **Public name format:** `Purgatory Dungeon v<N>` (N = 1, 2, 3, ...)
+
+The owner must never have to decode a branch name, SHA, build counter, codename or CI run to
+know which file to play. The answer is always the GitHub **Releases** page: the release marked
+**Latest** is the newest playable build.
+
+## The rule
+- Every playable build that is intentionally delivered to the owner (for testing or release)
+  gets the next sequential number: v1, v2, v3, ... Plain integers. No semantic versions, no
+  `b9` / `build-17` / `final` / `candidate` / `launch-g2` style names anywhere public.
+- A number identifies exactly one delivered build. Never reuse a number; never replace a
+  published release's binary with a different one. (Tooling refuses to overwrite.)
+- Failed or developer-only CI builds that are not delivered do not consume a number.
+- The public number is **not** the Godot engine version, the Git SHA, or (later) the Android
+  `versionCode`. Those stay as engineering metadata.
+- If Android and Windows builds are the same release they share the same `vN`
+  (`Purgatory-Dungeon-vN-Windows.zip`, `Purgatory-Dungeon-vN.apk`). Platform counters such as
+  `versionCode` stay internal and may differ.
+
+## Names
+- GitHub Release title: exactly `Purgatory Dungeon v<N>`.
+- Windows file: `Purgatory-Dungeon-v<N>-Windows.zip` (extract all files into one folder, keep
+  `PurgatoryDungeon.exe` and `PurgatoryDungeon.pck` together; the inner `.exe`/`.pck` names are
+  fixed because Godot loads the `.pck` that shares the exe's name).
+- Release notes start with the file name and install steps; technical provenance (source
+  commit, CI run, SHA-256s, engine) follows under "Technical details".
+- **Never give the owner a CI artifact link.** CI artifacts (`PurgatoryDungeon-windows-<sha>`)
+  are engineering-only and expire after 7 days. Deliver through a Release.
+
+## How the version is stored (one source)
+`./VERSION` holds the integer. `tools/release_tool.py set N` updates it together with
+`project.godot` (`application/config/version`) and the Windows file/product version in
+`export_presets.cfg`; `tools/release_tool.py check` (run by CI and `tests/run_tests.sh`)
+verifies they agree and that this document and `CLAUDE.md` still describe the convention.
+In the game, `BuildInfo` (`scripts/build_info.gd`) shows the version on the main menu and prints
+diagnostics (version, source commit, CI run, build time, engine) at startup. CI writes
+`build_info.json` into every build. A build is labelled plainly `Purgatory Dungeon vN` only when
+CI built it from tag `vN`; any other build says `development build after vN`.
+
+## Delivering the next build (N = current VERSION + 1)
+1. Finish and merge/test the work to be delivered; ensure `tests/run_tests.sh` is green.
+2. `python3 tools/release_tool.py set N` and commit it (this commit is the release commit).
+3. Push the tag: `git tag vN <release-commit> && git push origin vN`.
+4. CI (`.github/workflows/ci.yml`, job `publish`) tests and builds that exact commit and
+   publishes the Release "Purgatory Dungeon vN" as **Latest**, with the zip attached.
+5. Tell the owner: "Purgatory Dungeon vN" and the exact file name. Nothing else.
+
+To promote a build CI already made (no rebuild): run the CI workflow manually
+(`workflow_dispatch`) with `from_run_id`, `publish_version`, `source_sha`, `make_latest`.
+That is how v1 and v2 were published.
+
+## History
+| Version | Source commit | What it was | Notes |
+|---|---|---|---|
+| v1 | `073e34b9f2976f2336aedb6311bd2da33282eb17` | First recovered Windows build (CI run 37143051773), delivered for the owner's first Windows playtest | historical |
+| v2 | `ef24eb4cf184dbc61f0d11f7d8b81aca2ab1a88c` | Stabilization round 2 build (CI run 37152299390) | Latest at the time this convention was adopted |
+
+Why the sequence starts here: the repository had no GitHub Releases, no tags, and no APK/AAB/EXE
+files when the convention was adopted (October 2026). The only playable builds ever delivered
+from it are the two above, so v1 and v2 are the honest count. Earlier pre-GitHub builds
+(including the project's old internal label "v2.5", now retired) are not in the repository and
+could not be counted; if the owner wants the public number to continue from a higher figure,
+set it once with `tools/release_tool.py set N` before the next delivery (numbers only go up).
+The first CI build of 8eb36c3 was superseded within minutes and never delivered, so it has no number.
+
+## Limits worth knowing
+- No Android build exists yet, so there is no `versionCode`/package ID to record. When Android
+  arrives it joins the same `vN` release; `versionCode` is recorded in the release's technical
+  details only.
+- No OTA mechanism exists in this project.
+- The game has no About screen; the version is on the main menu and in the startup log.

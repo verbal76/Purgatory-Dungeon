@@ -38,6 +38,11 @@ func _ready() -> void:
 			printerr("FAIL: scene freed itself during startup: " + path)
 			fails += 1
 			continue
+		if path.ends_with("MainMenu.tscn"):
+			var label := inst.get_node_or_null("VersionLabel") as Label
+			if label == null or not label.text.begins_with("Purgatory Dungeon") or not label.text.contains("v%d" % BuildInfo.public_version()):
+				printerr("FAIL: main menu shows the public version (label: %s)" % (label.text if label != null else "missing"))
+				fails += 1
 		inst.queue_free()
 		await get_tree().process_frame
 	print("test_menu_scenes: %d scenes, %d failures" % [SCENES.size(), fails])

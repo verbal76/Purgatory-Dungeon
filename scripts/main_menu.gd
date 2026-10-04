@@ -40,6 +40,25 @@ func _ready() -> void:
 		new_char_btn.call_deferred("grab_focus")
 
 	_wire_button_clicks()
+	_add_version_label()
+
+
+# Small public-version label in the bottom-right corner ("Purgatory Dungeon v2"), plus the
+# engineering diagnostics in the log. See BuildInfo and docs/RELEASES.md.
+func _add_version_label() -> void:
+	print(BuildInfo.diagnostics())
+	var label := Label.new()
+	label.name = "VersionLabel"
+	label.text = BuildInfo.display_string()
+	label.add_theme_font_size_override("font_size", 14)
+	label.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8, 0.8))
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	label.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	label.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	label.offset_right = -16.0
+	label.offset_bottom = -10.0
+	add_child(label)
 
 
 # Enforces the desired button order in whatever VBoxContainer (or other

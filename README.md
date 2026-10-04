@@ -33,6 +33,10 @@ result, with `BUILD_INFO.txt` (source SHA, Godot version, SHA-256), as a workflo
 path; do not rename it without a migration. If the OS has no Documents folder the game falls
 back to Godot's user-data dir. See `scripts/storage_paths.gd`.
 
+## Releases
+Play builds come only from the GitHub **Releases** page: the one marked **Latest** is the newest
+(`Purgatory Dungeon v<N>`, file `Purgatory-Dungeon-v<N>-Windows.zip`). See `docs/RELEASES.md`.
+
 ## More
 - `docs/BASELINE.md` — verified state of every system, defects fixed and remaining.
 - `docs/ANDROID_PORT_ASSESSMENT.md` — what the later Android landscape port needs.

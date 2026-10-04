@@ -18,13 +18,15 @@ for f in files:
 # calls...). Directories (no extension) and templated paths are skipped.
 load_re = re.compile(r'"res://([^"]+\.[A-Za-z0-9]+)"')
 ext_re = re.compile(r'^\[ext_resource [^\]]*\bpath="res://([^"]+)"', re.M)
+# Generated at build time by CI and handled when absent (see scripts/build_info.gd).
+OPTIONAL_GENERATED = {"build_info.json"}
 problems = []
 
 
 def check(src, ref):
     if "%" in ref or "{" in ref or ref.endswith("/"):
         return
-    if ref in exact:
+    if ref in exact or ref in OPTIONAL_GENERATED:
         return
     if ref.lower() in lower:
         problems.append(f"CASE MISMATCH in {src}: res://{ref} (actual: {lower[ref.lower()][0]})")

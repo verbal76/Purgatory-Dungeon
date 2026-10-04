@@ -4,7 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Purgatory Dungeon** (v2.5) is a 3D dungeon-crawler roguelike built in **Godot 4.6** (Forward Plus, Jolt Physics). Language is 100% GDScript. Players choose Barbarian or Mage, run procedurally generated dungeons of ~110 rooms, pick daily buffs, and survive 30 in-game days (~30 min). Target: stable 60+ FPS on mid-range hardware.
+**Purgatory Dungeon** is a 3D dungeon-crawler roguelike built in **Godot 4.6** (Forward Plus, Jolt Physics). Language is 100% GDScript. Players choose Barbarian or Mage, run procedurally generated dungeons of ~110 rooms, pick daily buffs, and survive 30 in-game days (~30 min). Target: stable 60+ FPS on mid-range hardware.
+
+## Release convention (mandatory — read before delivering any build)
+
+The owner identifies builds only as **`Purgatory Dungeon v<N>`** (plain sequential integers; current
+number in `./VERSION`). Deliver every playable build as a GitHub Release titled exactly
+`Purgatory Dungeon v<N>`, marked Latest, with a file named `Purgatory-Dungeon-v<N>-Windows.zip`. Never use
+codenames, SHAs, build counters or CI artifact links in anything the owner sees; keep those as
+engineering metadata in the release notes. One number = one delivered binary; never reuse or overwrite.
+Full procedure, tooling and history: **docs/RELEASES.md** (`tools/release_tool.py`, tag `vN` triggers CI publishing).
 
 ## How to Run
 

@@ -2,11 +2,41 @@ name: CI
 
 # Validate the project headlessly, then export a Windows build and upload it as a
 # workflow artifact traceable to the exact commit.
+#
+# RELEASES (see docs/RELEASES.md): the owner only ever downloads "Purgatory Dungeon v<N>"
+# from the GitHub Releases page.
+#   * Push a tag v<N> (N = the number in ./VERSION): this workflow builds that exact commit
+#     and publishes the Release (title "Purgatory Dungeon v<N>", file
+#     Purgatory-Dungeon-v<N>-Windows.zip, marked Latest).
+#   * Or run it manually (workflow_dispatch) with from_run_id/publish_version/source_sha to
+#     promote an artifact that an earlier CI run already built, without rebuilding it.
 on:
   push:
     branches: [main]
+    tags: ['v[0-9]*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      from_run_id:
+        description: "Promote the artifact built by this earlier CI run id (leave empty for a normal CI run)"
+        required: false
+        default: ""
+      publish_version:
+        description: "Public version number N to publish as 'Purgatory Dungeon vN'"
+        required: false
+        default: ""
+      source_sha:
+        description: "Full commit SHA that earlier run built (checked against the artifact's BUILD_INFO)"
+        required: false
+        default: ""
+      make_latest:
+        description: "Mark the release as Latest"
+        type: boolean
+        default: true
+      notes:
+        description: "Optional text for the top of the release notes"
+        required: false
+        default: ""
 
 env:
   GODOT_VERSION: "4.6"
@@ -15,8 +45,13 @@ env:
   # branch; record the real head commit so builds are traceable to checkable source.
   SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
+permissions:
+  contents: read
+
 jobs:
   validate-and-export:
+    # A promote-only dispatch (from_run_id set) must not rebuild anything.
+    if: github.event_name != 'workflow_dispatch' || inputs.from_run_id == ''
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -56,8 +91,22 @@ jobs:
           "$GODOT" --version
           "$GODOT" --version | grep -q "^${GODOT_VERSION}.stable"
 
+      - name: Check public version consistency
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            python3 tools/release_tool.py check --tag "$GITHUB_REF_NAME"
+          else
+            python3 tools/release_tool.py check
+          fi
+
       - name: Validate project and run tests
         run: tests/run_tests.sh "$GODOT"
+
+      - name: Write build_info.json (shipped inside the game)
+        run: |
+          rel=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then rel="--release"; fi
+          python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" $rel
 
       - name: Export Windows build
         run: |
@@ -91,3 +140,46 @@ jobs:
             build/windows/BUILD_INFO.txt
           retention-days: 7
           compression-level: 6
+
+  # Tag push -> publish the release built by this very run.
+  publish:
+    needs: validate-and-export
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: PurgatoryDungeon-windows-${{ env.SOURCE_SHA }}
+          path: artifact
+      - name: Publish "Purgatory Dungeon v<N>"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/publish_release.sh "${GITHUB_REF_NAME#v}" "$SOURCE_SHA" artifact "$GITHUB_RUN_ID" true
+
+  # Manual dispatch -> promote an artifact an earlier run already built (no rebuild).
+  promote:
+    if: github.event_name == 'workflow_dispatch' && inputs.from_run_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.from_run_id }}
+          github-token: ${{ github.token }}
+          pattern: PurgatoryDungeon-windows-*
+          merge-multiple: true
+          path: artifact
+      - name: Publish "Purgatory Dungeon v<N>" from the existing artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES_INPUT: ${{ inputs.notes }}
+        run: |
+          printf '%s\n' "$NOTES_INPUT" > extra_notes.md
+          tools/publish_release.sh "${{ inputs.publish_version }}" "${{ inputs.source_sha }}" artifact "${{ inputs.from_run_id }}" "${{ inputs.make_latest }}" extra_notes.md

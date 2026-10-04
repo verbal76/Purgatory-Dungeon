@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Purgatory Dungeon"
-config/version="2.5"
+config/version="2"
 run/main_scene="uid://cfam6hq7todh3"
 config/use_hidden_project_data_directory=false
 config/features=PackedStringArray("4.6", "Forward Plus")
