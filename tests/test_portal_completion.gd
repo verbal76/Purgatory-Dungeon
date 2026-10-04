@@ -128,6 +128,52 @@ func _ready() -> void:
 	_check(not portal._entry_ready(), "many survivors are never waved through by the failsafe")
 	manager._active_enemies.clear()
 
+	# --- Last-stand minimap markers -----------------------------------------------------------------------
+	var stub_map := Node.new()
+	var stub_src := GDScript.new()
+	stub_src.source_code = "extends Node\nvar last: Array = [null]\nfunc set_enemy_markers(p: Array) -> void:\n\tlast = p\n"
+	stub_src.reload()
+	stub_map.set_script(stub_src)
+	add_child(stub_map)
+	portal._minimap = stub_map
+	var survivors: Array = []
+	for i in 3:
+		var e3 := FakeEnemy.new()
+		add_child(e3)
+		e3.global_position = Vector3(10.0 * i, 0, 5)
+		survivors.append(e3)
+		manager._active_enemies.append(e3)
+	portal._update_enemy_markers()
+	_check(stub_map.last.size() == 3, "the last 3 enemies are marked on the minimap (%d markers)" % stub_map.last.size())
+	for i in 6:
+		var e4 := FakeEnemy.new()
+		add_child(e4)
+		manager._active_enemies.append(e4)
+	portal._update_enemy_markers()
+	_check(stub_map.last.size() == 0, "with many enemies left nothing is marked (the map is not cluttered)")
+	manager._active_enemies.clear()
+	portal._update_enemy_markers()
+	_check(stub_map.last.size() == 0, "nothing is marked when no enemy remains")
+	var real_map = main.get_node_or_null("minimap_function")
+	if real_map != null:
+		real_map._bounds_valid = true
+		real_map.set_enemy_markers([Vector3(1, 0, 1), Vector3(2, 0, 2), Vector3(3, 0, 3)])
+		real_map._update_enemy_dots()
+		var shown := 0
+		for d in real_map._enemy_dots:
+			if d.visible:
+				shown += 1
+		_check(shown == 3, "the minimap draws one dot per marked enemy (%d)" % shown)
+		real_map.set_enemy_markers([])
+		var still := 0
+		for d in real_map._enemy_dots:
+			if d.visible:
+				still += 1
+		_check(still == 0, "clearing the markers hides every dot")
+		_check(real_map._enemy_dots.size() <= real_map.MAX_ENEMY_MARKERS, "dots are capped (%d)" % real_map._enemy_dots.size())
+	for e5 in survivors:
+		e5.queue_free()
+
 	# --- Guards cannot be placed in the void ---------------------------------------------------
 	var outside := Vector3(9000.0, 0.0, 9000.0)
 	var guard_pos: Vector3 = portal._valid_guard_position(outside, player.global_position)

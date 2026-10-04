@@ -104,6 +104,14 @@ jobs:
           test -s build/windows/PurgatoryDungeon.exe
           test -s build/windows/PurgatoryDungeon.pck
 
+      - name: Verify exported package
+        run: |
+          flags=""
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then
+            flags="--release --require-logo --sha $SOURCE_SHA"
+          fi
+          python3 tools/verify_package.py build/windows --version "$(cat VERSION)" $flags --godot "$GODOT"
+
       - name: Write build info
         run: |
           cd build/windows

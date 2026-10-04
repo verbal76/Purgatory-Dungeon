@@ -5,11 +5,12 @@ extends Node
 
 const BRUTE_SCENE := "res://characters/brute/scenes/brute_player.tscn"
 const MAGE_SCENE := "res://characters/Lutsch Mage/scenes/Mage player.tscn"
-# Buffs/curses whose stat no player implements yet. They are held out of the pick pool until the
-# owner decides to build or remove them (jump has no jump mechanic; torches only dim on hardcore).
-const KNOWN_UNIMPLEMENTED: Array[String] = ["jump_master", "torchbearer", "dimming_legend", "flickering_torment", "eternal_night"]
-# Curses that adjust an opt-in effect (sparks, on-kill) and so only bite while the matching buff is held.
-const OPT_IN_CURSES: Array[String] = ["dimmed_sparks", "blind_rage", "shattered_spark", "weakened_flame", "blood_thirst"]
+# Content the owner removed because it needed systems that do not exist (jump, torch duration).
+# It must never come back: the "every stat exists on a player" check below also catches any new one.
+const REMOVED_CONTENT: Array[String] = ["jump_master", "torchbearer", "dimming_legend", "flickering_torment", "eternal_night"]
+# Zero-base opt-in stats: their consumers ignore values <= 0, so a negative curse on one only has an
+# effect on a player who already holds the matching buff (declared with requires_any_positive).
+const OPT_IN_STATS: Array[String] = ["spark_light_radius", "spark_brightness", "attack_speed_streak", "passive_regen", "poison_on_kill_chance", "currency_on_kill"]
 
 var _fails: int = 0
 var _checks: int = 0
@@ -72,15 +73,18 @@ func _ready() -> void:
 	var curses: Array = _entries("res://data/globe_effects.json")
 	_check(buffs.size() >= 50, "loaded the buff data (%d entries)" % buffs.size())
 
-	# --- Every stat exists on some class (or the buff is a listed unimplemented one) -------------
+	# --- Every stat exists on some class; removed content stays removed ----------------------------------
 	for entry in buffs + curses:
 		var id := str(entry.get("id"))
-		var known_dead := id in KNOWN_UNIMPLEMENTED
-		var on_some_class := true
+		_check(not (id in REMOVED_CONTENT), "%s was removed and must not return" % id)
 		for st in BuffManager.buff_stat_names(entry):
-			if not (st in player) and not (st in other):
-				on_some_class = false
-		_check(on_some_class != known_dead, "%s: %s" % [id, "listed as unimplemented but all its stats exist" if known_dead else "has a stat that no player implements (add it, remove the buff, or list it in KNOWN_UNIMPLEMENTED)"])
+			_check(st in player or st in other, "%s: stat %s exists on a player (an entry with no implementation must not ship)" % [id, st])
+	for entry in curses:
+		# A negative curse on an opt-in stat would silently do nothing without the matching buff.
+		for e in _effects(entry) + ([entry.get("tradeoff")] if entry.get("tradeoff") is Dictionary else []):
+			if str(e.get("stat", "")) in OPT_IN_STATS and float(e.get("value", 0.0)) < 0.0:
+				var needs: Array = entry.get("requires_any_positive", [])
+				_check(str(e["stat"]) in needs, "%s: curse on opt-in stat %s declares requires_any_positive (else it is a no-op)" % [entry["id"], e["stat"]])
 	other.free()
 
 	# --- Apply / verify magnitude / remove, for every buff the player can use -------------------
@@ -192,13 +196,63 @@ func _ready() -> void:
 		offered_ids[e["id"]] = true
 		_check(BuffManager.buff_is_applicable(e, player), "pool: %s is usable by the %s" % [e["id"], cls])
 	_check(offered_ids.size() >= 25, "pool offers a healthy variety (%d distinct buffs)" % offered_ids.size())
-	for id3 in KNOWN_UNIMPLEMENTED:
-		_check(not offered_ids.has(id3), "pool never offers the unimplemented %s" % id3)
+	for id3 in REMOVED_CONTENT:
+		_check(not offered_ids.has(id3), "pool never offers the removed %s" % id3)
 	if cls == "mage":
 		_check(not offered_ids.has("aoe_radius_boost") and not offered_ids.has("mighty_kick"), "the Mage is not offered Barbarian-only buffs")
 	else:
 		_check(not offered_ids.has("lightning_caller") and not offered_ids.has("spell_surge"), "the Barbarian is not offered Mage-only buffs")
 	BuffManager.reset()
+
+	# --- Curses: independent kill curses hurt, modifier curses need their buff ------------------------------
+	var hp_max: float = float(player.get("max_health"))
+	player.set("_current_health", hp_max)
+	player.set("health_on_kill", -6.0)
+	CharacterBase.GLOBAL_KILL_COUNT += 1
+	if cls == "barbarian":
+		player._check_kill_streak()
+	else:
+		player._check_kill_stats()
+	_check(absf((hp_max - float(player.get("_current_health"))) - 6.0) < 0.01, "Blood Thirst: -6 health on kill (took %.2f)" % (hp_max - float(player.get("_current_health"))))
+	player.set("health_on_kill", 0.0)
+	player.set("spark_damage", -25.0)
+	player.set("_current_health", hp_max)
+	CharacterBase.GLOBAL_KILL_COUNT += 1
+	if cls == "barbarian":
+		player._check_kill_streak()
+	else:
+		player._check_kill_stats()
+	_check(absf((hp_max - float(player.get("_current_health"))) - 25.0) < 0.01, "Shattered Spark: sparks cost 25 health on kill (took %.2f)" % (hp_max - float(player.get("_current_health"))))
+	player.set("_current_health", 3.0)
+	player.set("health_on_kill", -50.0)
+	CharacterBase.GLOBAL_KILL_COUNT += 1
+	if cls == "barbarian":
+		player._check_kill_streak()
+	else:
+		player._check_kill_stats()
+	_check(float(player.get("_current_health")) >= 1.0 and not player._is_dead, "a kill curse can drain the player to 1 HP but never kill them")
+	player.set("health_on_kill", 0.0)
+	player.set("spark_damage", 0.0)
+	player.set("_current_health", hp_max)
+
+	var dimmed: Dictionary = {}
+	var radiant: Dictionary = {}
+	for e in curses:
+		if e["id"] == "dimmed_sparks":
+			dimmed = e
+	for e in buffs:
+		if e["id"] == "radiant_sparks":
+			radiant = e
+	_check(not BuffManager.buff_prerequisites_met(dimmed, player), "Dimmed Sparks has no target without a spark buff")
+	var resolved: Dictionary = GlobeManager.resolve_effect_for_pickup(dimmed)
+	_check(resolved["id"] != "dimmed_sparks" and BuffManager.buff_prerequisites_met(resolved, player), "a curse with no target is swapped for one that bites (got %s)" % resolved["id"])
+	BuffManager._modify_stats(radiant, true)
+	_check(BuffManager.buff_prerequisites_met(dimmed, player) and GlobeManager.resolve_effect_for_pickup(dimmed)["id"] == "dimmed_sparks", "Dimmed Sparks is handed out once the player holds a spark buff")
+	BuffManager._modify_stats(radiant, false)
+	# Every curse the player can be handed from a fresh start does something.
+	for _i in 60:
+		var picked: Dictionary = GlobeManager.resolve_effect_for_pickup(curses[randi() % curses.size()])
+		_check(BuffManager.buff_prerequisites_met(picked, player), "pickup never yields a curse without its prerequisite (%s)" % picked.get("id"))
 
 	# --- Trap statuses: tracked timers, tunable acid -----------------------------------------------
 	player.apply_status("drunk", 0)

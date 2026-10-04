@@ -3,6 +3,9 @@ extends Node
 ## 2-3 s card, cold-launch only, and it can never strand the player. Set REQUIRE_STUDIO_LOGO=1
 ## (the release build does) to make a missing canonical logo a failure.
 
+# SHA-256 of Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png as supplied by the owner (do not change).
+const CANONICAL_SHA256 := "e3d9bb5653eafb783eede827606e7ac73a4e45564a1c25b1ed13ad1429f48c4e"
+
 var _fails: int = 0
 var _checks: int = 0
 
@@ -143,11 +146,22 @@ func _ready() -> void:
 		else:
 			print("ANOMALY: %s is not in the project, so the studio card is skipped at runtime (set REQUIRE_STUDIO_LOGO=1 to make this an error)." % StudioSplash.LOGO_FILENAME)
 	else:
+		# The canonical master must be byte-identical to the owner-supplied file.
+		var sha := FileAccess.get_sha256(path)
+		_check(sha == CANONICAL_SHA256, "the canonical logo is byte-identical to the owner's master (sha256 %s)" % sha)
 		var real := load(path) as Texture2D
 		_check(real != null and real.get_width() > 0 and real.get_height() > 0, "the canonical logo loads (%s)" % path)
 		if real != null:
 			var img := real.get_image()
 			_check(img.detect_alpha() != Image.ALPHA_NONE, "the canonical logo has transparency (%s)" % img.get_format())
+			_check(real.get_width() == 1536 and real.get_height() == 1024, "the canonical logo is 1536 x 1024 (%d x %d)" % [real.get_width(), real.get_height()])
+			var corner := img.get_pixel(0, 0)
+			_check(corner.a < 0.01, "the logo's corner is transparent (alpha %.2f), so the background shows through" % corner.a)
+			# At common Windows resolutions the whole logo is shown, centred, inside the margin.
+			for res in [Vector2(1280, 720), Vector2(1920, 1080), Vector2(2560, 1440), Vector2(3840, 2160), Vector2(1366, 768), Vector2(1024, 768), Vector2(800, 600)]:
+				var area := Rect2(res * StudioSplash.SAFE_MARGIN, res - res * StudioSplash.SAFE_MARGIN * 2.0)
+				var fit := StudioSplash.fit_rect(real.get_size(), area)
+				_check(area.grow(0.01).encloses(fit) and absf(fit.size.x / fit.size.y - 1.5) < 0.0001, "the logo fits whole at %dx%d (%s)" % [res.x, res.y, fit])
 			var holder4 := Control.new()
 			holder4.size = Vector2(1920, 1080)
 			add_child(holder4)

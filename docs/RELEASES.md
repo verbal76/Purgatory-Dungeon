@@ -59,6 +59,14 @@ no binary drift. (A branch push is used because `workflow_dispatch` only works f
 default branch, and the agent environment cannot push tags or download CI artifacts directly.)
 That is how v1 and v2 were published; their release notes were then edited to add a plain-English summary.
 
+## Package verification
+`tools/verify_package.py` inspects the package itself: CI runs it on the exported build directory
+(PCK contents, studio splash scene/script, canonical logo, generated `build_info.json` for the right
+version, nothing from `tests/`/`archive/`/`docs/` exported, and a headless boot of the packaged PCK
+through the splash to the main menu reporting `vN`), and `tools/publish_release.sh` runs it on the
+final `Purgatory-Dungeon-vN-Windows.zip` (name, single `Purgatory-Dungeon-vN/` folder, exe, PCK,
+`VERSION.txt`, release stamp) **before** the release is created. A failing package is never published.
+
 ## Studio splash requirement
 Every release build must contain the canonical Hot Attic Games logo
 `Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png` (see `CLAUDE.md`, "Studio splash"). CI sets

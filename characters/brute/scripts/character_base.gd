@@ -450,6 +450,16 @@ func get_low_health_attack_bonus() -> float:
 	return 0.0
 
 
+# Kill curses (Blood Thirst: negative health_on_kill; Shattered Spark: negative spark_damage) hurt
+# the player directly. They can drain the player to 1 HP but never kill them outright.
+func _take_curse_damage(amount: float) -> void:
+	if amount <= 0.0 or _is_dead:
+		return
+	var safe : float = minf(amount, _current_health - 1.0)
+	if safe > 0.0:
+		take_damage(safe)
+
+
 # Called by the player after kills are registered (Shadow Dancer).
 func _on_kill_haste_trigger() -> void:
 	if kill_haste > 0.0:

@@ -50,10 +50,26 @@ func _ready() -> void:
 	SaveManager.current_profile["meta_currency"] = 0
 	RunLifecycle.grant_starter_potion()
 	_check(int(SaveManager.current_profile["meta_currency"]) == 1, "grant_starter_potion adds one potion")
-	for path in ["res://scripts/character_selection.gd", "res://scripts/AlchemistStore.gd", "res://scripts/you_died_screen.gd"]:
-		var src := FileAccess.get_file_as_string(path)
-		_check(src.contains("RunLifecycle.grant_starter_potion()"), "%s grants the starter potion through RunLifecycle" % path.get_file())
+	# Exactly once per run start: character select has two mutually exclusive branches (new / existing
+	# character), the other routes one each.
+	for entry in [["res://scripts/character_selection.gd", 2], ["res://scripts/AlchemistStore.gd", 1], ["res://scripts/you_died_screen.gd", 1]]:
+		var src := FileAccess.get_file_as_string(entry[0])
+		_check(src.count("RunLifecycle.grant_starter_potion()") == entry[1], "%s grants the starter potion through RunLifecycle %d time(s)" % [entry[0].get_file(), entry[1]])
 	_check(not FileAccess.get_file_as_string("res://scripts/character_selection.gd").contains("\"meta_currency\"] = int("), "character select no longer grants it inline")
+
+	# --- Persistence is hidden from the Barbarian only -------------------------------------------------------
+	var store2: Node = (load("res://scripts/AlchemistStore.gd") as GDScript).new()
+	var keys_barb: Array = []
+	for p in store2.visible_perks():
+		keys_barb.append(p["key"])
+	_check(not ("persistence" in keys_barb) and "magnitude" in keys_barb, "the Barbarian is not offered Persistence (it has no effect for them)")
+	SaveManager.current_profile["character_class"] = "mage"
+	var keys_mage: Array = []
+	for p in store2.visible_perks():
+		keys_mage.append(p["key"])
+	_check("persistence" in keys_mage, "the Mage still sees Persistence")
+	SaveManager.current_profile["character_class"] = "barbarian"
+	store2.free()
 
 	# --- Trap hallucinations: reference-counted, so a re-trigger extends the effect -------------------
 	var player := Node3D.new()

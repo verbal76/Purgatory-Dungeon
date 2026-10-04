@@ -65,6 +65,12 @@ var _portal_dot        : Polygon2D = null
 var _portal_world_pos  : Vector3   = Vector3.ZERO
 var _portal_active     : bool      = false
 var _portal_blink_t    : float     = 0.0
+# Last-stand enemy markers: once the portal is open and only a few enemies remain, they are shown
+# as red dots so the final hunt is never blind. Pre-allocated, set by PortalManager (see
+# set_enemy_markers); nothing is drawn while the list is empty.
+const MAX_ENEMY_MARKERS : int = 6
+var _enemy_marker_pos   : Array[Vector3] = []
+var _enemy_dots         : Array[Polygon2D] = []
 
 # Set false once arrow position is confirmed correct
 var _debug_print_position : bool  = false
@@ -120,6 +126,7 @@ func _process(delta: float) -> void:
 	_update_camera_from_bounds()
 	_update_player_arrow()
 	_update_portal_dot()
+	_update_enemy_dots()
 
 	if _debug_print_position and _player != null:
 		_debug_print_timer -= delta
@@ -655,7 +662,42 @@ func set_portal_position(world_pos: Vector3) -> void:
 	map_frame.add_child(_portal_dot)
 
 
+## World positions of the enemies to mark (at most MAX_ENEMY_MARKERS; empty clears them).
+func set_enemy_markers(positions: Array) -> void:
+	_enemy_marker_pos.clear()
+	for p in positions:
+		if _enemy_marker_pos.size() >= MAX_ENEMY_MARKERS:
+			break
+		_enemy_marker_pos.append(p)
+	if _enemy_marker_pos.is_empty():
+		for dot in _enemy_dots:
+			dot.visible = false
+
+
+func _update_enemy_dots() -> void:
+	if _enemy_marker_pos.is_empty() or not _bounds_valid:
+		return
+	while _enemy_dots.size() < _enemy_marker_pos.size():
+		var dot := Polygon2D.new()
+		dot.name = "EnemyDot%d" % _enemy_dots.size()
+		var pts := PackedVector2Array()
+		for i in 10:
+			pts.append(Vector2.from_angle(TAU * float(i) / 10.0) * 7.0)
+		dot.polygon = pts
+		dot.color   = Color(1.0, 0.15, 0.1, 1.0)   # Red, distinct from the gold portal diamond
+		dot.z_index = 5
+		map_frame.add_child(dot)
+		_enemy_dots.append(dot)
+	for i in _enemy_dots.size():
+		if i < _enemy_marker_pos.size():
+			_enemy_dots[i].position = _project_world_to_frame(_enemy_marker_pos[i])
+			_enemy_dots[i].visible = true
+		else:
+			_enemy_dots[i].visible = false
+
+
 func clear_portal_marker() -> void:
+	set_enemy_markers([])
 	_portal_active = false
 	if _portal_dot != null:
 		_portal_dot.queue_free()

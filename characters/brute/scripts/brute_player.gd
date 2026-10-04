@@ -499,6 +499,12 @@ func _check_kill_streak() -> void:
 
 	# ── Stat-based on-kill effects ─────────────────────────────────────────────
 	_on_kill_haste_trigger()
+	var kill_curse : float = 0.0
+	if health_on_kill < 0.0:
+		kill_curse += -health_on_kill
+	if spark_damage < 0.0:
+		kill_curse += -spark_damage
+	_take_curse_damage(kill_curse * float(new_kills))
 	if health_on_kill > 0.0:
 		receive_heal(health_on_kill * float(new_kills))
 

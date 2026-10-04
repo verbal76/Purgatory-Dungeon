@@ -27,6 +27,9 @@ const KILL_PLANE_Y         : float = -15.0   # Below this a guard fell out of th
 const STALL_MAX_REMAINING  : int   = 3
 const STALL_SECONDS        : float = 180.0
 const HINT_SECONDS         : float = 3.0
+# When this few enemies (or fewer) remain, the minimap marks them so the final hunt is not blind:
+# frozen far-away enemies never come to the player and the map shows no enemies otherwise.
+const MARKER_MAX_REMAINING : int   = 5
 
 # ── Runtime references ────────────────────────────────────────────────────────
 var _dungeon_gen    : Node    = null
@@ -284,6 +287,7 @@ func _process(delta: float) -> void:
 		_entry_check_timer = 0.0
 		_rescue_stranded()
 		_update_stall(dt)
+		_update_enemy_markers()
 		_recheck_entry()
 
 	# Pulse the light energy between 60% and 140% of base.
@@ -330,6 +334,21 @@ func _rescue_stranded() -> void:
 			e.take_damage(1.0e6, null)
 	if _enemy_mgr != null and _enemy_mgr.has_method("rescue_stranded_enemies"):
 		_enemy_mgr.rescue_stranded_enemies()
+
+
+# Marks the last few enemies on the minimap (clears the markers while more remain or none do).
+func _update_enemy_markers() -> void:
+	if _minimap == null or not _minimap.has_method("set_enemy_markers"):
+		return
+	var remaining : int = _enemies_remaining()
+	var positions : Array = []
+	if remaining > 0 and remaining <= MARKER_MAX_REMAINING:
+		for e in _portal_enemies:
+			if is_instance_valid(e) and e.get("_is_dead") != true:
+				positions.append((e as Node3D).global_position)
+		if _enemy_mgr != null and _enemy_mgr.has_method("live_enemy_positions"):
+			positions.append_array(_enemy_mgr.live_enemy_positions())
+	_minimap.set_enemy_markers(positions)
 
 
 # Tracks how long the last few enemies have gone without one dying (game time, not paused time).

@@ -141,6 +141,13 @@ var _status_acid_dps          : float = 1.0   # Set by the trap (TrapManager.aci
 # Tracked timers (the brute's pattern) instead of fire-and-forget SceneTree timers: re-applying an
 # effect refreshes it, and the countdown pauses with the game.
 var _status_drunk_timer       : float = 0.0
+# On-screen list of active trap effects (same panel the Barbarian has): the trap banner only
+# flashes at trigger time, and day-long effects (reversed view, heavy gravity) would otherwise be
+# invisible afterwards.
+var _status_label             : Label   = null
+var _status_panel             : Control = null
+var _status_update_timer      : float   = 0.0
+const STATUS_UPDATE_INTERVAL  : float   = 0.5
 var _status_controls_timer    : float = 0.0
 var _status_day_effects_days  : int   = 0
 var passive_regen             : float = 0.0   # HP/sec from Regeneration perk
@@ -283,6 +290,30 @@ func _on_ready() -> void:
 	_crosshair_layer.add_child(_health_label)
 
 	_refresh_health_bar(max_health, max_health)
+
+	# ── Active trap effects panel (bottom-centre, hidden until an effect is active) ──
+	_status_panel = ColorRect.new()
+	(_status_panel as ColorRect).color = Color(0.0, 0.0, 0.0, 0.65)
+	_status_panel.anchor_left   = 0.5
+	_status_panel.anchor_top    = 1.0
+	_status_panel.anchor_right  = 0.5
+	_status_panel.anchor_bottom = 1.0
+	_status_panel.offset_left   = -200.0
+	_status_panel.offset_top    = -130.0
+	_status_panel.offset_right  =  200.0
+	_status_panel.offset_bottom = -80.0
+	_status_panel.visible       = false
+	_status_panel.mouse_filter  = Control.MOUSE_FILTER_IGNORE
+	_crosshair_layer.add_child(_status_panel)
+
+	_status_label = Label.new()
+	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_status_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	_status_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_status_label.add_theme_font_size_override("font_size", 14)
+	_status_label.add_theme_color_override("font_color", Color(1.0, 0.55, 0.1, 1.0))
+	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_status_panel.add_child(_status_label)
 	connect("health_changed", _on_health_changed)
 
 	# ── Damage vignette ────────────────────────────────────────────────────────
@@ -414,6 +445,12 @@ func _check_kill_stats() -> void:
 	_kill_streak      += new_kills
 
 	_on_kill_haste_trigger()
+	var kill_curse : float = 0.0
+	if health_on_kill < 0.0:
+		kill_curse += -health_on_kill
+	if spark_damage < 0.0:
+		kill_curse += -spark_damage
+	_take_curse_damage(kill_curse * float(new_kills))
 	if health_on_kill > 0.0:
 		receive_heal(health_on_kill * float(new_kills))
 
@@ -680,6 +717,11 @@ func _physics_tick(delta: float) -> void:
 		_status_controls_timer -= delta
 		if _status_controls_timer <= 0.0:
 			_status_reversed_controls = false
+	if _status_drunk or _status_reversed_controls or _status_acid or _status_panel != null and _status_panel.visible:
+		_status_update_timer -= delta
+		if _status_update_timer <= 0.0:
+			_status_update_timer = STATUS_UPDATE_INTERVAL
+			_refresh_status_label()
 
 	# ── Dome cooldown ──────────────────────────────────────────────────────────
 	if _dome_cooldown > 0.0:
@@ -1718,6 +1760,30 @@ func apply_status(effect_name: String, days_duration: int, strength: float = 0.0
 			_status_acid       = true
 			_status_acid_timer = float(days_duration) if days_duration > 0 else 15.0
 			_status_acid_dps   = strength if strength > 0.0 else 1.0
+	_refresh_status_label()   # show the new effect immediately
+
+
+# Builds the active trap effects text and shows/hides the panel (mirrors the Barbarian's).
+func _refresh_status_label() -> void:
+	if _status_label == null or _status_panel == null:
+		return
+	var lines : Array[String] = []
+	var day_s : String = "s" if _status_day_effects_days != 1 else ""
+	if _status_reversed_view:
+		lines.append("⚠ Vision Reversed  (%d day%s)" % [_status_day_effects_days, day_s])
+	if _status_heavy_gravity:
+		lines.append("⚠ Heavy Gravity  (%d day%s)" % [_status_day_effects_days, day_s])
+	if _status_drunk:
+		lines.append("⚠ Disoriented  (%.0fs)" % _status_drunk_timer)
+	if _status_reversed_controls:
+		lines.append("⚠ Controls Reversed  (%.0fs)" % _status_controls_timer)
+	if _status_acid:
+		lines.append("⚠ Acid Burn  (%.0fs)" % _status_acid_timer)
+	if lines.is_empty():
+		_status_panel.visible = false
+	else:
+		_status_label.text    = "\n".join(lines)
+		_status_panel.visible = true
 
 
 func _on_day_changed(_day: int) -> void:
@@ -1730,6 +1796,7 @@ func _on_day_changed(_day: int) -> void:
 		_status_day_effects_days = 0
 		if GameClock.day_changed.is_connected(_on_day_changed):
 			GameClock.day_changed.disconnect(_on_day_changed)
+	_refresh_status_label()   # keep the on-screen effect list in step with the day count
 
 
 func _get_effective_move_speed() -> float:

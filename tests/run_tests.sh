@@ -49,6 +49,11 @@ done
 for gcase in normal recover exhaust; do
 	GROWTH_CASE="$gcase" run "res://tests/test_generation_growth.tscn ($gcase)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_generation_growth.tscn
 done
+# Generator stress sample (chests, Day-30 portal and guards, connectivity, enemy spawns). The full
+# 1000-seed run is tests/stress_generation.sh; any failing seed reproduces with STRESS_SEED=<seed>.
+for seed in 20001 20002 20003 20004 20005 20006; do
+	STRESS_SEED="$seed" STRESS_FULL=1 run "res://tests/stress_generation.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/stress_generation.tscn
+done
 # Dungeon generation: one seed per process (several generate/free cycles in a
 # single headless process can abort the engine; see docs/BASELINE.md).
 for seed in 1 2 3 7 42 123 2024 98765; do

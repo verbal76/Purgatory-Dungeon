@@ -880,6 +880,15 @@ func count_live_enemies() -> int:
 	return n
 
 
+# World positions of every enemy that is alive right now (the last-stand minimap markers).
+func live_enemy_positions() -> Array:
+	var out : Array = []
+	for e in _active_enemies:
+		if is_instance_valid(e) and e.get("_is_dead") != true:
+			out.append((e as Node3D).global_position)
+	return out
+
+
 # Enemies have no kill plane (the player does): one that fell out of the world stays "alive"
 # forever and would keep the Day-30 portal shut. Kill any alive enemy below KILL_PLANE_Y.
 # Returns how many were rescued. take_damage(.., null) credits no kill to the player.

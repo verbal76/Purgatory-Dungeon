@@ -309,6 +309,28 @@ func _collect_spawn_points(dungeon_gen: Node) -> Array:
 	return points
 
 
+# Called when a globe is picked up: a modifier curse whose prerequisite the player does not meet
+# (e.g. Dimmed Sparks without any spark buff) would do nothing, so another curse of the same
+# rarity that does something is handed out instead. Independent curses pass through unchanged.
+func resolve_effect_for_pickup(effect: Dictionary) -> Dictionary:
+	var player : Node = get_tree().get_first_node_in_group("player")
+	if player == null or BuffManager.buff_prerequisites_met(effect, player):
+		return effect
+	var rarity : String = effect.get("rarity", "common")
+	var usable : Array = []
+	for entry in _effect_pool.get(rarity, []):
+		if BuffManager.buff_prerequisites_met(entry, player) and BuffManager.buff_is_applicable(entry, player):
+			usable.append(entry)
+	if usable.is_empty():
+		for pool_rarity in _effect_pool:
+			for entry in _effect_pool[pool_rarity]:
+				if BuffManager.buff_prerequisites_met(entry, player) and BuffManager.buff_is_applicable(entry, player):
+					usable.append(entry)
+	if usable.is_empty():
+		return effect
+	return usable[randi() % usable.size()]
+
+
 # ── Rarity and effect selection ────────────────────────────
 
 func _pick_random_effect() -> Dictionary:

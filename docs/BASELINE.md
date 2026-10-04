@@ -194,7 +194,7 @@ the spot is checked inside the dungeon and clear of walls, with a fallback to th
 interior point. ~5-10 such rooms per dungeon x 40% = roughly 2-4 chests per run. The chest/key/mimic
 FBX files point at texture files that only exist on the artist's machine, so they import untextured:
 they now use the shipped `SM_Chests_Mat_Chests_*` textures (needs a visual check).
-Test: `test_chests` (3 seeds). *Owner confirmation wanted:* dead-end rooms as the chest locations.
+Test: `test_chests` (3 seeds). Owner decision: chests stay in dead-end rooms (no alcove scene for v3).
 
 **Buffs (54 in `data/buffs.json`, 28 globe effects).** Audited every entry against both players.
 - Percent-like values (Blood Rush +25% was +3%) were added as absolutes. A fixed list of stats
@@ -209,12 +209,15 @@ Test: `test_chests` (3 seeds). *Owner confirmation wanted:* dead-end rooms as th
   player take more damage instead of doing nothing.
 - Card texts that disagreed with behaviour were corrected (Wrath/Thunder Expansion, Radiant Sparks,
   Slow the Horde, Enemy Weaken, Footstep Stalker, Horde Caller).
-- **Held out of the pool (owner decision):** Jump Master, Torchbearer, Dimming Legend (and the
-  curses Flickering Torment, Eternal Night): their stats (`jump_velocity`, `torch_duration`) exist
-  on no player; there is no jump and torches only dim on hardcore. `test_buffs` fails if any other
-  buff references a stat no player has.
-- Curses that adjust an opt-in effect (Dimmed Sparks, Blind Rage, Shattered Spark, Weakened Flame,
-  Blood Thirst) only bite while the player holds the matching buff.
+- **Removed (owner decision):** Jump Master, Torchbearer, Dimming Legend and the curses Flickering
+  Torment and Eternal Night were deleted from the data: their stats (`jump_velocity`,
+  `torch_duration`) exist on no player (there is no jump; torches only dim on hardcore). `test_buffs`
+  fails if any of them returns or if any entry references a stat no player has.
+- **Curses.** Blood Thirst (-6 health on kill) and Shattered Spark (sparks cost you health on kill)
+  are independent: they now hurt the player on each kill (never below 1 HP). Dimmed Sparks, Blind
+  Rage, Weakened Flame and Cursed Regen only modify an opt-in effect, so they declare
+  `requires_any_positive` in `data/globe_effects.json` and a globe that would hand out one the
+  player cannot use gives another curse of the same rarity instead (decided at pickup).
 
 **Portal completion.** The portal could stay shut forever: after Day 30 the pressure spawner (and
 an in-flight top-up wave) kept sending a buffed enemy every 5 s to a player who stayed undamaged;
@@ -268,15 +271,20 @@ no replay on re-entry, no stranding). **The canonical logo `Hot_Attic_Games_Mast
 was not present in the repository when this was written**, so the card is skipped at runtime until it
 is added (project root or `branding/`); release builds refuse to publish without it.
 
+**Also in round 3**
+- Persistence is hidden from the Barbarian's perk list (it has no effect for that class); the Mage keeps it.
+- Mage trap-status panel: the Mage now has the same on-screen list of active trap effects as the
+  Barbarian (the banner only flashes at trigger time and day-long effects were invisible after).
+- Far-away frozen enemies were investigated: they skip their AI tick while off-screen and >20 m away
+  (a deliberate optimisation). They are bounded by the population cap, are culled by the existing
+  stale-enemy and room-lock culls, count correctly, and cost almost nothing, so nothing is
+  despawned. The real problem was discoverability of the last enemies, solved by minimap markers.
+- Minimap markers: once the portal is open and 5 or fewer enemies remain, they show as red dots on
+  the map (never earlier, so the map stays uncluttered).
+- Generator reliability: see "Generator stress" below.
+
 **Still open after round 3**
-- Persistence perk has no Barbarian effect (labelled as such in the Alchemist). Owner decision.
-- Jump Master / Torchbearer / Dimming Legend / Flickering Torment / Eternal Night (above). Owner
-  decision: build or remove.
-- Balance questions only the owner can answer: Quick Recovery +4 HP/s and Purgatory King +12 HP/s;
-  per-class buff rarity.
-- The Mage has no on-screen status panel for trap effects (the Barbarian does).
-- Frozen far-away enemies are never despawned and the minimap shows no enemy markers, so the last
-  enemies must be hunted by sight (the 180 s failsafe covers unreachable ones).
+- Balance numbers are untouched pending physical play: Quick Recovery +4 HP/s, Purgatory King +12 HP/s.
 - Chest/key/mimic and Mage visuals, and every subjective item, need the physical test.
 
 ## Repository hygiene

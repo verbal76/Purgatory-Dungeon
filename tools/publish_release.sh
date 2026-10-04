@@ -48,6 +48,11 @@ VER
 ( cd "$STAGE" && zip -q -r "$ZIPNAME" "Purgatory-Dungeon-v${V}" )
 mv "$STAGE/$ZIPNAME" "./$ZIPNAME"
 
+# Inspect the FINAL package (the file the owner will download) before anything is published.
+if [[ "${PACKAGE_VERIFY:-1}" != "0" ]]; then
+  python3 "$(dirname "$0")/verify_package.py" "./$ZIPNAME" --version "$V" --release --require-logo --sha "$SHA"
+fi
+
 EXE_SHA="$(sha256sum "$PKG/PurgatoryDungeon.exe" | cut -d' ' -f1)"
 PCK_SHA="$(sha256sum "$PKG/PurgatoryDungeon.pck" | cut -d' ' -f1)"
 ZIP_SHA="$(sha256sum "./$ZIPNAME" | cut -d' ' -f1)"

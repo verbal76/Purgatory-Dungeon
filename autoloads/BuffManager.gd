@@ -776,6 +776,21 @@ func buff_is_applicable(buff: Dictionary, player: Node) -> bool:
 	return true
 
 
+# Modifier curses (data key `requires_any_positive`) only change an opt-in effect, so they are only
+# meaningful while the player holds at least one of those stats above zero. Entries without the
+# key are always usable.
+func buff_prerequisites_met(buff: Dictionary, player: Node) -> bool:
+	var needs = buff.get("requires_any_positive", [])
+	if not (needs is Array) or needs.is_empty():
+		return true
+	if player == null:
+		return false
+	for st in needs:
+		if str(st) in player and float(player.get(str(st))) > 0.0:
+			return true
+	return false
+
+
 func _apply_single_stat(stat_name: String, value: float, apply: bool) -> void:
 	var player = get_tree().get_first_node_in_group("player")
 	if player == null or not (stat_name in player):

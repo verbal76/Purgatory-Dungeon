@@ -117,12 +117,23 @@ func setup_generation(
 ## generator is random; a rare unlucky run closed itself in after a handful of rooms and left
 ## a dungeon with no enemies). The last attempt is kept whatever its size.
 @export var minimum_fill_fraction : float = 0.8
+## While the layout is below its target and this few doorways (or fewer) are still open, the layout
+## protects its frontier: no dead-end room is placed on one, and a doorway that fails to take a
+## room is retried (up to door_retry_limit times) instead of being capped. A layout that closes its
+## last open doorway can never grow again.
+@export var frontier_reserve  : int = 3
+@export var door_retry_limit  : int = 30
 @export var max_layout_attempts   : int   = 6
 var layout_attempts : int = 0
+## One entry per layout attempt (why it stopped, how many rooms it reached, how often attaching a
+## room failed...). Diagnostics only: the stress tests read it to find and reproduce bad seeds.
+var layout_history : Array[Dictionary] = []
+var _diag : Dictionary = {}
 
 
 func generate_dungeon() -> Dictionary:
 	layout_attempts = 0
+	layout_history.clear()
 	var result : Dictionary = {"success": false}
 	for i in maxi(max_layout_attempts, 1):
 		layout_attempts += 1
@@ -152,6 +163,8 @@ func _discard_layout() -> void:
 
 func _generate_once() -> Dictionary:
 	_reset_generation_state()
+	_diag = {"attach_fail": 0, "end_caps": 0, "wall_plugs": 0, "code_plugs": 0, "blocked": 0,
+			"dead_end_rooms": 0, "last_door_retries": 0, "stop": "", "rooms_at_stop": 0}
 
 	if _main_root == null:            return {"success": false}
 	if _starter_module == null:       return {"success": false}
@@ -178,6 +191,9 @@ func _generate_once() -> Dictionary:
 	_retry_fill_pass()
 	_close_open_ends_full_sweep()
 	_clean_open_connections()
+	_diag["rooms"] = counted_piece_total
+	_diag["modules"] = placed_modules.size()
+	layout_history.append(_diag.duplicate())
 
 	print("Dungeon complete. Modules: ", placed_modules.size(),
 		  "  Rooms: ", counted_piece_total, " / target ", target_piece_count,
@@ -366,19 +382,37 @@ func _generate_layout() -> void:
 			_register_module(res.get("main"), true)
 			_collect_open_connections(res.get("main"))
 			counted_piece_total += 1
+			if _get_connections(res.get("main")).size() < 2:
+				_diag["dead_end_rooms"] += 1
 			continue
 
+		_diag["attach_fail"] += 1
+		# Failing to fit a room is down to the random picks, not the doorway: while the frontier is
+		# thin keep the doorway open and try again rather than closing it for good.
+		if _frontier_is_thin():
+			var fails: int = int(target.get_meta("door_fails", 0)) + 1
+			target.set_meta("door_fails", fails)
+			if fails < door_retry_limit:
+				_diag["last_door_retries"] += 1
+				continue
 		var cap: Node3D = _try_attach_specific_module_to_connection(target, _end_cap_module)
 		if cap != null:
 			_register_module(cap, false)
 			cap.set_meta("is_end_cap", true)
+			_diag["end_caps"] += 1
 		elif _try_attach_wall_plug(target):
 			wall_plug_count += 1
+			_diag["wall_plugs"] += 1
 		elif _force_attach_code_plug(target):
 			code_plug_count += 1
+			_diag["code_plugs"] += 1
 		else:
 			target.set_meta("blocked", true)
 			blocked_final_count += 1
+			_diag["blocked"] += 1
+	_diag["stop"] = "target" if counted_piece_total >= target_piece_count \
+			else ("open_exhausted" if open_connections.is_empty() else "attempt_cap")
+	_diag["rooms_at_stop"] = counted_piece_total
 
 
 func _close_open_ends_full_sweep() -> void:
@@ -489,7 +523,7 @@ func _try_attach_connector_then_piece(target: Node3D) -> Dictionary:
 		if entry == null:
 			conn_mod.queue_free()
 			continue
-		var scene: PackedScene = _pick_weighted_scene(counted_piece_total < target_piece_count and open_connections.size() <= 1)
+		var scene: PackedScene = _pick_weighted_scene(_frontier_is_thin())
 		var main_mod: Node3D = scene.instantiate()
 		_main_root.add_child(main_mod)
 		_reset_module_transform(main_mod)
@@ -497,7 +531,7 @@ func _try_attach_connector_then_piece(target: Node3D) -> Dictionary:
 		# A dead-end room placed on the LAST open doorway ends generation: a rare random run
 		# produced a 5-room dungeon with no enemy spawns. Below the target, only rooms that
 		# keep a doorway open may take the last one.
-		if main_conns.size() < 2 and counted_piece_total < target_piece_count and open_connections.size() <= 1:
+		if main_conns.size() < 2 and _frontier_is_thin():
 			main_mod.queue_free()
 			conn_mod.queue_free()
 			continue
@@ -774,6 +808,11 @@ func _try_attach_specific_module_to_connection(target: Node3D, scene: PackedScen
 			return mod
 	mod.queue_free()
 	return null
+
+
+# True while the layout is short of its target and nearly out of open doorways.
+func _frontier_is_thin() -> bool:
+	return counted_piece_total < target_piece_count and open_connections.size() <= frontier_reserve
 
 
 func _pick_weighted_scene(avoid_dead_ends: bool = false) -> PackedScene:

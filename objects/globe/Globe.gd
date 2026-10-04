@@ -255,6 +255,7 @@ func _collect() -> void:
 	_state = GlobeState.COLLECTED
 	if _mist_particles != null:
 		_mist_particles.emitting = false
+	_effect = GlobeManager.resolve_effect_for_pickup(_effect)   # never hand out a curse that cannot bite
 	GlobeManager.announce_collection(_effect)
 	_apply_effect()
 	call_deferred("queue_free")

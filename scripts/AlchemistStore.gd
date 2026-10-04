@@ -48,7 +48,7 @@ var _back_btn        : Button   = null   # hidden legacy button
 
 var perks_def : Array = [
 	{"key": "magnitude",   "name": "Magnitude",      "desc": "Dome Radius +10%", "desc_mage": "+2 Dome Bolts", "desc_barbarian": "AOE Blast Radius +10%"},
-	{"key": "persistence", "name": "Persistence",    "desc": "Dome Duration +15%", "desc_mage": "Spell Range +15%", "desc_barbarian": "No effect for the Barbarian"},
+	{"key": "persistence", "name": "Persistence",    "desc": "Dome Duration +15%", "desc_mage": "Spell Range +15%", "hide_for": ["barbarian"]},
 {"key": "vitality",    "name": "Vitality",        "desc": "Max Health +10"},
 	{"key": "adrenaline",  "name": "Adrenaline",      "desc": "Attack Speed +8%"},
 	{"key": "ferocity",    "name": "Ferocity",         "desc": "Attack Damage +10%"},
@@ -64,7 +64,7 @@ var perks_def : Array = [
 func _ready() -> void:
 	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	_total_pages = int(ceil(float(perks_def.size()) / float(PERKS_PER_PAGE)))
+	_total_pages = maxi(1, int(ceil(float(visible_perks().size()) / float(PERKS_PER_PAGE))))
 	_hide_legacy_back_button()
 	_build_parchment()
 	_build_nav_buttons()
@@ -389,11 +389,12 @@ func _update_ui() -> void:
 	var user_perks : Dictionary = profile.get("perks", {})
 	var run_count  : int        = int(profile.get("run_count", 0))
 
+	var shown : Array = visible_perks()
 	var page_start : int = _current_page * PERKS_PER_PAGE
-	var page_end   : int = mini(page_start + PERKS_PER_PAGE, perks_def.size())
+	var page_end   : int = mini(page_start + PERKS_PER_PAGE, shown.size())
 
 	for i in range(page_start, page_end):
-		var entry  : Dictionary = perks_def[i]
+		var entry  : Dictionary = shown[i]
 		var key    : String     = entry["key"]
 		var lv     : int        = int(user_perks.get(key, 0))
 		var locked : bool       = (key == "trap_sense" and run_count < 5)
@@ -460,6 +461,17 @@ func _create_perk_card(key: String, data: Dictionary, lv: int, locked: bool) -> 
 	panel.add_child(inner)
 	vbox.add_child(panel)
 	grid.add_child(vbox)
+
+
+# The perks offered to the active character: perks with no effect for the class (`hide_for`) are
+# not shown at all rather than sold as dead purchases.
+func visible_perks() -> Array:
+	var cls := str(SaveManager.get_character_class()) if SaveManager.current_profile_is_valid() else ""
+	var out : Array = []
+	for entry in perks_def:
+		if not (cls in entry.get("hide_for", [])):
+			out.append(entry)
+	return out
 
 
 # Perk text for the active character class when the perk works differently per class.
