@@ -76,5 +76,6 @@ NOTES="$STAGE/notes.md"
 
 gh release create "$TAG" "./$ZIPNAME" --repo "$REPO" --target "$SHA" \
   --title "${PRODUCT} v${V}" --notes-file "$NOTES" --latest="$LATEST"
-gh release view "$TAG" --repo "$REPO" --json name,tagName,isLatest,url,assets \
-  --jq '{title:.name, tag:.tagName, latest:.isLatest, url:.url, assets:[.assets[]|{name,size}]}'
+gh release view "$TAG" --repo "$REPO" --json name,tagName,url,assets \
+  --jq '{title:.name, tag:.tagName, url:.url, assets:[.assets[]|{name,size}]}'
+echo "Latest release is now: $(gh api "repos/${REPO}/releases/latest" --jq '.name')"
