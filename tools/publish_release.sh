@@ -21,9 +21,9 @@ test -s "$DIR/PurgatoryDungeon.exe" && test -s "$DIR/PurgatoryDungeon.pck" \
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
   echo "Release $TAG already exists - a version number identifies exactly one delivered build. Refusing."; exit 1
 fi
-if git ls-remote --exit-code --tags "https://github.com/${REPO}.git" "refs/tags/${TAG}" >/dev/null 2>&1; then
-  TAGSHA="$(gh api "repos/${REPO}/git/ref/tags/${TAG}" --jq '.object.sha')"
-  echo "Tag $TAG already exists (-> $TAGSHA). Refusing to reuse a version number."; exit 1
+# (authenticated check: an unauthenticated git ls-remote cannot see tags of a private repo)
+if gh api "repos/${REPO}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+  echo "Tag $TAG already exists. Refusing to reuse a version number."; exit 1
 fi
 
 # The artifact's own build record must agree with the commit we are about to tag.

@@ -9,13 +9,14 @@ name: CI
 #     and publishes the Release (title "Purgatory Dungeon v<N>", file
 #     Purgatory-Dungeon-v<N>-Windows.zip, marked Latest).
 #   * To publish a build an earlier CI run already made WITHOUT rebuilding it, push a
-#     helper tag  promote/v<N>/<run_id>/<full_sha>[/notlatest]  on a commit that contains this
-#     workflow, then delete that helper tag. (Tag pushes are used because workflow_dispatch
-#     only works for workflows on the default branch.)
+#     helper BRANCH  promote/v<N>/<run_id>/<full_sha>[/notlatest]  (created from a commit that
+#     contains this workflow), wait for the `promote` job, then delete that helper branch.
+#     (A branch push is used because workflow_dispatch only works for workflows on the default
+#     branch, and the agent environment cannot push tags.)
 on:
   push:
-    branches: [main]
-    tags: ['v[0-9]*', 'promote/**']
+    branches: [main, 'promote/**']
+    tags: ['v[0-9]*']
   pull_request:
   workflow_dispatch:
 
@@ -32,7 +33,7 @@ permissions:
 jobs:
   validate-and-export:
     # A promote tag publishes an existing artifact; it must not rebuild anything.
-    if: ${{ !startsWith(github.ref, 'refs/tags/promote/') }}
+    if: ${{ !startsWith(github.ref, 'refs/heads/promote/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -141,24 +142,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: tools/publish_release.sh "${GITHUB_REF_NAME#v}" "$SOURCE_SHA" artifact "$GITHUB_RUN_ID" true
 
-  # Helper tag promote/v<N>/<run_id>/<full_sha>[/notlatest] -> publish an artifact an earlier
+  # Helper branch promote/v<N>/<run_id>/<full_sha>[/notlatest] -> publish an artifact an earlier
   # run already built (no rebuild; the exact verified binary is attached).
   promote:
-    if: startsWith(github.ref, 'refs/tags/promote/')
+    if: startsWith(github.ref, 'refs/heads/promote/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: read
     steps:
       - uses: actions/checkout@v4
-      - name: Parse and validate the promote tag
+      - name: Parse and validate the promote branch name
         id: p
         run: |
           IFS=/ read -r _ ver run sha flag <<<"$GITHUB_REF_NAME"
-          [[ "$ver" =~ ^v[1-9][0-9]*$ ]] || { echo "bad version in tag"; exit 1; }
-          [[ "$run" =~ ^[0-9]+$ ]] || { echo "bad run id in tag"; exit 1; }
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "bad sha in tag"; exit 1; }
-          [[ -z "$flag" || "$flag" == "notlatest" ]] || { echo "bad flag in tag"; exit 1; }
+          [[ "$ver" =~ ^v[1-9][0-9]*$ ]] || { echo "bad version in branch name"; exit 1; }
+          [[ "$run" =~ ^[0-9]+$ ]] || { echo "bad run id in branch name"; exit 1; }
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "bad sha in branch name"; exit 1; }
+          [[ -z "$flag" || "$flag" == "notlatest" ]] || { echo "bad flag in branch name"; exit 1; }
           echo "version=${ver#v}" >> "$GITHUB_OUTPUT"
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"

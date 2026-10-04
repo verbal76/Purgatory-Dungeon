@@ -47,12 +47,13 @@ CI built it from tag `vN`; any other build says `development build after vN`.
    publishes the Release "Purgatory Dungeon vN" as **Latest**, with the zip attached.
 5. Tell the owner: "Purgatory Dungeon vN" and the exact file name. Nothing else.
 
-To publish a build CI already made, without rebuilding it: push a helper tag
-`promote/v<N>/<ci_run_id>/<full_40_char_sha>` (append `/notlatest` for a historical release) on a
-commit that contains `.github/workflows/ci.yml`, wait for the `promote` job, then delete the helper
-tag. The job downloads that run's artifact and publishes exactly those bytes. (A tag push is used
-because `workflow_dispatch` only works for workflows on the default branch.) That is how v1 and
-v2 were published; their release notes were then edited to add a plain-English summary.
+To publish a build CI already made, without rebuilding it: create a helper branch
+`promote/v<N>/<ci_run_id>/<full_40_char_sha>` (append `/notlatest` for a historical release) from a
+commit that contains `.github/workflows/ci.yml` and push it; wait for the `promote` job; then delete
+the helper branch. The job downloads that run's artifact and publishes exactly those bytes, so
+no binary drift. (A branch push is used because `workflow_dispatch` only works for workflows on the
+default branch, and the agent environment cannot push tags or download CI artifacts directly.)
+That is how v1 and v2 were published; their release notes were then edited to add a plain-English summary.
 
 ## History
 | Version | Source commit | What it was | Notes |
