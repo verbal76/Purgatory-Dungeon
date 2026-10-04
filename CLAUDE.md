@@ -15,6 +15,16 @@ codenames, SHAs, build counters or CI artifact links in anything the owner sees;
 engineering metadata in the release notes. One number = one delivered binary; never reuse or overwrite.
 Full procedure, tooling and history: **docs/RELEASES.md** (`tools/release_tool.py`, tag `vN` triggers CI publishing).
 
+## Human testing gate (Hot Attic Games rule — applies before asking the owner to test)
+
+Do not send the owner a build to test while confirmed, reproducible, repairable engineering defects
+remain that can be fixed without human judgment. A build that exists, launches, or passes CI/headless
+tests is not by itself an owner-testing gate. The owner tests subjective questions (feel, visuals,
+audio, real-hardware performance, fun); never ask him to rediscover defects already known.
+Until those defects are repaired the project state is "engineering work remains", not "waiting on
+owner testing" — unless the owner explicitly says to test anyway. Earlier builds stay as rollback
+checkpoints; repairing defects never invalidates them.
+
 ## How to Run
 
 - Open `project.godot` in Godot 4.6+.

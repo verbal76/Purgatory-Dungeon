@@ -89,7 +89,15 @@ func _ready() -> void:
 		var q := PhysicsRayQueryParameters3D.create(base + Vector3(0, 1.6, 0), t + Vector3(0, 1.0, 0))
 		q.collision_mask = 1
 		q.exclude = [player.get_rid()]
-		if space.intersect_ray(q).is_empty():
+		if not space.intersect_ray(q).is_empty():
+			continue
+		# The brute's own sight ray runs level at 1 m from its feet to the player's 1 m, so the
+		# line-of-sight checks below need that exact ray clear too. The start room is random per
+		# run; without this a low static obstacle on that ray made two checks fail intermittently.
+		var level := PhysicsRayQueryParameters3D.create(base + Vector3(0, 1.0, 0), Vector3(t.x, base.y + 1.0, t.z))
+		level.collision_mask = 1
+		level.exclude = [player.get_rid()]
+		if space.intersect_ray(level).is_empty():
 			dir = d
 			target = t
 			break
