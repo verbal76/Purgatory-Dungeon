@@ -287,6 +287,10 @@ func _ready() -> void:
 
 	# --- Slide knockback kicks each prop once per slide (Barbarian) ------------------------------------
 	if cls == "barbarian":
+		# The dungeon is random: real barrels near the start point are kickable too, and a kicked barrel
+		# can chain into its neighbours (including the fakes below). Count only the fakes.
+		for real in get_tree().get_nodes_in_group("kickable_prop"):
+			real.remove_from_group("kickable_prop")
 		var props: Array = []
 		for i in 3:
 			var prop := FakeProp.new()

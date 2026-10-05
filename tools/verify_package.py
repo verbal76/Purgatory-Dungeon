@@ -77,25 +77,32 @@ def check_pck(pck, version, require_logo, release, sha, problems, notes):
         problems.append(f"PCK could not be read: {e}")
         return
     notes.append(f"pck sha256 {sha256(pck)} ({len(files)} files, Godot {ver[0]}.{ver[1]}.{ver[2]}, format {fmt})")
-    names = list(files)
+    check_names(list(files), lambda n: read_member(pck, files[n]), "PCK", version, require_logo, release, sha, problems, notes)
+    return files
+
+
+def check_names(names, read, what, version, require_logo, release, sha, problems, notes):
+    """The content rules shared by a PCK and by the loose asset tree of a Godot Android APK.
+    `read(name)` returns that member's bytes."""
 
     def has(sub):
         return any(sub in n for n in names)
 
     for need in ("scenes/StudioSplash.tscn", "scripts/studio_splash.gd", "scenes/MainMenu.tscn", "build_info.json", "scripts/build_info.gd"):
         if not (has(need) or has(need.replace(".gd", ".gdc")) or has(need + ".remap")):
-            problems.append(f"the PCK does not contain {need}")
+            problems.append(f"the {what} does not contain {need}")
     if not has(LOGO):
-        (problems if require_logo else notes).append(f"the PCK does not contain the canonical logo {LOGO}")
+        (problems if require_logo else notes).append(f"the {what} does not contain the canonical logo {LOGO}")
     else:
         notes.append(f"canonical logo {LOGO} is packed")
     for n in names:
-        if n.startswith(FORBIDDEN_PREFIXES) or any(x in n.lower() for x in FORBIDDEN_SUBSTR) or n.endswith(".md"):
-            problems.append(f"the PCK contains a file that must not ship: {n}")
+        norm = n if n.startswith("res://") else "res://" + n   # APK assets carry no res:// prefix
+        if norm.startswith(FORBIDDEN_PREFIXES) or any(x in n.lower() for x in FORBIDDEN_SUBSTR) or n.endswith(".md"):
+            problems.append(f"the {what} contains a file that must not ship: {n}")
     bi_name = next((n for n in names if n.endswith("build_info.json")), "")
     if bi_name:
         try:
-            bi = json.loads(read_member(pck, files[bi_name]).decode("utf-8"))
+            bi = json.loads(read(bi_name).decode("utf-8"))
             if int(bi.get("public_version", bi.get("version", -1))) != version:
                 problems.append(f"build_info.json is for v{bi.get('public_version', bi.get('version'))}, expected v{version}")
             if release and not bi.get("release", False):
@@ -105,7 +112,6 @@ def check_pck(pck, version, require_logo, release, sha, problems, notes):
             notes.append("build_info.json: " + json.dumps(bi, sort_keys=True))
         except Exception as e:  # noqa: BLE001
             problems.append(f"build_info.json unreadable: {e}")
-    return files
 
 
 def main():

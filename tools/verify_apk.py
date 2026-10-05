@@ -113,27 +113,28 @@ def main():
                 problems.append(f"{n} is not 16 KB aligned (PT_LOAD p_align {[hex(x) for x in al]})")
         if sos:
             notes.append(f"{len(sos)} native libraries, all PT_LOAD segments 16 KB aligned" if not [p for p in problems if "16 KB" in p] else "16 KB check failed")
-        # The game data is the Godot PCK stored as an APK asset (its name differs between template
-        # versions), so identify it by content: an asset that starts with the "GDPC" magic.
+        # Game data: Godot's gradle export either stores one PCK as an asset (identified by its "GDPC"
+        # magic) or, as in 4.6, the project's files loose under assets/ (res://x -> assets/x, imports
+        # under assets/godot/imported). Check whichever is there with the same content rules.
         pck_members = []
-        big_assets = []
         for i in z.infolist():
-            if not i.filename.startswith("assets/") or i.file_size < 1_000_000:
-                continue
-            with z.open(i) as fh:
-                magic = fh.read(4)
-            big_assets.append((i.filename, i.file_size, magic))
-            if magic == b"GDPC":
-                pck_members.append(i)
-        if not pck_members:
-            problems.append("no game data (PCK) found in the APK; large assets: " + ", ".join(
-                f"{n} ({sz} bytes, magic {mg!r})" for n, sz, mg in big_assets[:8]))
-        else:
+            if i.filename.startswith("assets/") and i.file_size >= 1_000_000:
+                with z.open(i) as fh:
+                    if fh.read(4) == b"GDPC":
+                        pck_members.append(i)
+        if pck_members:
             notes.append(f"game data: {pck_members[0].filename} ({pck_members[0].file_size} bytes)")
             tmp = tempfile.mkdtemp()
             z.extract(pck_members[0], tmp)
-            pck = os.path.join(tmp, pck_members[0].filename)
-            vp.check_pck(pck, a.version, a.require_logo, a.release, a.sha, problems, notes)
+            vp.check_pck(os.path.join(tmp, pck_members[0].filename), a.version, a.require_logo, a.release, a.sha, problems, notes)
+        else:
+            assets = [i.filename[len("assets/"):] for i in z.infolist() if i.filename.startswith("assets/") and not i.is_dir()]
+            if not assets:
+                problems.append("no game data found in the APK (no PCK and no assets/)")
+            else:
+                notes.append(f"game data: {len(assets)} loose files under assets/ (no single PCK)")
+                vp.check_names(assets, lambda n: z.read("assets/" + n), "APK assets", a.version,
+                               a.require_logo, a.release, a.sha, problems, notes)
 
     zipalign = sdk_tool("zipalign")
     if zipalign:
