@@ -67,6 +67,10 @@ var _sliders    : Dictionary = {}   # key → HSlider
 var _checkboxes : Dictionary = {}   # key → CheckBox
 var _val_labels : Dictionary = {}   # key → value display Label
 
+# Gameplay tab: touch control scheme selector (phones only)
+var _scheme_buttons : Dictionary = {}   # "twin"/"classic" -> Button (a ButtonGroup of selector buttons)
+var _scheme_hint    : Label = null
+
 # Video tab
 var _display_option  : OptionButton    = null
 var _res_option      : OptionButton    = null
@@ -352,13 +356,46 @@ func _build_gameplay_tab() -> void:
 	_hint(t, "50% is easier, 100% is normal, 200% is brutal.")
 	if TouchControls.is_touch_platform():
 		_section(t, "Touch Controls")
+		_build_scheme_row(t)
 		_slider(t, "Control Opacity",   TouchControls.KEY_OPACITY, 20.0, 100.0, 5.0)
 		_slider(t, "Control Size",      TouchControls.KEY_SCALE,   70.0, 150.0, 5.0)
 		_slider(t, "Look Sensitivity",  TouchControls.KEY_LOOK,    40.0, 250.0, 5.0)
-		_hint(t, "Swipe the right side of the screen to look around.")
 		_section(t, "Playtest")
 		_checkbox(t, "Show performance readout", PerfOverlay.KEY)
 		_hint(t, "FPS, slowest 1% of frames, draw calls. Tell us these numbers if the game stutters.")
+
+
+const SCHEME_HINTS : Dictionary = {
+	"twin": "Left thumb moves, right thumb looks. The big Attack button also aims: drag from it to turn while you attack.",
+	"classic": "Swipe the right side of the screen to look around.",
+}
+
+
+## "Control scheme": Twin-stick (default) or Classic (swipe to look). Two selector buttons in one group; the
+## choice is stored at once and the touch layer picks it up live (also while this screen is open over a paused run).
+func _build_scheme_row(t: VBoxContainer) -> void:
+	var row := _row(t, "Control scheme")
+	var group := ButtonGroup.new()
+	for entry in [["twin", "Twin-stick"], ["classic", "Classic"]]:
+		var b := PUI.button(entry[1], "selector")
+		b.name = "Scheme_" + String(entry[0])
+		b.button_group = group
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(b)
+		_scheme_buttons[entry[0]] = b
+		var key: String = entry[0]
+		b.toggled.connect(func(on: bool) -> void:
+			if not on:
+				return
+			_scheme_hint_update(key)
+			if _suppress: return
+			SettingsManager.update_setting(TouchControls.KEY_SCHEME, key))
+	_scheme_hint = SettingsRows.hint(t, SCHEME_HINTS["twin"])
+
+
+func _scheme_hint_update(key: String) -> void:
+	if _scheme_hint != null:
+		_scheme_hint.text = SCHEME_HINTS.get(key, "")
 
 
 func _build_accessibility_tab() -> void:
@@ -683,6 +720,12 @@ func _load_settings() -> void:
 		_sliders[key].value = v
 		if _val_labels.has(key):
 			_val_labels[key].text = "%.0f%%" % v
+
+	# Touch control scheme
+	if not _scheme_buttons.is_empty():
+		var sk: String = TouchControls.scheme_from(SettingsManager.gameplay_settings.get(TouchControls.KEY_SCHEME, TouchControls.DEFAULT_SCHEME))
+		(_scheme_buttons[sk] as Button).button_pressed = true
+		_scheme_hint_update(sk)
 
 	# Checkboxes
 	for key in _checkboxes.keys():
