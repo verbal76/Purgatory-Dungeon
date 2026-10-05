@@ -230,6 +230,7 @@ func _build_buff_hud() -> void:
 	_hud_container.offset_right  = -HUD_MARGIN_X
 	_hud_container.offset_top    = HUD_START_Y
 
+	PUI.adopt(_hud_container)
 	_hud_layer.add_child(_hud_container)
 	_hud_layer.visible = false
 
@@ -372,6 +373,7 @@ func _show_slot_ui() -> void:
 	_ui_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	# Nothing here takes the tap: the whole screen is the "stop" button (see _unhandled_input).
 	_ui_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	PUI.adopt(_ui_root)   # a CanvasLayer child does not inherit the root theme
 	_ui_layer.add_child(_ui_root)
 
 	# A light veil keeps the frozen dungeon behind the card from competing with it.

@@ -139,6 +139,7 @@ func _build_alert_ui() -> void:
 	_alert_label.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_alert_label.offset_top = -180.0
 	_alert_label.modulate.a = 0.0
+	PUI.adopt(_alert_label)   # a CanvasLayer child does not inherit the root theme
 	_alert_layer.add_child(_alert_label)
 
 

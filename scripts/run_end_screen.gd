@@ -54,6 +54,7 @@ func _build_ui() -> void:
 	_choice_root = Control.new()
 	_choice_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_choice_root.visible = false
+	PUI.adopt(_choice_root)   # a CanvasLayer child does not inherit the root theme
 	add_child(_choice_root)
 
 	_choice_root.add_child(PUI.background("void"))

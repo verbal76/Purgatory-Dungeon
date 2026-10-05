@@ -141,6 +141,7 @@ func _ready() -> void:
 	var wrap := Control.new()
 	wrap.set_anchors_preset(Control.PRESET_FULL_RECT)
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	PUI.adopt(wrap)   # a CanvasLayer child does not inherit the root theme
 	_prompt_layer.add_child(wrap)
 
 	# Outline text over the world (HudValue role): no plate, the dungeon stays visible.

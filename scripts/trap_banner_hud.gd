@@ -39,6 +39,7 @@ func _ready() -> void:
 	var root_ctrl := Control.new()
 	root_ctrl.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root_ctrl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	PUI.adopt(root_ctrl)   # a CanvasLayer child does not inherit the root theme
 	add_child(root_ctrl)
 
 	_vbox = VBoxContainer.new()

@@ -126,6 +126,7 @@ func _ready() -> void:
 	_label.offset_bottom = -float(PUI.S7 + PUI.S5)   # title sits a little above centre
 	_label.mouse_filter  = Control.MOUSE_FILTER_IGNORE
 	_label.modulate.a    = 0.0
+	PUI.adopt(_label)   # a CanvasLayer child does not inherit the root theme
 	add_child(_label)
 
 	# ── Key prompts (desktop / controller): quiet hierarchy, glyphs from InputManager ─────────
@@ -137,6 +138,7 @@ func _ready() -> void:
 	_prompts.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_prompts.add_theme_constant_override("separation", PUI.S2)
 	_prompts.modulate.a = 0.0
+	PUI.adopt(_prompts)
 	add_child(_prompts)
 
 	_prompt_label = _prompt_line("Press %s to view character stats" % InputManager.glyph("ui_menu"), "MetaLabel")
@@ -167,6 +169,7 @@ func _build_touch_buttons() -> void:
 	_touch_row.offset_top = -170.0
 	_touch_row.offset_bottom = -64.0
 	_touch_row.modulate.a = 0.0
+	PUI.adopt(_touch_row)
 	add_child(_touch_row)
 	# Same button family as every menu; starting over is the one primary action.
 	for spec in [["Main Menu", "menu", "secondary"], ["Alchemist's Lab", "shop", "secondary"], ["New Run", "restart", "primary"]]:

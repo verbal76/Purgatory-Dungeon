@@ -425,6 +425,7 @@ func _show_not_ready_hint(remaining: int) -> void:
 		_hint_label.offset_bottom =  80.0
 		_hint_label.offset_left   = -400.0
 		_hint_label.offset_right  =  400.0
+		PUI.adopt(_hint_label)   # a CanvasLayer child does not inherit the root theme
 		_hint_layer.add_child(_hint_label)
 
 	_hint_label.text = "%d enemies remain — clear them all to enter the portal!" % remaining
@@ -479,6 +480,7 @@ func _show_announce(portal_pos: Vector3) -> void:
 	var centre := CenterContainer.new()
 	centre.set_anchors_preset(Control.PRESET_FULL_RECT)
 	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	PUI.adopt(centre)   # a CanvasLayer child does not inherit the root theme
 	_announce_layer.add_child(centre)
 
 	var box := VBoxContainer.new()

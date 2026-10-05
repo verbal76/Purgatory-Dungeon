@@ -234,6 +234,13 @@ static func divider() -> HSeparator:
 	return s
 
 
+## A Control whose parent is a CanvasLayer does NOT inherit the root window's theme (Godot's theme lookup stops at
+## the CanvasLayer). Give every top-level Control built under a CanvasLayer in code this theme; children inherit it.
+static func adopt(c: Control) -> Control:
+	c.theme = theme()
+	return c
+
+
 # ── Rarity ramp (additive block: buff cards, pickups) ────────────────────────────────────────
 # Restrained and built only from the palette: common = bone-dim edge, rare = dark brass, epic = ember,
 # legendary = bright ember + a glow rising from the base, cursed = blood. Rarity is ALWAYS also written
