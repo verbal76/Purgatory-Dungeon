@@ -14,8 +14,9 @@ trap 'rm -rf "$SAVE"' EXIT
 shot() {  # shot <label> <scene> <phone|desktop> [extra env as VAR=val ...]
 	local label="$1" scene="$2" mode="$3"; shift 3
 	local screen res touch=""
-	if [ "$mode" = phone ]; then screen="1496x672x24"; res="1496x672"; touch="1"; else screen="1920x1080x24"; res="1920x1080"; fi
-	env PURGATORY_SAVE_ROOT="$SAVE" ${touch:+PURGATORY_FORCE_TOUCH=1} "$@" \
+	local noscale=""
+	if [ "$mode" = phone ]; then screen="1496x672x24"; res="1496x672"; touch="1"; else screen="1920x1080x24"; res="1920x1080"; noscale="1"; fi
+	env PURGATORY_SAVE_ROOT="$SAVE" ${touch:+PURGATORY_FORCE_TOUCH=1} ${noscale:+SHOT_NOSCALE=1} "$@" \
 		timeout 120 xvfb-run -a -s "-screen 0 $screen" "$GODOT" --rendering-driver opengl3 --resolution "$res" --path . \
 		--script tools/ui_shot.gd -- "$scene" "$OUT/${label}_${mode}.png" "$FRAMES" 2>&1 | grep -E "SCRIPT ERROR|Parse Error" || true
 }
