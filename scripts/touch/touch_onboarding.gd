@@ -7,30 +7,46 @@
 #   the control first becomes relevant, waits for the player to actually DO the thing, then fades
 #   and is remembered (SettingsManager.gameplay_settings["touch_tutorial"]) so it never nags again.
 #
-#     move   -> at the start: "drag to move" until the stick has been used
-#     look   -> then "swipe to look" until the player has swiped
-#     attack -> when the first enemy is near: highlights ATTACK until pressed
-#     use    -> when something usable is in range (chest): highlights USE until pressed
-#     block  -> after the first hit taken (and attack learned): highlights BLOCK
-#     burst  -> when an enemy is close and a potion is held: highlights BURST
+#   The hints teach the ACTIVE control scheme (TouchControls.scheme):
+#
+#     move       -> at the start: "drag to move" until the stick has been used
+#     look       -> classic: "swipe to look" until the player has swiped
+#     look_stick -> twin-stick: "drag the right side to look" until the look stick has been held out
+#     attack     -> when the first enemy is near: highlights ATTACK until pressed
+#     aim        -> twin-stick, after the first attack: "drag from Attack to aim" until it has been done
+#     use        -> when something usable is in range (chest): highlights USE until pressed
+#     block      -> after the first hit taken (and attack learned): highlights BLOCK
+#     burst      -> when an enemy is close and a potion is held: highlights BURST
 #
 #   A hint that is shown MAX_SHOWS times without being completed is retired too.
 # ==============================================================================
 class_name TouchOnboarding
 extends Control
 
-const STEPS : Array[String] = ["move", "look", "attack", "use", "block", "burst"]
+const STEPS : Array[String] = ["move", "look", "attack", "use", "block", "burst"]   # classic order
+const STEPS_TWIN : Array[String] = ["move", "look_stick", "attack", "aim", "use", "block", "burst"]
 const SETTINGS_KEY := "touch_tutorial"
 const SHOWS_KEY := "touch_tutorial_shown"
 const MAX_SHOWS := 3
 const HINT_SECONDS := 9.0
 const LOOK_DONE_PX := 350.0
 const MOVE_DONE_SECONDS := 0.8
+const LOOK_STICK_DONE_SECONDS := 0.8
 
 const TEXT := {
 	"move": "Drag here to move",
 	"look": "Swipe on this side to look around",
 	"attack": "Tap to attack - hold to charge",
+	"use": "Tap to use",
+	"block": "Hold to block",
+	"burst": "Burst costs a potion",
+}
+# Twin-stick wording (same steps where the control is the same).
+const TEXT_TWIN := {
+	"move": "Drag the left side to move",
+	"look_stick": "Drag the right side to look around",
+	"attack": "Tap to attack - hold to charge",
+	"aim": "Drag from Attack to aim",
 	"use": "Tap to use",
 	"block": "Hold to block",
 	"burst": "Burst costs a potion",
@@ -119,9 +135,27 @@ func _shows(step: String) -> int:
 
 # ── Completion ────────────────────────────────────────────────────────────────
 
+## The hint text for a step under the active scheme.
+func text_for(step: String) -> String:
+	if _twin():
+		return TEXT_TWIN.get(step, TEXT.get(step, ""))
+	return TEXT.get(step, "")
+
+
+func _twin() -> bool:
+	return _tc != null and _tc.has_method("is_twin") and _tc.is_twin()
+
+
+## The player switched scheme: drop the hint that taught the old one; the right one is chosen next poll.
+func on_scheme_changed() -> void:
+	_deactivate()
+	_poll = 1.0
+
+
 func _on_action(action: String) -> void:
 	var step: String = ""
 	match action:
+		"aim": step = "aim"
 		"attack": step = "attack"
 		"equip": step = "use"
 		"block": step = "block"
@@ -142,6 +176,9 @@ func _process(delta: float) -> void:
 		_deactivate()
 	elif active == "look" and float(_tc.get("look_total")) >= LOOK_DONE_PX:
 		_mark_done("look")
+		_deactivate()
+	elif active == "look_stick" and float(_tc.get("look_time")) >= LOOK_STICK_DONE_SECONDS:
+		_mark_done("look_stick")
 		_deactivate()
 	if active != "":
 		_shown_for += delta
@@ -186,12 +223,17 @@ func _enemy_within(dist: float) -> bool:
 
 func _choose_next() -> void:
 	var next: String = ""
+	var twin: bool = _twin()
 	if not is_done("move"):
 		next = "move"
-	elif not is_done("look"):
+	elif twin and not is_done("look_stick"):
+		next = "look_stick"
+	elif not twin and not is_done("look"):
 		next = "look"
 	elif not is_done("attack") and _enemy_within(22.0):
 		next = "attack"
+	elif twin and not is_done("aim") and is_done("attack") and _enemy_within(22.0):
+		next = "aim"
 	elif not is_done("use") and int(_tc.get("_use_context")) > 0:
 		next = "use"
 	elif not is_done("block") and is_done("attack") and _took_damage:
@@ -211,7 +253,7 @@ func _potions() -> int:
 func _activate(step: String) -> void:
 	active = step
 	_shown_for = 0.0
-	_label.text = TEXT[step]
+	_label.text = text_for(step)
 	_label.reset_size()   # shrink the plate to the new text
 	_count_show(step)
 	_set_highlight(step, true)
@@ -227,7 +269,7 @@ func _deactivate() -> void:
 func _set_highlight(step: String, on: bool) -> void:
 	var action: String = ""
 	match step:
-		"attack": action = "attack"
+		"attack", "aim": action = "attack"
 		"use": action = "equip"
 		"block": action = "block"
 		"burst": action = "AOE"
@@ -243,20 +285,55 @@ func _position_label() -> void:
 	if active == "" or _label == null:
 		return
 	var view: Vector2 = _tc.view_size()
-	var at: Vector2 = view * 0.5
+	var lo := Vector2(8, 8)
+	var hi: Vector2 = view - _label.size - Vector2(8, 8)
+	var half: Vector2 = _label.size * 0.5
+	var spots: Array[Vector2] = []
 	match active:
-		"move": at = _tc.stick_default + Vector2(0.0, -150.0)
-		"look": at = Vector2(view.x * 0.70, view.y * 0.30)
+		"move":
+			spots.append(_tc.stick_default + Vector2(0.0, -150.0))
+		"look":
+			# below the wallet list (top right), clear of USE when it is showing
+			spots.append(Vector2(view.x * 0.70, view.y * 0.40))
+			spots.append(Vector2(view.x * 0.55, view.y * 0.40))
+			spots.append(Vector2(view.x * 0.55, view.y * 0.30))
+			spots.append(Vector2(view.x * 0.45, view.y * 0.40))
+		"look_stick":
+			spots.append(_tc.look_default + Vector2(0.0, -150.0))
+			spots.append(Vector2(view.x * 0.55, view.y * 0.30))
 		_:
-			# Above the whole action cluster, so the hint never sits on a button the player must press.
+			# Above the whole action cluster, so the hint never sits on a button the player must press; if the
+			# first spot would touch any control (map button, arc) try the ones further left.
 			var top: float = view.y
-			var cx: float = view.x * 0.8
+			var left: float = view.x
 			for action in ["attack", "kick", "jump", "block", "AOE", "equip"]:
 				var b: TouchButton = _tc.buttons.get(action)
 				if b != null and b.visible:
 					top = minf(top, b.center.y - b.radius)
+					left = minf(left, b.center.x - b.radius)
 			var ref: TouchButton = _tc.buttons.get("attack")
+			var cx: float = _tc.view_size().x * 0.8
 			if ref != null:
 				cx = ref.center.x - 140.0
-			at = Vector2(cx, top - 24.0 - _label.size.y * 0.5)
-	_label.position = (at - Vector2(_label.size.x * 0.5, _label.size.y * 0.5)).clamp(Vector2(8, 8), view - _label.size - Vector2(8, 8))
+			var y: float = top - 24.0 - half.y
+			spots.append(Vector2(cx, y))
+			for f in [0.62, 0.5, 0.38]:
+				spots.append(Vector2(view.x * f, y))
+			spots.append(Vector2(left - 24.0 - half.x, view.y * 0.45))
+	var chosen: Vector2 = (spots[0] - half).clamp(lo, hi)
+	for at in spots:
+		var cand: Vector2 = (at - half).clamp(lo, hi)
+		if not _hits_control(Rect2(cand, _label.size)):
+			chosen = cand
+			break
+	_label.position = chosen
+
+
+## True when the rect touches any visible button (with a small margin).
+func _hits_control(rect: Rect2) -> bool:
+	var r := rect.grow(6.0)
+	for action in _tc.buttons:
+		var b: TouchButton = _tc.buttons[action]
+		if b.visible and r.intersects(Rect2(b.center - Vector2(b.radius, b.radius), Vector2(b.radius, b.radius) * 2.0)):
+			return true
+	return false

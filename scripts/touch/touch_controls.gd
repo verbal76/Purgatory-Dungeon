@@ -9,8 +9,21 @@
 #
 #     keyboard / gamepad / touch  ->  semantic actions  ->  gameplay
 #
-#   Layout (landscape, virtual 1280x720-ish canvas):
-#     left thumb   floating move stick          -> move_left/right/forward/back (analog strength)
+#   Two selectable control schemes (Options > Gameplay > Touch Controls, setting "TouchScheme"):
+#
+#   TWIN-STICK (default), landscape, virtual 1280x720-ish canvas:
+#     left thumb   floating move stick           -> move_left/right/forward/back (analog strength)
+#     right side   floating LOOK stick           -> continuous turn RATE (deflection = speed), fed to the
+#                  players as mouse-look motion once per physics frame (they need no change)
+#     lower right  big ATTACK button at the rim  -> attack (hold = charge, release = fire). A finger that
+#                  starts on ATTACK and drags becomes a look stick measured from the touch-down point, so
+#                  the player turns while attacking without lifting; the drag never releases/re-presses it.
+#     arc around   slide, kick, block (hold), burst (cooldown ring + potion count): subordinate buttons on a
+#     ATTACK       semicircle on its upper/left side, plus the contextual USE one ring further out
+#     top right    pause, map (toggle)
+#
+#   CLASSIC (exactly the original behaviour and layout):
+#     left thumb   floating move stick (as above)
 #     right side   swipe anywhere free to look  -> yaw, as mouse-look motion (the game has no pitch)
 #     lower right  ABXY-style cluster           -> attack (hold = charge), kick, slide, block (hold)
 #                  burst (potion blast, with cooldown + potion count), contextual USE
@@ -31,9 +44,13 @@ const GROUP := "touch_controls"
 const KEY_OPACITY := "TouchOpacity"
 const KEY_SCALE   := "TouchScale"
 const KEY_LOOK    := "TouchLookSens"
+const KEY_SCHEME  := "TouchScheme"
 const DEFAULT_OPACITY := 70.0
 const DEFAULT_SCALE   := 100.0
 const DEFAULT_LOOK    := 100.0
+const SCHEME_TWIN     := "twin"
+const SCHEME_CLASSIC  := "classic"
+const DEFAULT_SCHEME  := SCHEME_TWIN    # existing installs with no saved key get twin-stick
 
 const LOOK_BASE_GAIN  := 1.4     # virtual px of swipe -> "mouse pixels" for the players' mouse-look
 const STICK_RADIUS    := 100.0
@@ -42,12 +59,50 @@ const MIN_PRESS_MS    := 70      # a press shorter than this is stretched so pol
 const MARGIN_X        := 36.0    # keep clear of rounded corners / gesture edges
 const MARGIN_Y        := 28.0
 
+# ── Twin-stick look stick (all numbers in virtual px at 100% size unless stated) ─────────────────────────
+# Response: offset from the stick base / its radius = deflection d in 0..1. Inside LOOK_DEADZONE nothing
+# turns; outside it x = (d - dz) / (1 - dz) is stretched over 0..1 and shaped by x^LOOK_CURVE_EXP, so a
+# small push is a slow, precise aim and a full push is the maximum turn rate. Rates are physical
+# (radians per second at 100% Look Sensitivity) so they do not depend on the frame time.
+const LOOK_STICK_RADIUS := 90.0   # thumb travel for full deflection (the base follows the thumb past it)
+const LOOK_DEADZONE     := 0.12
+const LOOK_CURVE_EXP    := 1.7    # >1: fine control near the centre, fast turn at the rim
+const LOOK_MAX_YAW_RATE := 4.2    # rad/s at full deflection and 100% sensitivity (~240 deg/s)
+const LOOK_PITCH_RATIO  := 0.55   # pitch rate / yaw rate (the players have no pitch today and ignore it)
+const LOOK_MAX_STEP     := 0.1    # s: a hitch never turns the camera more than this much in one step
+# The players turn by `relative.x * mouse_sensitivity` (0.0025 rad per mouse px); the rate is expressed in
+# that unit so the same input path as the classic swipe is used.
+const LOOK_RAD_PER_MOUSE_PX := 0.0025
+
+# ── Twin-stick layout (virtual px at 100% size, before the shrink for short screens) ────────────────────
+const TWIN_ATTACK_R   := 100.0    # ATTACK radius: 200 px diameter (~19.8 mm at 480 dpi on a 720 px canvas)
+const TWIN_SUB_R      := 56.0     # slide / kick / block / burst radius (112 px, ~11 mm)
+const TWIN_USE_R      := 60.0     # contextual USE radius
+const TWIN_ATTACK_IN_X := 30.0    # ATTACK rim distance from the safe-area right edge
+const TWIN_ATTACK_IN_Y := 14.0    # ... and from the bottom edge (the right thumb's natural rest)
+const TWIN_ARC_R      := 178.0    # distance ATTACK centre -> subordinate centres
+const TWIN_ARC_GAP    := 8.0      # minimum clear px between neighbouring subordinate rims
+const TWIN_ARC_START  := 165.0    # degrees, screen space (0 = right, 90 = down): slide, lower left of ATTACK
+const TWIN_ARC_STEP   := 40.0     # degrees between neighbours: slide 165, kick 205, block 245, burst 285
+const TWIN_USE_ANGLE  := 225.0    # USE sits on a second ring, between kick and block
+const TWIN_USE_GAP    := 14.0
+const TWIN_REF_H      := 720.0    # canvas height the numbers above were drawn for
+const TWIN_MIN_SHRINK := 0.8      # shorter canvases shrink the cluster at most this much
+# Physical minimums (diameter in mm). px per mm = dpi / 25.4 * (virtual height / screen height).
+const ATTACK_MIN_MM   := 16.0
+const SUB_MIN_MM      := 9.0
+const FALLBACK_DPI    := 480.0    # Pixel-class panel when the OS reports nothing
+const FALLBACK_SCREEN_H := 1344.0 # Pixel 10 Pro XL panel height, used only when no screen size is known
+
 enum Owner { NONE, STICK, LOOK, BUTTON }
 
 var touch_enabled : bool = true
 var ui_scale      : float = 1.0
 var opacity       : float = 0.7
 var look_gain     : float = 1.0
+var scheme        : String = DEFAULT_SCHEME
+var dpi_override  : float = 0.0                                    # tests: pretend the panel has this dpi
+var screen_override : Vector2 = Vector2.ZERO                       # tests: pretend the panel has this many physical px
 var layout_override_insets : Vector4 = Vector4(-1, -1, -1, -1)   # tests: (left, top, right, bottom) virtual px
 var view_override : Vector2 = Vector2.ZERO                         # tests: pretend the screen is this size
 
@@ -55,6 +110,7 @@ var buttons : Dictionary = {}            # action name -> TouchButton
 var stick_zone : Rect2 = Rect2()
 var look_zone  : Rect2 = Rect2()
 var stick_default : Vector2 = Vector2.ZERO
+var look_default  : Vector2 = Vector2.ZERO   # idle marker of the look stick (twin scheme)
 var onboarding : Node = null
 
 var _root : Control = null
@@ -62,6 +118,15 @@ var _stick_base : Vector2 = Vector2.ZERO
 var _stick_vec  : Vector2 = Vector2.ZERO
 var _stick_active : bool = false
 var _stick_draw : Control = null
+var _overlay_draw : Control = null       # above the buttons: the drag ring of an ATTACK drag
+var _look_base : Vector2 = Vector2.ZERO  # twin: look stick base (follows the thumb past the radius)
+var _look_vec  : Vector2 = Vector2.ZERO  # offset / radius, length up to 1
+var _look_index : int = -1               # finger driving the look stick (-1: none)
+var _atk_index : int = -1                # finger that went down on ATTACK (-1: none)
+var _atk_origin : Vector2 = Vector2.ZERO # where that finger touched down (the drag is measured from here)
+var _atk_vec : Vector2 = Vector2.ZERO
+var _atk_aimed : bool = false            # the ATTACK finger has dragged out of the dead zone at least once
+var _look_cmd : Vector2 = Vector2.ZERO   # combined, curved look command (length <= 1), applied each physics frame
 var _owners : Dictionary = {}            # finger index -> {"kind": Owner, "button": String}
 var _held : Dictionary = {}              # action -> strength currently pressed through us
 var _press_ms : Dictionary = {}          # action -> time pressed (for MIN_PRESS_MS)
@@ -73,6 +138,7 @@ var _status_poll : float = 0.0
 var _last_view : Vector2 = Vector2.ZERO
 var look_total : float = 0.0             # cumulative virtual px swiped (onboarding)
 var move_time : float = 0.0              # seconds the stick has been held out (onboarding)
+var look_time : float = 0.0              # seconds the look stick / attack drag has been held out (onboarding)
 
 
 ## True on phones (and when forced for desktop testing with PURGATORY_FORCE_TOUCH=1).
@@ -108,29 +174,48 @@ static func insets_from_safe_area(screen: Vector2, safe: Rect2, view: Vector2) -
 		maxf(screen.y - (safe.position.y + safe.size.y), 0.0) * f.y)
 
 
+## "classic" or "twin" from any stored value (anything unknown, including a missing key, is twin-stick).
+static func scheme_from(v: Variant) -> String:
+	return SCHEME_CLASSIC if str(v).strip_edges().to_lower() == SCHEME_CLASSIC else SCHEME_TWIN
+
+
+## Virtual px per millimetre: the panel's dpi, scaled by how much the canvas is shrunk to fit the screen
+## (virtual height / screen height). dpi <= 0 means unknown -> a Pixel-class 480 dpi panel.
+static func px_per_mm(view: Vector2, screen: Vector2, dpi: float) -> float:
+	var d: float = dpi if dpi > 0.0 else FALLBACK_DPI
+	var sh: float = screen.y if screen.y > 0.0 else FALLBACK_SCREEN_H
+	return d / 25.4 * (view.y / sh)
+
+
+## Look-stick response for a stick offset (offset / radius, any length): dead zone, then x^LOOK_CURVE_EXP
+## over the remaining travel. Returns a vector in the same direction with length 0..1 (1 = full rate).
+static func look_response(v: Vector2) -> Vector2:
+	var mag: float = v.length()
+	if mag <= LOOK_DEADZONE:
+		return Vector2.ZERO
+	var x: float = (minf(mag, 1.0) - LOOK_DEADZONE) / (1.0 - LOOK_DEADZONE)
+	return v / mag * pow(x, LOOK_CURVE_EXP)
+
+
+## Turn rates (yaw, pitch) in rad/s for a look command (output of look_response) at a sensitivity factor.
+static func look_rates(cmd: Vector2, sensitivity: float) -> Vector2:
+	return Vector2(cmd.x * LOOK_MAX_YAW_RATE, cmd.y * LOOK_MAX_YAW_RATE * LOOK_PITCH_RATIO) * sensitivity
+
+
 ## Button centres/radii and touch zones for a view size, safe insets (l,t,r,b) and UI scale.
-static func compute_layout(view: Vector2, insets: Vector4, s: float) -> Dictionary:
+## `p_scheme` picks the layout (the classic one is the original, untouched); `ppmm` is virtual px per mm
+## (<= 0: derive it from the 480 dpi Pixel fallback) and only the twin layout uses it, for its minimum sizes.
+static func compute_layout(view: Vector2, insets: Vector4, s: float, p_scheme: String = SCHEME_CLASSIC, ppmm: float = 0.0) -> Dictionary:
 	var l: float = insets.x + MARGIN_X
 	var t: float = insets.y + MARGIN_Y
 	var r: float = view.x - insets.z - MARGIN_X
 	var b: float = view.y - insets.w - MARGIN_Y
-	var cluster := Vector2(r - 184.0 * s, b - 176.0 * s)
-	var out := {
-		"safe": Rect2(l, t, r - l, b - t),
-		"buttons": {
-			"attack": [cluster + Vector2(0.0, 92.0) * s, 84.0 * s],
-			"kick":   [cluster + Vector2(122.0, 0.0) * s, 62.0 * s],
-			"jump":   [cluster + Vector2(-122.0, -4.0) * s, 62.0 * s],   # "Slide (Evade)"
-			"block":  [cluster + Vector2(0.0, -98.0) * s, 62.0 * s],
-			"AOE":    [cluster + Vector2(-252.0, 62.0) * s, 58.0 * s],
-			"equip":  [cluster + Vector2(-172.0, -228.0) * s, 74.0 * s],
-			"ui_menu": [Vector2(r - 40.0 * s, t + 112.0 * s), 38.0 * s],
-			"minimap": [Vector2(r - 40.0 * s, t + 112.0 * s + 100.0 * s), 38.0 * s],
-		},
-		"stick_default": Vector2(l + 168.0 * s, b - 150.0 * s),
-		"stick_zone": Rect2(0.0, view.y * 0.28, view.x * 0.40, view.y * 0.72),
-		"look_zone": Rect2(view.x * 0.40, 0.0, view.x * 0.60, view.y),
-	}
+	var out: Dictionary
+	if p_scheme == SCHEME_TWIN:
+		var mm: float = ppmm if ppmm > 0.0 else px_per_mm(view, Vector2(0.0, FALLBACK_SCREEN_H), FALLBACK_DPI)
+		out = _layout_twin(view, l, t, r, b, s, mm)
+	else:
+		out = _layout_classic(view, l, t, r, b, s)
 	# Large UI scales must never push a button off the usable area: clamp every centre inside it.
 	var safe: Rect2 = out["safe"]
 	for name in out["buttons"]:
@@ -143,6 +228,66 @@ static func compute_layout(view: Vector2, insets: Vector4, s: float) -> Dictiona
 	return out
 
 
+static func _layout_classic(view: Vector2, l: float, t: float, r: float, b: float, s: float) -> Dictionary:
+	var cluster := Vector2(r - 184.0 * s, b - 176.0 * s)
+	return {
+		"safe": Rect2(l, t, r - l, b - t),
+		"buttons": {
+			"attack": [cluster + Vector2(0.0, 92.0) * s, 84.0 * s],
+			"kick":   [cluster + Vector2(122.0, 0.0) * s, 62.0 * s],
+			"jump":   [cluster + Vector2(-122.0, -4.0) * s, 62.0 * s],   # "Slide (Evade)"
+			"block":  [cluster + Vector2(0.0, -98.0) * s, 62.0 * s],
+			"AOE":    [cluster + Vector2(-252.0, 62.0) * s, 58.0 * s],
+			"equip":  [cluster + Vector2(-172.0, -228.0) * s, 74.0 * s],
+			"ui_menu": [Vector2(r - 40.0 * s, t + 112.0 * s), 38.0 * s],
+			"minimap": [Vector2(r - 40.0 * s, t + 112.0 * s + 100.0 * s), 38.0 * s],
+		},
+		"stick_default": Vector2(l + 168.0 * s, b - 150.0 * s),
+		"look_default": Vector2(view.x * 0.70, view.y * 0.50),
+		"stick_zone": Rect2(0.0, view.y * 0.28, view.x * 0.40, view.y * 0.72),
+		"look_zone": Rect2(view.x * 0.40, 0.0, view.x * 0.60, view.y),
+	}
+
+
+## Twin-stick layout. ATTACK sits at the lower-right rim; slide, kick, block and burst are spaced
+## TWIN_ARC_STEP degrees apart on a semicircle of radius TWIN_ARC_R around it (upper/left side, so the right
+## thumb hops to them without crossing the move stick); USE sits on a second ring. Sizes are floored by the
+## physical minimums (ATTACK_MIN_MM / SUB_MIN_MM) and the arc radius grows when needed so that neither ATTACK
+## and the arc nor neighbouring arc buttons can overlap.
+static func _layout_twin(view: Vector2, l: float, t: float, r: float, b: float, s: float, ppmm: float) -> Dictionary:
+	var k: float = s * clampf(view.y / TWIN_REF_H, TWIN_MIN_SHRINK, 1.0)
+	var ra: float = maxf(TWIN_ATTACK_R * k, ATTACK_MIN_MM * 0.5 * ppmm)
+	var rs: float = maxf(TWIN_SUB_R * k, SUB_MIN_MM * 0.5 * ppmm)
+	var ru: float = maxf(TWIN_USE_R * k, SUB_MIN_MM * 0.5 * ppmm)
+	var c := Vector2(r - ra - TWIN_ATTACK_IN_X * k, b - ra - TWIN_ATTACK_IN_Y * k)
+	var chord_r: float = (2.0 * rs + TWIN_ARC_GAP * k) / (2.0 * sin(deg_to_rad(TWIN_ARC_STEP) * 0.5))
+	var arc: float = maxf(maxf(TWIN_ARC_R * k, ra + rs + TWIN_ARC_GAP * k), chord_r)
+	var spots: Dictionary = {}
+	var order: Array[String] = ["jump", "kick", "block", "AOE"]
+	for i in order.size():
+		var a: float = deg_to_rad(TWIN_ARC_START + TWIN_ARC_STEP * float(i))
+		spots[order[i]] = [c + Vector2(cos(a), sin(a)) * arc, rs]
+	var ua: float = deg_to_rad(TWIN_USE_ANGLE)
+	var ur: float = arc + rs + ru + TWIN_USE_GAP * k
+	spots["equip"] = [c + Vector2(cos(ua), sin(ua)) * ur, ru]
+	spots["attack"] = [c, ra]
+	spots["ui_menu"] = [Vector2(r - 40.0 * s, t + 112.0 * s), 38.0 * s]
+	spots["minimap"] = [Vector2(r - 40.0 * s, t + 112.0 * s + 100.0 * s), 38.0 * s]
+	var stick_def := Vector2(l + 168.0 * s, b - 150.0 * s)
+	# Idle look-stick marker: left of the whole cluster at the move stick's height, never on top of the move marker.
+	var lr: float = LOOK_STICK_RADIUS * s
+	var cluster_left: float = c.x - ur * absf(cos(ua)) - ru
+	var look_x: float = clampf(cluster_left - 24.0 * s - lr, stick_def.x + 2.0 * lr + 16.0 * s, view.x * 0.62)
+	return {
+		"safe": Rect2(l, t, r - l, b - t),
+		"buttons": spots,
+		"stick_default": stick_def,
+		"look_default": Vector2(look_x, stick_def.y),
+		"stick_zone": Rect2(0.0, view.y * 0.28, view.x * 0.40, view.y * 0.72),
+		"look_zone": Rect2(view.x * 0.40, 0.0, view.x * 0.60, view.y),
+	}
+
+
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 func _ready() -> void:
@@ -150,6 +295,7 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS   # must notice pause / focus loss to release inputs
 	add_to_group(GROUP)
 	add_to_group(MobileUi.GROUP_OPT_OUT)
+	scheme = _stored_scheme()
 	_apply_settings()
 	_strip_mouse_bindings()
 
@@ -175,6 +321,13 @@ func _ready() -> void:
 	_make_button("ui_menu", "pause", "", TouchButton.Mode.HOLD)
 	_make_button("minimap", "map", "", TouchButton.Mode.TOGGLE)
 	buttons["equip"].visible = false
+
+	_overlay_draw = Control.new()
+	_overlay_draw.name = "DragRing"
+	_overlay_draw.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_overlay_draw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_overlay_draw.draw.connect(_draw_overlay)
+	_root.add_child(_overlay_draw)
 
 	var ob_script := load("res://scripts/touch/touch_onboarding.gd")
 	if ob_script != null:
@@ -235,6 +388,41 @@ func _apply_settings() -> void:
 	look_gain = clampf(_setting(KEY_LOOK, DEFAULT_LOOK) / 100.0, 0.2, 3.0)
 
 
+func _stored_scheme() -> String:
+	if has_node("/root/SettingsManager"):
+		return scheme_from(SettingsManager.gameplay_settings.get(KEY_SCHEME, DEFAULT_SCHEME))
+	return DEFAULT_SCHEME
+
+
+func is_twin() -> bool:
+	return scheme == SCHEME_TWIN
+
+
+## Switches the scheme now (Options does it through the setting, which the poll below picks up): every
+## finger and held action is let go, the buttons are re-laid out and the hints follow the new scheme.
+func set_scheme(p_scheme: String) -> void:
+	var want: String = scheme_from(p_scheme)
+	if want == scheme:
+		return
+	release_all()
+	scheme = want
+	_relayout()
+	if onboarding != null and onboarding.has_method("on_scheme_changed"):
+		onboarding.on_scheme_changed()
+
+
+## Virtual px per mm on this device (see px_per_mm).
+func device_px_per_mm() -> float:
+	var screen: Vector2 = screen_override
+	if screen.y <= 0.0 and get_window() != null:
+		screen = Vector2(get_window().size)
+	if screen.y <= 0.0:
+		screen = Vector2(DisplayServer.screen_get_size())
+	screen.y = maxf(screen.y, view_size().y)   # a panel is never smaller than the canvas drawn on it (tiny headless windows)
+	var dpi: float = dpi_override if dpi_override > 0.0 else float(DisplayServer.screen_get_dpi())
+	return px_per_mm(view_size(), screen, dpi)
+
+
 func _setting(key: String, default_value: float) -> float:
 	if has_node("/root/SettingsManager"):
 		return SettingsManager.get_setting(key, default_value)
@@ -258,17 +446,20 @@ func _relayout() -> void:
 		insets = layout_override_insets
 	else:
 		insets = insets_from_safe_area(Vector2(DisplayServer.screen_get_size()), Rect2(DisplayServer.get_display_safe_area()), view)
-	var lay: Dictionary = compute_layout(view, insets, ui_scale)
+	var lay: Dictionary = compute_layout(view, insets, ui_scale, scheme, device_px_per_mm())
 	for action in lay["buttons"]:
 		var spec: Array = lay["buttons"][action]
 		if buttons.has(action):
 			(buttons[action] as TouchButton).place(spec[0], spec[1])
 	stick_default = lay["stick_default"]
+	look_default = lay["look_default"]
 	stick_zone = lay["stick_zone"]
 	look_zone = lay["look_zone"]
 	_root.modulate.a = opacity
 	if _stick_draw != null:
 		_stick_draw.queue_redraw()
+	if _overlay_draw != null:
+		_overlay_draw.queue_redraw()
 
 
 # ── Per-frame housekeeping ────────────────────────────────────────────────────
@@ -280,6 +471,7 @@ func _process(delta: float) -> void:
 	if paused:
 		if not _held.is_empty() or not _owners.is_empty():
 			release_all()
+		_poll_settings(delta)   # Options opened from the pause menu: the layer is ready when the game resumes
 		return
 	# Deferred releases for very short taps.
 	if not _pending_release.is_empty():
@@ -290,19 +482,46 @@ func _process(delta: float) -> void:
 				_send(action, false, 0.0)
 	if _stick_active and _stick_vec.length() > STICK_DEADZONE:
 		move_time += delta
-	_settings_poll += delta
-	if _settings_poll >= 0.5:
-		_settings_poll = 0.0
-		var o := opacity
-		var sc := ui_scale
-		_apply_settings()
-		if not is_equal_approx(o, opacity) or not is_equal_approx(sc, ui_scale) \
-				or view_size() != _last_view:
-			_relayout()
+	_poll_settings(delta)
 	_status_poll += delta
 	if _status_poll >= 0.1:
 		_status_poll = 0.0
 		_refresh_button_status()
+
+
+# Settings are polled twice a second (opacity, size, sensitivity, scheme): cheap, and no signal plumbing.
+func _poll_settings(delta: float) -> void:
+	_settings_poll += delta
+	if _settings_poll < 0.5:
+		return
+	_settings_poll = 0.0
+	var o := opacity
+	var sc := ui_scale
+	_apply_settings()
+	var scheme_changed: bool = _stored_scheme() != scheme
+	if scheme_changed:
+		set_scheme(_stored_scheme())   # releases, re-lays out
+	elif not is_equal_approx(o, opacity) or not is_equal_approx(sc, ui_scale) or view_size() != _last_view:
+		_relayout()
+
+
+## Twin look stick / ATTACK drag: one look event per physics frame, a turn RATE (not a distance), so the
+## result does not depend on the frame time. Fed through the same mouse-motion path the classic swipe uses.
+func _physics_process(delta: float) -> void:
+	if _look_cmd == Vector2.ZERO or get_tree().paused or not touch_enabled:
+		return
+	look_step(delta)
+
+
+## Applies one look step of `delta` seconds from the current look command; returns the mouse-motion px sent.
+func look_step(delta: float) -> Vector2:
+	if _look_cmd == Vector2.ZERO:
+		return Vector2.ZERO
+	var dt: float = minf(delta, LOOK_MAX_STEP)
+	look_time += dt
+	var px: Vector2 = look_rates(_look_cmd, look_gain) / LOOK_RAD_PER_MOUSE_PX * dt
+	_emit_mouse_motion(px)
+	return px
 
 
 # Burst cooldown ring + potion count from the live player and wallet.
@@ -390,12 +609,21 @@ func _nearest_button(p: Vector2) -> TouchButton:
 	return best
 
 
+# Ownership: every finger is owned by exactly ONE thing from touch-down to touch-up, so fingers never
+# cross-talk. Buttons win (a touch on a button is that button); otherwise the left lower zone is the
+# move stick and the right zone is the look stick (twin) / a swipe (classic). A finger that starts on ATTACK
+# in the twin scheme stays a BUTTON finger and additionally measures a look drag from its touch-down point.
 func _touch_down(index: int, p: Vector2) -> void:
 	if _owners.has(index):
 		return
 	var b := _nearest_button(p)
 	if b != null:
 		_owners[index] = {"kind": Owner.BUTTON, "button": b.action}
+		if is_twin() and b.action == "attack" and _atk_index < 0:
+			_atk_index = index
+			_atk_origin = p
+			_atk_vec = Vector2.ZERO
+			_atk_aimed = false
 		_button_down(b)
 		return
 	if stick_zone.has_point(p) and not _stick_active:
@@ -405,7 +633,18 @@ func _touch_down(index: int, p: Vector2) -> void:
 		_stick_vec = Vector2.ZERO
 		_stick_draw.queue_redraw()
 		return
-	_owners[index] = {"kind": Owner.LOOK}
+	if not is_twin():
+		_owners[index] = {"kind": Owner.LOOK}
+		return
+	if look_zone.has_point(p) and _look_index < 0:
+		_owners[index] = {"kind": Owner.LOOK}
+		_look_index = index
+		_look_base = p
+		_look_vec = Vector2.ZERO
+		_update_look_cmd()
+		_stick_draw.queue_redraw()
+		return
+	_owners[index] = {"kind": Owner.NONE}   # a stray extra finger: owned (so it cannot turn into anything later), does nothing
 
 
 func _touch_move(index: int, p: Vector2, rel: Vector2) -> void:
@@ -424,7 +663,40 @@ func _touch_move(index: int, p: Vector2, rel: Vector2) -> void:
 			_apply_stick()
 			_stick_draw.queue_redraw()
 		Owner.LOOK:
-			_look(rel)
+			if is_twin():
+				_look_base = _follow(_look_base, p)
+				_look_vec = (p - _look_base) / (LOOK_STICK_RADIUS * ui_scale)
+				_update_look_cmd()
+				_stick_draw.queue_redraw()
+			else:
+				_look(rel)
+		Owner.BUTTON:
+			if index == _atk_index:
+				_atk_origin = _follow(_atk_origin, p)
+				_atk_vec = (p - _atk_origin) / (LOOK_STICK_RADIUS * ui_scale)
+				if not _atk_aimed and _atk_vec.length() > LOOK_DEADZONE:
+					_atk_aimed = true
+					action_performed.emit("aim")   # the onboarding "drag from Attack to aim" hint completes on this
+				_update_look_cmd()
+				_overlay_draw.queue_redraw()
+
+
+## Floating base: stays put while the finger is within the look radius, then trails it at exactly that radius.
+func _follow(base: Vector2, p: Vector2) -> Vector2:
+	var radius: float = LOOK_STICK_RADIUS * ui_scale
+	var d: Vector2 = p - base
+	if d.length() > radius:
+		return p - d.normalized() * radius
+	return base
+
+
+## Combines the look stick and the ATTACK drag (normally only one is live) into the command applied each
+## physics frame: both responses added, limited to full deflection.
+func _update_look_cmd() -> void:
+	var c: Vector2 = look_response(_look_vec) + look_response(_atk_vec)
+	if c.length() > 1.0:
+		c = c.normalized()
+	_look_cmd = c
 
 
 func _touch_up(index: int) -> void:
@@ -438,7 +710,19 @@ func _touch_up(index: int) -> void:
 			_stick_vec = Vector2.ZERO
 			_apply_stick()
 			_stick_draw.queue_redraw()
+		Owner.LOOK:
+			if index == _look_index:
+				_look_index = -1
+				_look_vec = Vector2.ZERO
+				_update_look_cmd()
+				_stick_draw.queue_redraw()
 		Owner.BUTTON:
+			if index == _atk_index:
+				_atk_index = -1
+				_atk_vec = Vector2.ZERO
+				_atk_aimed = false
+				_update_look_cmd()   # releasing ATTACK ends the drag: the turn stops, the attack releases below
+				_overlay_draw.queue_redraw()
 			var b: TouchButton = buttons.get(o["button"])
 			if b != null:
 				_button_up(b)
@@ -488,9 +772,14 @@ func _send_axis(action: String, strength: float) -> void:
 
 func _look(rel: Vector2) -> void:
 	look_total += rel.length()
+	_emit_mouse_motion(rel * LOOK_BASE_GAIN * look_gain)
+
+
+## One mouse-look motion event: the single path both schemes use to turn the players.
+func _emit_mouse_motion(px: Vector2) -> void:
 	var ev := InputEventMouseMotion.new()
 	ev.device = 0   # a real-mouse-like event; touch-emulated mouse motion (device -1) is ignored by the players
-	ev.relative = rel * LOOK_BASE_GAIN * look_gain
+	ev.relative = px
 	ev.position = view_size() * 0.5
 	Input.parse_input_event(ev)
 
@@ -521,6 +810,12 @@ func release_all() -> void:
 	_pending_release.clear()
 	_stick_active = false
 	_stick_vec = Vector2.ZERO
+	_look_index = -1
+	_look_vec = Vector2.ZERO
+	_atk_index = -1
+	_atk_vec = Vector2.ZERO
+	_atk_aimed = false
+	_look_cmd = Vector2.ZERO   # nothing keeps turning after a background / lock / pause
 	for action in _held.keys():
 		var ev := InputEventAction.new()
 		ev.action = action
@@ -536,6 +831,8 @@ func release_all() -> void:
 		b.queue_redraw()
 	if _stick_draw != null:
 		_stick_draw.queue_redraw()
+	if _overlay_draw != null:
+		_overlay_draw.queue_redraw()
 	released_all.emit()
 
 
@@ -544,18 +841,40 @@ func release_all() -> void:
 const STICK_IDLE_ALPHA := 0.62   # resting joystick: faint but always findable (the opacity setting scales it further)
 
 
-## Floating stick: a dark radial well with a faint iron rim and a bone/iron thumb. Cached textures only;
-## redrawn when the stick state changes, never per frame.
+## Floating sticks: a dark radial well with a faint iron rim and a bone/iron thumb. Cached textures only;
+## redrawn when a stick changes, never per frame. The look stick (twin scheme) uses the same language as the move
+## stick, always visible at rest (idle alpha) so the player can find it, ember-rimmed while held.
 func _draw_stick() -> void:
-	var radius: float = STICK_RADIUS * ui_scale
-	var base: Vector2 = _stick_base if _stick_active else stick_default
-	var a: float = 1.0 if _stick_active else STICK_IDLE_ALPHA
+	_draw_one_stick(_stick_base if _stick_active else stick_default, _stick_vec, STICK_RADIUS * ui_scale, _stick_active)
+	if is_twin():
+		var live: bool = _look_index >= 0
+		_draw_one_stick(_look_base if live else look_default, _look_vec, LOOK_STICK_RADIUS * ui_scale, live)
+
+
+func _draw_one_stick(base: Vector2, vec: Vector2, radius: float, active: bool) -> void:
+	var a: float = 1.0 if active else STICK_IDLE_ALPHA
 	var tint := Color(1, 1, 1, a)
 	_stick_draw.draw_texture_rect(TouchButton.stick_base_texture(), Rect2(base - Vector2(radius, radius), Vector2(radius, radius) * 2.0), false, tint)
 	_stick_draw.draw_arc(base, radius - 1.5, 0.0, TAU, 56, Color(PUI.EDGE.lightened(0.2), a), 3.0, true)
 	_stick_draw.draw_arc(base, radius - 4.0, PI * 1.08, PI * 1.62, 20, Color(PUI.EDGE_BRASS.r, PUI.EDGE_BRASS.g, PUI.EDGE_BRASS.b, 0.55 * a), 1.5, true)
 	var kr: float = radius * 0.42
-	var knob: Vector2 = base + _stick_vec * radius
+	var knob: Vector2 = base + vec.limit_length(1.0) * radius
 	_stick_draw.draw_texture_rect(TouchButton.stick_knob_texture(), Rect2(knob - Vector2(kr, kr), Vector2(kr, kr) * 2.0), false, tint)
-	var ring: Color = PUI.EMBER if _stick_active else PUI.EDGE_BRASS
+	var ring: Color = PUI.EMBER if active else PUI.EDGE_BRASS
 	_stick_draw.draw_arc(knob, kr - 1.5, 0.0, TAU, 40, Color(ring.r, ring.g, ring.b, a), 3.0, true)
+
+
+## Drag ring of a finger that went down on ATTACK and is aiming: a faint ember ring around the touch-down
+## point and a small thumb dot (above the buttons, so ATTACK does not hide it). Nothing while it is not dragging.
+func _draw_overlay() -> void:
+	if _atk_index < 0 or _atk_vec.length() <= LOOK_DEADZONE * 0.5:
+		return
+	var radius: float = LOOK_STICK_RADIUS * ui_scale
+	var ring := PUI.EMBER
+	var dot: Vector2 = _atk_origin + _atk_vec.limit_length(1.0) * radius
+	_overlay_draw.draw_arc(_atk_origin, radius, 0.0, TAU, 48, Color(0, 0, 0, 0.35), 5.0, true)
+	_overlay_draw.draw_arc(_atk_origin, radius, 0.0, TAU, 48, Color(ring.r, ring.g, ring.b, 0.6), 3.0, true)
+	_overlay_draw.draw_line(_atk_origin, dot, Color(ring.r, ring.g, ring.b, 0.5), 3.0, true)
+	_overlay_draw.draw_circle(_atk_origin, 5.0 * ui_scale, Color(ring.r, ring.g, ring.b, 0.6))
+	_overlay_draw.draw_circle(dot, 13.0 * ui_scale, Color(ring.r, ring.g, ring.b, 0.65))
+	_overlay_draw.draw_arc(dot, 13.0 * ui_scale, 0.0, TAU, 20, Color(PUI.EMBER_BRIGHT.r, PUI.EMBER_BRIGHT.g, PUI.EMBER_BRIGHT.b, 0.95), 2.5, true)

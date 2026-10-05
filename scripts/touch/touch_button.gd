@@ -23,6 +23,9 @@ enum Mode { HOLD, TOGGLE }
 enum Tier { COMBAT, PRIMARY, CONTEXT, QUIET }
 
 const RIM_SEGMENTS := 56
+# Typography rule: short labels (USE / OPEN, the potion count) are Cinzel; 16 px is the smallest caption.
+# TODO: switch to PUI.MIN_DISPLAY_SIZE once the typography branch lands (it is the same 16).
+const CAPTION_MIN_FS := 16
 
 var action    : String = ""
 var icon_kind : String = ""
@@ -230,8 +233,8 @@ func _draw() -> void:
 
 
 func _draw_label(c: Vector2, r: float) -> void:
-	var font: Font = PUI.font("body_semi")
-	var fs: int = int(maxf(r * 0.27, 14.0))
+	var font: Font = PUI.font("display_semi")
+	var fs: int = int(maxf(r * 0.27, float(CAPTION_MIN_FS)))
 	var key := "%s|%d" % [label, fs]
 	if key != _label_key:
 		_label_key = key
@@ -243,7 +246,7 @@ func _draw_label(c: Vector2, r: float) -> void:
 
 
 func _draw_badge(c: Vector2, r: float) -> void:
-	var font: Font = PUI.font("body_bold")
+	var font: Font = PUI.font("display_bold")
 	var br: float = r * 0.26
 	var bp: Vector2 = c + Vector2(r * 0.62, -r * 0.62)
 	var key := "%s|%.1f" % [badge, r]
