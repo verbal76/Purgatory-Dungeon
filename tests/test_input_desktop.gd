@@ -91,6 +91,20 @@ func _ready() -> void:
 	im.current_scheme = im.Scheme.KEYBOARD
 	_check(im.glyph("equip") == "E" and im.glyph("kick") == "F", "keyboard prompts name keys")
 
+	# The touch control scheme is a phone-only setting: whichever value is saved, the desktop gets no layer, no
+	# selector in Options, and keeps its mouse look / click bindings.
+	for scheme in ["twin", "classic"]:
+		SettingsManager.gameplay_settings[TouchControls.KEY_SCHEME] = scheme
+		_check(TouchControls.install(self) == null and get_tree().get_first_node_in_group(TouchControls.GROUP) == null, "desktop: no touch layer with scheme '%s'" % scheme)
+		_check(_has_mouse("attack", MOUSE_BUTTON_LEFT) and _has_mouse("block", MOUSE_BUTTON_RIGHT) and _has_key("move_forward", KEY_W), "desktop: mouse and keyboard bindings unchanged with scheme '%s'" % scheme)
+	var opts := (load("res://scenes/OptionsScreen.tscn") as PackedScene).instantiate()
+	add_child(opts)
+	for i in 6:
+		await get_tree().process_frame
+	_check(opts.find_child("Scheme_twin", true, false) == null and opts.find_child("Scheme_classic", true, false) == null, "desktop Options has no touch control scheme selector")
+	opts.queue_free()
+	SettingsManager.gameplay_settings[TouchControls.KEY_SCHEME] = TouchControls.DEFAULT_SCHEME
+
 	# Window modes still apply on desktop (not gated away).
 	_check(not (OS.has_feature("mobile") or TouchControls.is_touch_platform()), "window-mode code is active on desktop")
 
