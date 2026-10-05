@@ -13,6 +13,7 @@ var fill_top: Color = PUI.BLOOD_BRIGHT
 var fill_bottom: Color = PUI.BLOOD
 var value: float = 1.0
 var _trail: float = 1.0
+static var _frame_style: StyleBoxFlat = null   # shared: _draw must not allocate
 
 
 static func make(p_size: Vector2, p_fill: Color = PUI.BLOOD_BRIGHT) -> PUIBar:
@@ -23,6 +24,13 @@ static func make(p_size: Vector2, p_fill: Color = PUI.BLOOD_BRIGHT) -> PUIBar:
 	b.fill_bottom = p_fill.darkened(0.35)
 	b.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return b
+
+
+## Re-colour the lit fill (state changes only: ability ready / charging / cooling down).
+func set_fill(p_fill: Color, p_bottom: Color = Color(0, 0, 0, 0)) -> void:
+	fill_top = p_fill
+	fill_bottom = p_bottom if p_bottom.a > 0.0 else p_fill.darkened(0.35)
+	queue_redraw()
 
 
 func set_value(v: float) -> void:
@@ -49,7 +57,9 @@ func _process(delta: float) -> void:
 
 func _draw() -> void:
 	var r := Rect2(Vector2.ZERO, size)
-	draw_style_box(PUI.flat(PUI.IRON_DEEP, PUI.EDGE_BRASS.darkened(0.2), 2, 3), r)
+	if _frame_style == null:
+		_frame_style = PUI.flat(PUI.IRON_DEEP, PUI.EDGE_BRASS.darkened(0.2), 2, 3)
+	draw_style_box(_frame_style, r)
 	var inner := r.grow(-3.0)
 	if _trail > value:
 		draw_rect(Rect2(inner.position, Vector2(inner.size.x * _trail, inner.size.y)), Color(PUI.BONE.r, PUI.BONE.g, PUI.BONE.b, 0.30))

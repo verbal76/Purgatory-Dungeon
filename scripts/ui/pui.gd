@@ -46,6 +46,11 @@ const INK           := Color("1a1008")   # text on parchment
 const INK_DIM       := Color("4a3a25")   # secondary text on parchment
 const SCRIM         := Color(0.04, 0.03, 0.03, 0.62)   # veil over the dungeon behind menus
 
+# Key metals: the one documented triple that tints the "key" icon for bronze / silver / gold keys (HUD, Alchemist).
+const KEY_BRONZE    := Color("b0723a")
+const KEY_SILVER    := Color("b9c0c6")
+const KEY_GOLD      := Color("e0b84a")
+
 # ── Spacing / size tokens (virtual px; multiples of 4) ───────────────────────────────────────
 const S1 := 4
 const S2 := 8
@@ -135,6 +140,15 @@ static func color(role_name: String) -> Color:
 		"BLOOD_BRIGHT": return BLOOD_BRIGHT
 		"INK": return INK
 		"INK_DIM": return INK_DIM
+	return BONE
+
+
+## Tint for a key metal: "bronze" | "silver" | "gold" (anything else falls back to bone).
+static func key_tint(metal: String) -> Color:
+	match metal:
+		"bronze": return KEY_BRONZE
+		"silver": return KEY_SILVER
+		"gold": return KEY_GOLD
 	return BONE
 
 
