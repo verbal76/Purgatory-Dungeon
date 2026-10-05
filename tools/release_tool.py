@@ -45,6 +45,12 @@ def check(tag: str = "") -> int:
         got = _grab(PRESETS, rf'^application/{key}="([^"]*)"')
         if got != f"{v}.0.0.0":
             problems.append(f'export_presets.cfg application/{key} is "{got}", expected "{v}.0.0.0"')
+    code = _grab(PRESETS, r'^version/code=(\d+)')
+    name = _grab(PRESETS, r'^version/name="([^"]*)"')
+    if code != str(v):
+        problems.append(f"export_presets.cfg Android version/code is {code!r}, expected {v} (versionCode rises with the public version)")
+    if name != str(v):
+        problems.append(f'export_presets.cfg Android version/name is "{name}", expected "{v}"')
     for rel, needle in (("docs/RELEASES.md", "Purgatory Dungeon v"), ("CLAUDE.md", "docs/RELEASES.md")):
         path = os.path.join(ROOT, rel)
         if not os.path.isfile(path) or needle not in open(path, encoding="utf-8").read():
@@ -65,7 +71,10 @@ def set_version(n: int) -> None:
     for path, pairs in (
         (PROJECT, [(r'^(config/version=")[^"]*(")', f"\\g<1>{n}\\g<2>")]),
         (PRESETS, [(r'^(application/file_version=")[^"]*(")', f"\\g<1>{n}.0.0.0\\g<2>"),
-                   (r'^(application/product_version=")[^"]*(")', f"\\g<1>{n}.0.0.0\\g<2>")]),
+                   (r'^(application/product_version=")[^"]*(")', f"\\g<1>{n}.0.0.0\\g<2>"),
+                   # Android: versionName = the public number; versionCode rises with it (monotonic).
+                   (r'^(version/code=)\d+', f"\\g<1>{n}"),
+                   (r'^(version/name=")[^"]*(")', f"\\g<1>{n}\\g<2>")]),
     ):
         s = open(path, encoding="utf-8").read()
         for pat, rep in pairs:
