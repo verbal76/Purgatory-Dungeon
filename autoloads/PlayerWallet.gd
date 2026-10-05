@@ -56,9 +56,29 @@ func _build_hud() -> void:
 		_key_labels[color] = lbl
 		y_offset -= 24.0
 
+	if TouchControls.is_touch_platform():
+		_move_for_phone()
+
 	# SURGICAL ADD: Hide by default. Only the dungeon scene calls show_hud().
 	# Menus have their own potion displays and don't need this overlay.
 	_hud_layer.visible = false
+
+
+# Phones: the lower-right corner belongs to the action cluster, so potions and keys sit top-right,
+# left of the pause/map buttons and under the day counter.
+func _move_for_phone() -> void:
+	var y := 52.0
+	var ordered: Array = [_potion_text]
+	for color in KEY_COLORS:
+		ordered.append(_key_labels[color])
+	for lbl in ordered:
+		var l := lbl as Label
+		l.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+		l.offset_left = -330.0
+		l.offset_right = -150.0
+		l.offset_top = y
+		l.offset_bottom = y + 30.0
+		y += 30.0
 
 
 # Shows the wallet overlay. Call from the dungeon main game file after player spawns.

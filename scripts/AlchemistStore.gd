@@ -24,6 +24,7 @@ extends Control
 @export var character_selection_scene : String = "res://scenes/CharacterSelection.tscn"
 const DUNGEON_SCENE    : String = "res://scenes/Purgatory_Dungeon_main_game_file.tscn"
 const PERKS_PER_PAGE   : int    = 9
+const PERKS_PER_PAGE_PHONE : int = 6   # 3x2: thumb-sized Trade buttons need the room
 const PARCHMENT_COLOR  : Color  = Color(0.82, 0.72, 0.52, 0.97)
 const INK_COLOR        : Color  = Color(0.15, 0.09, 0.04, 1.0)
 const CARD_MIN_SIZE    : Vector2 = Vector2(210, 138)
@@ -61,10 +62,14 @@ var perks_def : Array = [
 ]
 
 
+func perks_per_page() -> int:
+	return PERKS_PER_PAGE_PHONE if TouchControls.is_touch_platform() else PERKS_PER_PAGE
+
+
 func _ready() -> void:
 	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	_total_pages = maxi(1, int(ceil(float(visible_perks().size()) / float(PERKS_PER_PAGE))))
+	_total_pages = maxi(1, int(ceil(float(visible_perks().size()) / float(perks_per_page()))))
 	_hide_legacy_back_button()
 	_build_parchment()
 	_build_nav_buttons()
@@ -247,6 +252,8 @@ func _build_parchment() -> void:
 	_next_btn.offset_bottom = -18.0
 	_next_btn.pressed.connect(_on_next_page)
 	add_child(_next_btn)
+	if TouchControls.is_touch_platform():
+		_fit_pager_for_phone()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -285,6 +292,37 @@ func _build_nav_buttons() -> void:
 	_new_run_btn.offset_bottom = -18.0
 	add_child(_new_run_btn)
 	_new_run_btn.pressed.connect(_start_new_run)
+	if TouchControls.is_touch_platform():
+		_fit_nav_for_phone()
+
+
+# Phones: a 72-high bottom bar, wider buttons and a margin that keeps clear of rounded corners and
+# the gesture bar. The parchment stops above it.
+func _fit_nav_for_phone() -> void:
+	_parchment_panel.anchor_bottom = 0.84
+	for b in [_load_char_btn, _new_run_btn]:
+		b.custom_minimum_size = Vector2(320, 72)
+		b.offset_top = -96.0
+		b.offset_bottom = -24.0
+	_load_char_btn.offset_left = 40.0
+	_load_char_btn.offset_right = 360.0
+	_new_run_btn.offset_left = -360.0
+	_new_run_btn.offset_right = -40.0
+
+
+func _fit_pager_for_phone() -> void:
+	for b in [_prev_btn, _next_btn]:
+		b.custom_minimum_size = Vector2(72, 72)
+		b.offset_top = -96.0
+		b.offset_bottom = -24.0
+	_prev_btn.offset_left = -150.0
+	_prev_btn.offset_right = -78.0
+	_next_btn.offset_left = 78.0
+	_next_btn.offset_right = 150.0
+	_page_label.offset_left = -70.0
+	_page_label.offset_right = 70.0
+	_page_label.offset_top = -96.0
+	_page_label.offset_bottom = -24.0
 
 
 func _hide_legacy_back_button() -> void:
@@ -390,8 +428,8 @@ func _update_ui() -> void:
 	var run_count  : int        = int(profile.get("run_count", 0))
 
 	var shown : Array = visible_perks()
-	var page_start : int = _current_page * PERKS_PER_PAGE
-	var page_end   : int = mini(page_start + PERKS_PER_PAGE, shown.size())
+	var page_start : int = _current_page * perks_per_page()
+	var page_end   : int = mini(page_start + perks_per_page(), shown.size())
 
 	for i in range(page_start, page_end):
 		var entry  : Dictionary = shown[i]

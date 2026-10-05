@@ -29,6 +29,10 @@ static func root() -> String:
 	var override_root: String = OS.get_environment(ENV_OVERRIDE)
 	if override_root != "":
 		return override_root
+	# Phones: the shared Documents folder is behind scoped storage and not writable, so saves live in
+	# the app's private data directory (user://), which survives app updates and background kills.
+	if OS.has_feature("mobile") or TouchControls.is_touch_platform():
+		return OS.get_user_data_dir().path_join(GAME_FOLDER)
 	var docs: String = OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
 	if docs == "":
 		docs = OS.get_user_data_dir()

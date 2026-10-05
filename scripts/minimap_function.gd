@@ -53,6 +53,8 @@ var _bounds_max    : Vector3 = Vector3.ZERO
 var _bounds_center : Vector3 = Vector3.ZERO
 var _bounds_valid  : bool    = false
 var _bounds_refresh_timer : float = 0.0
+const MOBILE_MAP_INTERVAL : float = 0.12   # phones: the map image refreshes ~8 Hz, the arrow stays per-frame
+var _mobile_map_timer     : float = 0.0
 
 var _map_visible : bool = false
 
@@ -122,6 +124,12 @@ func _process(delta: float) -> void:
 		if _bounds_refresh_timer <= 0.0:
 			_bounds_refresh_timer = refresh_bounds_interval
 			force_refresh_bounds()
+
+	if TouchControls.is_touch_platform() and minimap_viewport != null:
+		_mobile_map_timer -= delta
+		if _mobile_map_timer <= 0.0:
+			_mobile_map_timer = MOBILE_MAP_INTERVAL
+			minimap_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 	_update_camera_from_bounds()
 	_update_player_arrow()
@@ -213,7 +221,9 @@ func _configure_viewport() -> void:
 
 	minimap_viewport.transparent_bg               = false
 	minimap_viewport.handle_input_locally         = false
-	minimap_viewport.msaa_3d                      = Viewport.MSAA_2X
+	# Phones draw the whole dungeon a second time for this view: no MSAA there (see _set_visible_state
+	# for the refresh-rate cap).
+	minimap_viewport.msaa_3d                      = Viewport.MSAA_DISABLED if TouchControls.is_touch_platform() else Viewport.MSAA_2X
 	minimap_viewport.use_occlusion_culling        = false
 	minimap_viewport.render_target_update_mode    = SubViewport.UPDATE_ALWAYS
 	minimap_viewport.positional_shadow_atlas_size = 0
@@ -273,8 +283,11 @@ func _set_visible_state(state: bool) -> void:
 			lbl.visible = state
 
 	if minimap_viewport != null:
-		minimap_viewport.render_target_update_mode = \
-			SubViewport.UPDATE_ALWAYS if state else SubViewport.UPDATE_DISABLED
+		if state and TouchControls.is_touch_platform():
+			pass   # throttled: _process re-renders it with UPDATE_ONCE every MOBILE_MAP_INTERVAL
+		else:
+			minimap_viewport.render_target_update_mode = \
+				SubViewport.UPDATE_ALWAYS if state else SubViewport.UPDATE_DISABLED
 
 	# On every open: force a fresh bounds scan so the camera re-centers on the dungeon
 	if state:

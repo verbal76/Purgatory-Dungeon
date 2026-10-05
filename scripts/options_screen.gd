@@ -168,7 +168,8 @@ func _build_ui() -> void:
 	_build_video_tab()
 	_build_gameplay_tab()
 	_build_accessibility_tab()
-	_build_controls_tab()
+	if not TouchControls.is_touch_platform():
+		_build_controls_tab()   # key/button remapping means nothing on a phone (touch layout: Gameplay tab)
 
 	_back_btn = Button.new()
 	_back_btn.text = "← Back"
@@ -295,6 +296,11 @@ func _build_video_tab() -> void:
 	var t := _new_tab("Video")
 	_section(t, "Display")
 
+	if TouchControls.is_touch_platform():
+		_hint(t, "The game always runs full-screen on this device.")
+		_section(t, "Performance")
+		_checkbox(t, "Enable V-Sync", "VSync")
+		return
 	var dm := _row(t, "Display Mode")
 	_display_option = OptionButton.new()
 	_display_option.add_item("Windowed",              0)
@@ -367,6 +373,15 @@ func _build_gameplay_tab() -> void:
 	_slider(t, "Enemy Speed",   "SpeedSlider",  50.0, 200.0, 5.0)
 	_slider(t, "Enemy Damage",  "DamageSlider", 50.0, 200.0, 5.0)
 	_hint(t, "50% = Easier   |   100% = Normal   |   200% = Brutal")
+	if TouchControls.is_touch_platform():
+		_section(t, "Touch Controls")
+		_slider(t, "Control Opacity",   TouchControls.KEY_OPACITY, 20.0, 100.0, 5.0)
+		_slider(t, "Control Size",      TouchControls.KEY_SCALE,   70.0, 150.0, 5.0)
+		_slider(t, "Look Sensitivity",  TouchControls.KEY_LOOK,    40.0, 250.0, 5.0)
+		_hint(t, "Swipe the right side of the screen to look around.")
+		_section(t, "Playtest")
+		_checkbox(t, "Show performance readout", PerfOverlay.KEY)
+		_hint(t, "FPS, slowest 1% of frames, draw calls. Tell us these numbers if the game stutters.")
 
 
 func _build_accessibility_tab() -> void:
@@ -721,6 +736,7 @@ func _load_settings() -> void:
 	var defaults : Dictionary = {
 		"MasterSlider": 100.0, "MusicSlider": 65.0, "SFXSlider": 100.0,
 		"ShakeSlider": 50.0, "SpeedSlider": 100.0, "DamageSlider": 100.0,
+		"TouchOpacity": 70.0, "TouchScale": 100.0, "TouchLookSens": 100.0,
 		"HealthSlider": 100.0,
 	}
 	for key in _sliders.keys():

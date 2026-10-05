@@ -30,6 +30,7 @@ var _pending_windowed_resolution: Vector2i = Vector2i(1280, 720)
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	add_to_group("pause_menu")   # the Android lifecycle handler opens it when the app is backgrounded
 
 	_hook_controls()
 	_build_display_mode_options()
@@ -37,8 +38,26 @@ func _ready() -> void:
 	_initialize_pause_menu_values()
 	_apply_panel_style()
 	_inject_options_button()
+	if TouchControls.is_touch_platform():
+		_fit_for_phone()
 	_set_pause_menu_visible(false)
 	_wire_button_clicks()
+
+
+# Phones: Resume / Options / Exit as big buttons. Volume lives in Options (Sound), and fullscreen /
+# window size mean nothing on a phone, so those rows would only crowd the 720-high canvas.
+func _fit_for_phone() -> void:
+	for row_name in ["MasterVolumeRow", "MusicVolumeRow", "SfxVolumeRow", "DisplayModeRow", "ResolutionRow", "ButtonSpacer"]:
+		var row := find_child(row_name, true, false) as Control
+		if row != null:
+			row.hide()
+	# The desktop panel is 990x900; on a 720-high phone canvas it would hang off the screen.
+	var panel := find_child("PausePanel", true, false) as Control
+	if panel != null:
+		panel.offset_left = -320.0
+		panel.offset_right = 320.0
+		panel.offset_top = -210.0
+		panel.offset_bottom = 210.0
 
 
 func _wire_button_clicks() -> void:

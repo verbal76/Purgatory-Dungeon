@@ -62,6 +62,7 @@ var _label           : Label     = null
 var _prompt_label    : Label     = null
 var _shop_label      : Label     = null
 var _restart_label   : Label     = null
+var _touch_row       : HBoxContainer = null
 var _timer           : float     = 0.0
 var _phase           : int       = 0
 var _prompt_timer    : float     = 0.0
@@ -154,6 +155,45 @@ func _ready() -> void:
 	_restart_label.offset_top = 210.0
 	add_child(_restart_label)
 
+	if TouchControls.is_touch_platform():
+		_build_touch_buttons()
+
+
+# Phones have no keys: the three exits are buttons that appear with the key prompts (which they replace).
+func _build_touch_buttons() -> void:
+	get_tree().call_group(TouchControls.GROUP, "set_enabled", false)
+	_prompt_label.hide()
+	_shop_label.hide()
+	_restart_label.hide()
+	_touch_row = HBoxContainer.new()
+	_touch_row.name = "TouchExits"
+	_touch_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_touch_row.add_theme_constant_override("separation", 24)
+	_touch_row.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	_touch_row.offset_top = -170.0
+	_touch_row.offset_bottom = -64.0
+	_touch_row.modulate.a = 0.0
+	add_child(_touch_row)
+	for spec in [["Main Menu", "menu"], ["Alchemist's Lab", "shop"], ["New Run", "restart"]]:
+		var b := Button.new()
+		b.name = "Exit_" + spec[1]
+		b.text = spec[0]
+		b.custom_minimum_size = Vector2(300, 88)
+		b.add_theme_font_size_override("font_size", 28)
+		b.pressed.connect(_on_touch_exit.bind(spec[1]))
+		_touch_row.add_child(b)
+
+
+func _on_touch_exit(which: String) -> void:
+	if not _can_exit or _exiting:
+		return
+	match which:
+		"menu": _leave_to(MENU_SCENE)
+		"shop": _leave_to(ALCHEMIST_SCENE)
+		"restart":
+			_exiting = true
+			_do_quick_restart()
+
 
 func _process(delta: float) -> void:
 	_timer += delta
@@ -183,6 +223,8 @@ func _process(delta: float) -> void:
 				_shop_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, prompt_pct))
 			if _restart_label != null:
 				_restart_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, prompt_pct))
+			if _touch_row != null:
+				_touch_row.modulate.a = prompt_pct
 
 			if prompt_pct >= 1.0:
 				_can_exit = true
@@ -204,28 +246,14 @@ func _input(event: InputEvent) -> void:
 			is_menu_press = true
 
 	if is_menu_press:
-		_exiting = true
 		get_viewport().set_input_as_handled()
-		get_tree().paused = false
-		GameClock.hide_hud()
-		BuffManager.reset()
-		GlobeManager.reset()
-		PlayerWallet.hide_hud()
-		get_tree().change_scene_to_file(MENU_SCENE)
-		queue_free()
+		_leave_to(MENU_SCENE)
 		return
 
 	# ── A/Cross — Alchemist store ──────────────────────────────
 	if event.is_action_pressed("ui_accept"):
-		_exiting = true
 		get_viewport().set_input_as_handled()
-		get_tree().paused = false
-		GameClock.hide_hud()
-		BuffManager.reset()
-		GlobeManager.reset()
-		PlayerWallet.hide_hud()
-		get_tree().change_scene_to_file(ALCHEMIST_SCENE)
-		queue_free()
+		_leave_to(ALCHEMIST_SCENE)
 		return
 
 	# ── X key / X button — quick restart ──────────────────────
@@ -240,6 +268,17 @@ func _input(event: InputEvent) -> void:
 	if is_restart_press:
 		_exiting = true
 		_do_quick_restart()
+
+
+func _leave_to(scene: String) -> void:
+	_exiting = true
+	get_tree().paused = false
+	GameClock.hide_hud()
+	BuffManager.reset()
+	GlobeManager.reset()
+	PlayerWallet.hide_hud()
+	get_tree().change_scene_to_file(scene)
+	queue_free()
 
 
 func _do_quick_restart() -> void:

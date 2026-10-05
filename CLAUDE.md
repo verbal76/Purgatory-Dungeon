@@ -15,6 +15,14 @@ codenames, SHAs, build counters or CI artifact links in anything the owner sees;
 engineering metadata in the release notes. One number = one delivered binary; never reuse or overwrite.
 Full procedure, tooling and history: **docs/RELEASES.md** (`tools/release_tool.py`, tag `vN` triggers CI publishing).
 
+## Android (same product, same version number)
+
+The game also ships as an Android APK (`Purgatory-Dungeon-v<N>.apk`) attached to the same GitHub
+Release as the Windows zip. Package `com.hotatticgames.purgatorydungeon`, arm64, API 30-36, signed with one
+persistent key (never in the repo/logs/notes). Touch input feeds the same semantic actions as keyboard
+and controller (`scripts/touch/`); all touch/phone behaviour is gated by `TouchControls.is_touch_platform()`
+so Windows is unchanged. Details, controls table and build pipeline: **docs/ANDROID.md**.
+
 ## Studio splash (Hot Attic Games standing requirement — do not remove)
 
 Every Hot Attic Games application opens with the studio splash before its own title screen:

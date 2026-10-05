@@ -69,6 +69,51 @@ def read_member(pck, entry):
         return f.read(size)
 
 
+def check_pck(pck, version, require_logo, release, sha, problems, notes):
+    """Inspect a Godot PCK (inside a build directory, a zip, or an APK) and append to problems/notes."""
+    try:
+        files, ver, fmt = read_pck(pck)
+    except Exception as e:  # noqa: BLE001
+        problems.append(f"PCK could not be read: {e}")
+        return
+    notes.append(f"pck sha256 {sha256(pck)} ({len(files)} files, Godot {ver[0]}.{ver[1]}.{ver[2]}, format {fmt})")
+    check_names(list(files), lambda n: read_member(pck, files[n]), "PCK", version, require_logo, release, sha, problems, notes)
+    return files
+
+
+def check_names(names, read, what, version, require_logo, release, sha, problems, notes):
+    """The content rules shared by a PCK and by the loose asset tree of a Godot Android APK.
+    `read(name)` returns that member's bytes."""
+
+    def has(sub):
+        return any(sub in n for n in names)
+
+    for need in ("scenes/StudioSplash.tscn", "scripts/studio_splash.gd", "scenes/MainMenu.tscn", "build_info.json", "scripts/build_info.gd"):
+        if not (has(need) or has(need.replace(".gd", ".gdc")) or has(need + ".remap")):
+            problems.append(f"the {what} does not contain {need}")
+    if not has(LOGO):
+        (problems if require_logo else notes).append(f"the {what} does not contain the canonical logo {LOGO}")
+    else:
+        notes.append(f"canonical logo {LOGO} is packed")
+    for n in names:
+        norm = n if n.startswith("res://") else "res://" + n   # APK assets carry no res:// prefix
+        if norm.startswith(FORBIDDEN_PREFIXES) or any(x in n.lower() for x in FORBIDDEN_SUBSTR) or n.endswith(".md"):
+            problems.append(f"the {what} contains a file that must not ship: {n}")
+    bi_name = next((n for n in names if n.endswith("build_info.json")), "")
+    if bi_name:
+        try:
+            bi = json.loads(read(bi_name).decode("utf-8"))
+            if int(bi.get("public_version", bi.get("version", -1))) != version:
+                problems.append(f"build_info.json is for v{bi.get('public_version', bi.get('version'))}, expected v{version}")
+            if release and not bi.get("release", False):
+                problems.append("build_info.json is not stamped as a release build")
+            if sha and bi.get("commit") and bi["commit"] != sha:
+                problems.append(f"build_info.json commit {bi['commit']} != {sha}")
+            notes.append("build_info.json: " + json.dumps(bi, sort_keys=True))
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"build_info.json unreadable: {e}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("target")
@@ -115,40 +160,7 @@ def main():
                 problems.append("PurgatoryDungeon.exe is not a Windows executable (no MZ header)")
         notes.append("exe sha256 " + sha256(exe))
     if os.path.isfile(pck):
-        try:
-            files, ver, fmt = read_pck(pck)
-        except Exception as e:  # noqa: BLE001
-            problems.append(f"PCK could not be read: {e}")
-            files = {}
-        notes.append(f"pck sha256 {sha256(pck)} ({len(files)} files, Godot {ver[0]}.{ver[1]}.{ver[2]}, format {fmt})")
-        names = list(files)
-
-        def has(sub):
-            return any(sub in n for n in names)
-
-        for need in ("scenes/StudioSplash.tscn", "scripts/studio_splash.gd", "scenes/MainMenu.tscn", "build_info.json", "scripts/build_info.gd"):
-            if not (has(need) or has(need.replace(".gd", ".gdc")) or has(need + ".remap")):
-                problems.append(f"the PCK does not contain {need}")
-        if not has(LOGO):
-            (problems if a.require_logo else notes).append(f"the PCK does not contain the canonical logo {LOGO}")
-        else:
-            notes.append(f"canonical logo {LOGO} is packed")
-        for n in names:
-            if n.startswith(FORBIDDEN_PREFIXES) or any(s in n.lower() for s in FORBIDDEN_SUBSTR) or n.endswith(".md"):
-                problems.append(f"the PCK contains a file that must not ship: {n}")
-        bi_name = next((n for n in names if n.endswith("build_info.json")), "")
-        if bi_name:
-            try:
-                bi = json.loads(read_member(pck, files[bi_name]).decode("utf-8"))
-                if int(bi.get("public_version", bi.get("version", -1))) != a.version:
-                    problems.append(f"build_info.json is for v{bi.get('public_version', bi.get('version'))}, expected v{a.version}")
-                if a.release and not bi.get("release", False):
-                    problems.append("build_info.json is not stamped as a release build")
-                if a.sha and bi.get("commit") and bi["commit"] != a.sha:
-                    problems.append(f"build_info.json commit {bi['commit']} != {a.sha}")
-                notes.append("build_info.json: " + json.dumps(bi, sort_keys=True))
-            except Exception as e:  # noqa: BLE001
-                problems.append(f"build_info.json unreadable: {e}")
+        check_pck(pck, a.version, a.require_logo, a.release, a.sha, problems, notes)
         if a.godot and not problems:
             home = tempfile.mkdtemp()
             env = dict(os.environ, PURGATORY_SAVE_ROOT=os.path.join(home, "PurgetoryDungeon"))

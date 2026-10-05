@@ -137,6 +137,7 @@ func _ready() -> void:
 	options.queue_free()
 	InputMap.load_from_project_settings()
 	SettingsManager.gameplay_settings.erase("controls")
+	SettingsManager.save_settings()   # the scratch settings file is shared by later test stages: leave no remap behind
 
 	# --- Minimap is on Tab (the controls reference says so); Escape is pause / back only -----------------
 	InputMap.load_from_project_settings()

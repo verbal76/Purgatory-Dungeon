@@ -928,7 +928,9 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if get_tree().paused: return
 
-	if event is InputEventMouseMotion:
+	# A finger on the touch screen also produces emulated mouse motion; touch look is fed by the touch
+	# layer as ordinary mouse-look instead, so the emulated copy must not turn the camera a second time.
+	if event is InputEventMouseMotion and (event as InputEventMouseMotion).device != InputEvent.DEVICE_ID_EMULATION:
 		var look        : float = (event as InputEventMouseMotion).relative.x
 		var actual_sens : float = mouse_sensitivity * turn_speed_modifier
 		_yaw -= look * actual_sens

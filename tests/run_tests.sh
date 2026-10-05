@@ -9,16 +9,19 @@ SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 export PURGATORY_SAVE_ROOT="$SCRATCH/PurgetoryDungeon"
 rc=0
+FAILED_STAGES=()
 LOG="$SCRATCH/last.log"
 # run <label> <cmd...>: runs a command, echoes output, fails on non-zero exit OR any "SCRIPT ERROR".
 run() {
 	local label="$1"; shift
+	# TEST_FILTER (a regex) runs only the matching stages (used by the Android job for the mobile subset).
+	if [ -n "${TEST_FILTER:-}" ] && ! echo "$label" | grep -Eq "$TEST_FILTER"; then return; fi
 	echo "=== $label"
 	"$@" > "$LOG" 2>&1
 	local code=$?
 	sed 's/\x1b\[[0-9;]*m//g' "$LOG"
-	if [ "$code" -ne 0 ]; then echo "!!! FAILED (exit $code): $label"; rc=1
-	elif grep -q 'SCRIPT ERROR' "$LOG"; then echo "!!! FAILED (script errors): $label"; rc=1; fi
+	if [ "$code" -ne 0 ]; then echo "!!! FAILED (exit $code): $label"; rc=1; FAILED_STAGES+=("$label (exit $code)")
+	elif grep -q 'SCRIPT ERROR' "$LOG"; then echo "!!! FAILED (script errors): $label"; rc=1; FAILED_STAGES+=("$label (script errors)"); fi
 }
 echo "=== release_tool check"
 python3 tools/release_tool.py check || { echo "!!! FAILED: version consistency"; rc=1; }
@@ -30,6 +33,12 @@ echo "=== import"
 for scene in res://tests/validate_project.tscn res://tests/test_save_manager.tscn res://tests/test_fireball_pool.tscn res://tests/test_menu_scenes.tscn res://tests/test_pause_options.tscn res://tests/test_enemy_pooling.tscn res://tests/test_clock_buffs.tscn res://tests/test_run_lifecycle.tscn res://tests/test_audio_buses.tscn res://tests/test_pause_freeze.tscn res://tests/test_settings_controls.tscn res://tests/test_release_metadata.tscn res://tests/test_trap_fireball.tscn res://tests/test_misc_fixes.tscn res://tests/test_portal_completion.tscn res://tests/test_studio_splash.tscn; do
 	run "$scene" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene"
 done
+# Touch layer (Android): runs as a touch platform so the layer is built; the desktop bindings test runs
+# WITHOUT it and proves keyboard / controller input is untouched.
+for scene in res://tests/test_touch_controls.tscn res://tests/test_mobile_ui.tscn res://tests/test_app_lifecycle.tscn; do
+	PURGATORY_FORCE_TOUCH=1 run "$scene" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene"
+done
+run "res://tests/test_input_desktop.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_input_desktop.tscn
 for cls in barbarian mage; do
 	SMOKE_CLASS="$cls" run "res://tests/test_gameplay_smoke.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_gameplay_smoke.tscn
 done
@@ -38,6 +47,10 @@ for cls in barbarian mage; do
 done
 for seed in 11 5 2024; do
 	CHEST_SEED="$seed" run "res://tests/test_chests.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_chests.tscn
+done
+# A new run cannot be swarmed by a red-barrier room before the first daily buff selection.
+for seed in 11 5 2024; do
+	LOCK_SEED="$seed" run "res://tests/test_room_lock_arming.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_room_lock_arming.tscn
 done
 for cls in barbarian mage; do
 	PHYS_CLASS="$cls" run "res://tests/test_physics_queries.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_physics_queries.tscn
@@ -59,4 +72,8 @@ done
 for seed in 1 2 3 7 42 123 2024 98765; do
 	GEN_TEST_SEEDS="$seed" run "res://tests/test_dungeon_generation.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_dungeon_generation.tscn
 done
+if [ "${#FAILED_STAGES[@]}" -gt 0 ]; then
+	echo "=== FAILED STAGES (${#FAILED_STAGES[@]}):"
+	printf '  %s\n' "${FAILED_STAGES[@]}"
+fi
 exit $rc

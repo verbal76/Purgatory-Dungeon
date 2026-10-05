@@ -16,7 +16,7 @@ know which file to play. The answer is always the GitHub **Releases** page: the 
 - The public number is **not** the Godot engine version, the Git SHA, or (later) the Android
   `versionCode`. Those stay as engineering metadata.
 - If Android and Windows builds are the same release they share the same `vN`
-  (`Purgatory-Dungeon-vN-Windows.zip`, `Purgatory-Dungeon-vN.apk`). Platform counters such as
+  (`Purgatory-Dungeon-vN-Windows.zip`, `Purgatory-Dungeon-vN.apk`; package, signing and 16 KB details: `docs/ANDROID.md`). Platform counters such as
   `versionCode` stay internal and may differ.
 
 ## Names

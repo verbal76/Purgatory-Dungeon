@@ -71,6 +71,13 @@ func _build_ui() -> void:
 	vbox.offset_top    = -200.0
 	vbox.offset_bottom =  200.0
 	_choice_root.add_child(vbox)
+	if TouchControls.is_touch_platform():
+		# Bigger text and 72-high buttons need the whole 720 canvas, and the touch layer must not
+		# sit over the two choices.
+		vbox.add_theme_constant_override("separation", 12)
+		vbox.offset_top = -310.0
+		vbox.offset_bottom = 310.0
+		get_tree().call_group(TouchControls.GROUP, "set_enabled", false)
 
 	# Title.
 	var title := Label.new()
