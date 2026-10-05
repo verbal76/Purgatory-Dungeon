@@ -271,6 +271,9 @@ no replay on re-entry, no stranding). **The canonical logo `Hot_Attic_Games_Mast
 was not present in the repository when this was written**, so the card is skipped at runtime until it
 is added (project root or `branding/`); release builds refuse to publish without it.
 
+**Globe pool bug.** `GlobeManager` loaded the data file's `_comment` lines as effects, so about a third of common globes
+(13 of 39 pool entries) rolled a no-op "effect". Entries without an `id` are now skipped; `test_buffs` checks the pool.
+
 **Also in round 3**
 - Persistence is hidden from the Barbarian's perk list (it has no effect for that class); the Mage keeps it.
 - Mage trap-status panel: the Mage now has the same on-screen list of active trap effects as the
@@ -281,7 +284,13 @@ is added (project root or `branding/`); release builds refuse to publish without
   despawned. The real problem was discoverability of the last enemies, solved by minimap markers.
 - Minimap markers: once the portal is open and 5 or fewer enemies remain, they show as red dots on
   the map (never earlier, so the map stays uncluttered).
-- Generator reliability: see "Generator stress" below.
+- Generator reliability. Stress harness `tests/stress_generation.sh` (one seeded generation per process, checks rooms,
+  spawns, connectivity, chests, Day-30 portal and 25 guards). Production weights, seeds 10000-10999 with chests/portal/guard
+  checks: **1000/1000 OK, 0 regenerations needed**, 110 rooms every time, 219-420 enemy spawn points, 0-14 dead-end rooms
+  (a seed with none has no chests). Seeds 6000-6599 single-attempt: 600/600 reached the target. Adverse test (dead-end
+  weight 15, single attempt, seeds 7000-7199): 130/200 failed before the frontier reserve + door retries, 56/200 after;
+  every failure is `open_exhausted` and is recovered by regeneration (up to 6 layouts). A failing seed reproduces with
+  `STRESS_SEED=<seed> godot --headless --path . res://tests/stress_generation.tscn`.
 
 **Still open after round 3**
 - Balance numbers are untouched pending physical play: Quick Recovery +4 HP/s, Purgatory King +12 HP/s.

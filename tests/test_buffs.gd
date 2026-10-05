@@ -235,6 +235,20 @@ func _ready() -> void:
 	player.set("spark_damage", 0.0)
 	player.set("_current_health", hp_max)
 
+	# The globe pool must contain only real effects: the data file's "_comment" objects once ended up
+	# in the common pool, so about a third of common globes did nothing.
+	var fresh_globes: Node = (load("res://autoloads/GlobeManager.gd") as GDScript).new()
+	fresh_globes._load_effect_data()
+	var pooled := 0
+	var pooled_without_id := 0
+	for rarity_key in fresh_globes._effect_pool:
+		for entry in fresh_globes._effect_pool[rarity_key]:
+			pooled += 1
+			if not entry.has("id"):
+				pooled_without_id += 1
+	_check(pooled == curses.size() and pooled_without_id == 0, "the globe pool holds exactly the real effects (%d pooled, %d expected, %d without an id)" % [pooled, curses.size(), pooled_without_id])
+	fresh_globes.free()
+
 	var dimmed: Dictionary = {}
 	var radiant: Dictionary = {}
 	for e in curses:

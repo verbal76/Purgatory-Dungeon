@@ -109,6 +109,10 @@ func _load_effect_data() -> void:
 		return
 
 	for entry in parsed:
+		# The file's "_comment" lines are objects without an id; they must never become effects
+		# (they used to land in the common pool, so ~1 in 3 common globes did nothing).
+		if not (entry is Dictionary) or not entry.has("id"):
+			continue
 		var rarity : String = entry.get("rarity", "common")
 		if _effect_pool.has(rarity):
 			_effect_pool[rarity].append(entry)
