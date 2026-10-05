@@ -35,8 +35,12 @@ func _init() -> void:
 		return
 	OtaRuntime.enabled = true
 	var save_root: String = StoragePaths.root()
-	var result: Dictionary = OtaCore.boot(OtaStore.root(), identity, pem, _mount, save_root)
+	var result: Dictionary = OtaCore.boot(OtaStore.root(), identity, pem, _mount, save_root, _canary)
 	OtaCore.apply_result(result)
+	if bool(result.get("needs_restart", false)):
+		# The update was mounted and then judged unsafe; it is quarantined, so the next launch is clean.
+		push_error("OTA: post-mount self-check failed; the update was quarantined. Closing so the next launch runs without it.")
+		(Engine.get_main_loop() as SceneTree).quit(0)
 
 
 func _ready() -> void:
@@ -58,3 +62,11 @@ func _process(delta: float) -> void:
 
 func _mount(pck_path: String) -> bool:
 	return ProjectSettings.load_resource_pack(pck_path, true)
+
+
+## The game's own key resources must still be visible after the mount (they come from the native build).
+func _canary() -> bool:
+	for path in OtaConst.CANARY_RESOURCES:
+		if not ResourceLoader.exists(path):
+			return false
+	return true

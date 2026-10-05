@@ -26,6 +26,8 @@ const KEEP_QUARANTINE := 3
 const TRUST_PATH := "res://ota_trust.pem"
 const CHANNEL_CONFIG_PATH := "res://ota_channel.json"
 const SPLASH_SCENE := "res://scenes/StudioSplash.tscn"
+# Base-build resources that must stay visible after an update is mounted (post-mount self-check).
+const CANARY_RESOURCES: Array[String] = ["res://scenes/StudioSplash.tscn", "res://scenes/MainMenu.tscn", "res://scripts/ota/ota_core.gd", "res://data/buffs.json"]
 
 # Developer / test hooks. Honoured ONLY in non-template builds (editor / test runs), never in a shipped game.
 const ENV_ROOT := "PURGATORY_OTA_ROOT"

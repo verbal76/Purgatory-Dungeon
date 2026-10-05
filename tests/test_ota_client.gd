@@ -118,6 +118,7 @@ func _ready() -> void:
 	_test_constants_match_rules_file()
 	_test_boot_basic()
 	_test_boot_failures()
+	_test_canary()
 	_test_crash_loop_and_rollback()
 	_test_revocation_and_plan()
 	_test_save_preservation()
@@ -352,6 +353,36 @@ func _test_boot_failures() -> void:
 	_stage(root, 1)
 	r = _boot(root, saves)
 	_check(int(r["active_seq"]) == 0, "a number that failed is never tried again")
+
+
+func _canary_fail() -> bool:
+	return false
+
+
+func _canary_ok() -> bool:
+	return true
+
+
+func _test_canary() -> void:
+	var saves: String = _new_root("saves_canary")
+	var root: String = _new_root("canary")
+	_make_slot(root, 1)
+	_stage(root, 1)
+	_mounted.clear()
+	var r: Dictionary = OtaCore.boot(root, _ident, _pem, _fake_mount, saves, _canary_fail)
+	_check(int(r["active_seq"]) == 0 and bool(r["needs_restart"]) and "self-check" in str(r["rolled_back_reason"]),
+			"a failed post-mount self-check quarantines the update and asks for a restart (%s)" % r["rolled_back_reason"])
+	_check(not DirAccess.dir_exists_absolute(OtaStore.slot_dir(root, 1)) and (OtaStore.load_state(root)["failed"] as Array).has(1),
+			"the update that failed the self-check is quarantined and never retried")
+	var r2: Dictionary = _boot(root, saves)
+	_check(int(r2["active_seq"]) == 0 and not bool(r2["needs_restart"]), "the next launch runs the native build")
+	root = _new_root("canary_ok")
+	_make_slot(root, 1)
+	_stage(root, 1)
+	r = OtaCore.boot(root, _ident, _pem, _fake_mount, saves, _canary_ok)
+	_check(int(r["active_seq"]) == 1 and not bool(r["needs_restart"]), "a passing self-check changes nothing")
+	for path in OtaConst.CANARY_RESOURCES:
+		_check(ResourceLoader.exists(path), "canary resource exists in this build: %s" % path)
 
 
 func _test_crash_loop_and_rollback() -> void:

@@ -15,9 +15,9 @@ extends RefCounted
 ## Static so tests can call it directly. Mounts at most one update. Returns
 ## {active_seq, active_source_commit, active_payload_id, boot_attempts, rolled_back_seq,
 ##  rolled_back_reason, known_good, pending}.
-static func boot(root_dir: String, identity: Dictionary, public_pem: String, mounter: Callable, save_root: String) -> Dictionary:
+static func boot(root_dir: String, identity: Dictionary, public_pem: String, mounter: Callable, save_root: String, canary: Callable = Callable()) -> Dictionary:
 	var out: Dictionary = {"active_seq": 0, "active_source_commit": "", "active_payload_id": "", "boot_attempts": 0,
-			"rolled_back_seq": 0, "rolled_back_reason": "", "known_good": 0, "pending": 0}
+			"rolled_back_seq": 0, "rolled_back_reason": "", "known_good": 0, "pending": 0, "needs_restart": false}
 	DirAccess.make_dir_recursive_absolute(root_dir)
 	OtaStore.clean_staging(root_dir)
 	var st: Dictionary = OtaStore.load_state(root_dir)
@@ -60,6 +60,12 @@ static func boot(root_dir: String, identity: Dictionary, public_pem: String, mou
 		if not bool(mounter.call(pck)):
 			_drop(root_dir, st, seq, "mount failed", out, false)
 			continue
+		# A pack cannot be unmounted, so if the engine can no longer see the game's own key resources after the mount
+		# (a platform-specific file-system surprise), the only safe move is: quarantine it and have the caller restart.
+		if canary.is_valid() and not bool(canary.call()):
+			_drop(root_dir, st, seq, "post-mount self-check failed", out, false)
+			out["needs_restart"] = true
+			break
 		var m: Dictionary = OtaVerify.slot_manifest(root_dir, seq)
 		out["active_seq"] = seq
 		out["active_source_commit"] = str(m.get("source_commit", ""))
