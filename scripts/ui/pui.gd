@@ -557,7 +557,7 @@ static func _theme_labels(t: Theme) -> void:
 	_role_label(t, "SecondaryLabel", "body_secondary")
 	_role_label(t, "MetaLabel", "metadata")
 	_role_label(t, "HudValue", "hud_value", Color(0, 0, 0, 0), 5)
-	_role_label(t, "HudLabel", "hud_label", Color(0, 0, 0, 0), 4)
+	_role_label(t, "HudLabel", "hud_label", Color(0, 0, 0, 0), 5)   # thin small caps over a bright wall need the heavier rim
 	_role_label(t, "WarningLabel", "warning")
 	_role_label(t, "CaptionLabel", "caption")
 	# parchment contexts: same hierarchy, ink colours
