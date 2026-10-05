@@ -234,6 +234,44 @@ static func divider() -> HSeparator:
 	return s
 
 
+# ── Rarity ramp (additive block: buff cards, pickups) ────────────────────────────────────────
+# Restrained and built only from the palette: common = bone-dim edge, rare = dark brass, epic = ember,
+# legendary = bright ember + a glow rising from the base, cursed = blood. Rarity is ALWAYS also written
+# as a text tag (never colour alone). Reference: docs/UI_DESIGN_SYSTEM.md section 3.
+const RARITY_EDGES := {
+	"common": BONE_FAINT, "rare": EDGE_BRASS, "epic": EMBER, "legendary": EMBER_BRIGHT, "cursed": BLOOD,
+}
+const RARITY_TEXTS := {
+	"common": BONE_DIM, "rare": EMBER, "epic": EMBER_BRIGHT, "legendary": EMBER_BRIGHT, "cursed": BLOOD_BRIGHT,
+}
+const RARITY_GLOW_ALPHA := {"common": 0.0, "rare": 0.0, "epic": 0.14, "legendary": 0.34, "cursed": 0.20}
+
+
+static func rarity_edge(rarity: String) -> Color:
+	return RARITY_EDGES.get(rarity, BONE_FAINT)
+
+
+static func rarity_text(rarity: String) -> Color:
+	return RARITY_TEXTS.get(rarity, BONE_DIM)
+
+
+## Raised iron card whose edge (and, from epic up, base glow) carries the rarity. Cached; callers get a copy.
+static func rarity_card(rarity: String) -> StyleBoxTexture:
+	var key := "rarity_card|" + rarity
+	if _boxes.has(key):
+		return (_boxes[key] as StyleBoxTexture).duplicate()
+	var edge: Color = rarity_edge(rarity)
+	var glow_src: Color = BLOOD if rarity == "cursed" else EMBER
+	var sb := box(IRON_RAISED, edge, IRON_RAISED.darkened(0.10), 0.10, 0.32, 0.016,
+		Color(glow_src.r, glow_src.g, glow_src.b, float(RARITY_GLOW_ALPHA.get(rarity, 0.0))))
+	sb.content_margin_left = PANEL_PAD
+	sb.content_margin_right = PANEL_PAD
+	sb.content_margin_top = PANEL_PAD
+	sb.content_margin_bottom = PANEL_PAD
+	_boxes[key] = sb
+	return sb.duplicate()
+
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 #  PROCEDURAL MATERIALS
 # ══════════════════════════════════════════════════════════════════════════════════════════════

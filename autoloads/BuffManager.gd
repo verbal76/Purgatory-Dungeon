@@ -7,7 +7,7 @@
 #  MOD NOTES: Added _handle_schizophrenia() hook to dynamically
 #  attach/detach the auditory hallucination script to the player.
 #  Also plays buff_choice_sound via AudioManager.
-#  Rarity system: common (green) / rare (yellow) / legendary (purple).
+#  Rarity system: common / rare / legendary, shown as a text tag plus the card edge (PUI.rarity_card).
 #  Weighted pick, slot-machine cycling display, slowdown-on-stop.
 #
 #  SLOT MACHINE CHANGE: Replaced the 2-choice card pick with a single
@@ -48,21 +48,12 @@ const PERK_CYCLE_SLOWDOWN_DURATION : float = 1.4
 const PERK_CYCLE_VISUAL_HOLD_TIME : float = 0.7
 
 # ── Card / slot UI layout ──────────────────────────────────
+# Look comes from the shared design system (PUI): ScreenTitle / CardTitle / body / WarningLabel roles on an
+# iron card whose edge carries the rarity (PUI.rarity_card). Only the geometry lives here.
 
-const CARD_WIDTH         : float = 280.0
-const CARD_HEIGHT        : float = 260.0
-const TITLE_FONT_SIZE    : int   = 28
-const DAY_FONT_SIZE      : int   = 16
-const NAME_FONT_SIZE     : int   = 22
-const DESC_FONT_SIZE     : int   = 14
-const TRADEOFF_FONT_SIZE : int   = 13
-const PROMPT_FONT_SIZE   : int   = 16
-const PROMPT_FONT_SIZE_PHONE : int = 28
-const RARITY_TAG_FONT_SIZE : int = 11
-
-const TRADEOFF_COLOR   : Color = Color(1.0, 0.6,  0.2)
-const DAY_LABEL_COLOR  : Color = Color(0.8, 0.8,  0.8)
-const PROMPT_COLOR     : Color = Color(0.7, 0.7,  0.7)
+const CARD_WIDTH         : float = 480.0
+const CARD_HEIGHT        : float = 280.0
+const TRADEOFF_PREFIX    : String = "Tradeoff: "
 
 # ── Card animation ─────────────────────────────────────────
 
@@ -72,22 +63,15 @@ const CARD_EXIT_DURATION   : float = 0.35
 
 # ── Rarity ─────────────────────────────────────────────────
 
-const RARITY_COLOR_COMMON    : Color = Color(0.25, 0.85, 0.25)
-const RARITY_COLOR_RARE      : Color = Color(1.0,  0.82, 0.12)
-const RARITY_COLOR_LEGENDARY : Color = Color(0.72, 0.15, 0.92)
 # Weights: roughly common 10x, rare 4x, legendary 1x
 const RARITY_WEIGHTS : Dictionary = { "common": 10, "rare": 4, "legendary": 1 }
-const RARITY_SQUARE_SIZE : float = 22.0
 
 # ── Buff HUD ───────────────────────────────────────────────
 
-const HUD_FONT_SIZE         : int   = 14
-const HUD_PERM_COLOR        : Color = Color(0.5, 0.9, 0.5)
-const HUD_TEMP_COLOR        : Color = Color(0.5, 0.7, 1.0)
-const HUD_DEBUFF_COLOR      : Color = Color(1.0, 0.45, 0.35)
+const HUD_WIDTH             : float = 280.0
 const HUD_MARGIN_X          : float = 20.0
 const HUD_START_Y           : float = 50.0
-const HUD_LINE_SPACING      : float = 20.0
+const HUD_LINE_SPACING      : float = 12.0
 const COUNTDOWN_UPDATE_RATE : float = 0.5
 
 # ── Slot machine states ────────────────────────────────────
@@ -111,8 +95,9 @@ var _slot_name_label     : Label     = null
 var _slot_desc_label     : Label     = null
 var _slot_rarity_label   : Label     = null
 var _slot_tradeoff_label : Label     = null
-var _slot_border_rect    : ColorRect = null
-var _slot_rarity_square  : ColorRect = null
+var _slot_panel          : PanelContainer = null
+var _slot_rarity_key     : String    = ""
+var _rarity_boxes        : Dictionary = {}   # rarity -> cached StyleBox (swapping them allocates nothing)
 
 # UI containers (needed for entry animation + close)
 var _ui_layer  : CanvasLayer = null
@@ -230,15 +215,18 @@ func _on_day_changed(_day: int) -> void:
 func _build_buff_hud() -> void:
 	_hud_layer       = CanvasLayer.new()
 	_hud_layer.layer = 5
+	# Small persistent HUD text: keeps the HUD roles' own sizes instead of the phone menu minimums.
+	_hud_layer.add_to_group("no_mobile_ui")
 	add_child(_hud_layer)
 
 	_hud_container = VBoxContainer.new()
 	_hud_container.add_theme_constant_override("separation", int(HUD_LINE_SPACING))
+	_hud_container.mouse_filter  = Control.MOUSE_FILTER_IGNORE
 	_hud_container.anchor_left   = 1.0
 	_hud_container.anchor_right  = 1.0
 	_hud_container.anchor_top    = 0.0
 	_hud_container.anchor_bottom = 0.0
-	_hud_container.offset_left   = -250.0 - HUD_MARGIN_X
+	_hud_container.offset_left   = -HUD_WIDTH - HUD_MARGIN_X
 	_hud_container.offset_right  = -HUD_MARGIN_X
 	_hud_container.offset_top    = HUD_START_Y
 
@@ -261,7 +249,7 @@ func _rebuild_buff_list() -> void:
 			_hud_container.add_child(_build_hud_entry(
 				buff.get("name", "???"),
 				buff.get("description", ""),
-				HUD_PERM_COLOR, null
+				PUI.BONE, null
 			))
 
 	for buff in _active_buffs:
@@ -272,31 +260,31 @@ func _rebuild_buff_list() -> void:
 			is_neg = float(buff.get("value", 0)) < 0.0
 		if buff.get("effect_type") == "schizophrenia":
 			is_neg = true
-		var color : Color = HUD_DEBUFF_COLOR if is_neg else HUD_TEMP_COLOR
+		var color : Color = PUI.BLOOD_BRIGHT if is_neg else PUI.EMBER_BRIGHT
 		var box := _build_hud_entry(_format_timed_entry(buff), buff.get("description", ""), color, null)
 		_hud_container.add_child(box)
 		_timed_labels.append({ "label": box.get_child(0) as Label, "buff": buff })
 
+# One small outlined HUD entry (name in HudLabel, description in CaptionLabel). Colour meaning:
+# permanent = bone, timed = ember (active), timed penalty = blood. No plates: the dungeon stays dominant.
 func _build_hud_entry(name_text: String, desc_text: String,
 		name_color: Color, _unused) -> VBoxContainer:
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 1)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_theme_constant_override("separation", 0)
 
-	var name_lbl := Label.new()
-	name_lbl.text = name_text
-	name_lbl.add_theme_font_size_override("font_size", HUD_FONT_SIZE)
+	var name_lbl := PUI.label(name_text, "HudLabel")
 	name_lbl.add_theme_color_override("font_color", name_color)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(name_lbl)
 
 	if desc_text != "":
-		var desc_lbl := Label.new()
-		desc_lbl.text = desc_text
-		desc_lbl.add_theme_font_size_override("font_size", HUD_FONT_SIZE - 2)
-		var dc := name_color; dc.a = 0.65
-		desc_lbl.add_theme_color_override("font_color", dc)
+		var desc_lbl := PUI.label(desc_text, "CaptionLabel")
+		desc_lbl.add_theme_constant_override("outline_size", 3)
 		desc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		desc_lbl.autowrap_mode        = TextServer.AUTOWRAP_WORD_SMART
+		desc_lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
 		box.add_child(desc_lbl)
 
 	return box
@@ -382,29 +370,33 @@ func _show_slot_ui() -> void:
 	_ui_root              = Control.new()
 	_ui_root.process_mode = Node.PROCESS_MODE_ALWAYS
 	_ui_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Nothing here takes the tap: the whole screen is the "stop" button (see _unhandled_input).
+	_ui_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_ui_layer.add_child(_ui_root)
 
-	# Title
-	var title := Label.new()
-	title.text = "Choose Your Fate"
-	title.add_theme_font_size_override("font_size", TITLE_FONT_SIZE)
+	# A light veil keeps the frozen dungeon behind the card from competing with it.
+	_ui_root.add_child(PUI.background("veil"))
+
+	# Header: title + day.
+	var header := VBoxContainer.new()
+	header.name = "Header"
+	header.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	header.offset_top = float(PUI.S7)
+	header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header.add_theme_constant_override("separation", PUI.S1)
+	_ui_root.add_child(header)
+
+	var title := PUI.label("Choose Your Fate", "ScreenTitle")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	title.position.y = 80.0
-	_ui_root.add_child(title)
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header.add_child(title)
 
-	# Day label
-	var day_label := Label.new()
-	day_label.text = "Day %d" % GameClock.current_day
-	day_label.add_theme_font_size_override("font_size", DAY_FONT_SIZE)
-	day_label.modulate = DAY_LABEL_COLOR
+	var day_label := PUI.label("Day %d" % GameClock.current_day, "SecondaryLabel")
 	day_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	day_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	day_label.position.y = 120.0
-	_ui_root.add_child(day_label)
+	day_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header.add_child(day_label)
 
-	# Centered card — same anchor math as the old two-card layout,
-	# but positioned at screen centre instead of offset left/right.
+	# Centered card.
 	var sw     : float = get_viewport_rect().size.x
 	var sh     : float = get_viewport_rect().size.y
 	var card_x : float = (sw * 0.5) - (CARD_WIDTH * 0.5)
@@ -412,14 +404,23 @@ func _show_slot_ui() -> void:
 
 	_build_slot_card(card_x, card_y)
 
-	# Prompt
-	var prompt := Label.new()
-	prompt.text = "TAP to stop" if InputManager.is_touch() else "Ⓐ Stop"
-	prompt.add_theme_font_size_override("font_size", PROMPT_FONT_SIZE_PHONE if InputManager.is_touch() else PROMPT_FONT_SIZE)
-	prompt.add_theme_color_override("font_color", PROMPT_COLOR)
+	# Prompt. Touch: large and ember so "TAP to stop" is unmissable; otherwise a quiet hint with the
+	# glyph of the active input scheme.
+	var prompt : Label
+	if InputManager.is_touch():
+		prompt = PUI.label("TAP to stop", "SectionHeading")
+		prompt.add_theme_font_size_override("font_size", int(round(PUI.fs("card_title") * 1.15)))
+		prompt.add_theme_color_override("font_color", PUI.EMBER_BRIGHT)
+	else:
+		prompt = PUI.label("Press %s to stop" % InputManager.glyph("ui_accept"), "SecondaryLabel")
+	prompt.name = "StopPrompt"
+	prompt.add_theme_constant_override("outline_size", 4)
 	prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	prompt.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	prompt.position.y = -60.0
+	prompt.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	prompt.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	prompt.offset_top    = -float(PUI.S7 + PUI.S6)
+	prompt.offset_bottom = -float(PUI.S5)
 	_ui_root.add_child(prompt)
 
 	_update_slot_display()
@@ -429,59 +430,49 @@ func _show_slot_ui() -> void:
 func _build_slot_card(x: float, y: float) -> void:
 	var buff    : Dictionary = _slot_pool[_slot_index]
 	var ranking : String     = buff.get("ranking", "common")
-	var col     : Color      = _get_rarity_color(ranking)
 
-	# Border
-	var border       := ColorRect.new()
-	border.position   = Vector2(x - 4.0, y - 4.0 + CARD_ENTRY_OFFSET_Y)
-	border.size       = Vector2(CARD_WIDTH + 8.0, CARD_HEIGHT + 8.0)
-	border.color      = col
-	border.modulate.a = 0.0
-	_ui_root.add_child(border)
-	_slot_border_rect = border
-
-	# Panel
-	var panel                := PanelContainer.new()
+	var panel := PanelContainer.new()
 	panel.name                = "SlotPanel"
-	panel.position            = Vector2(x, y + CARD_ENTRY_OFFSET_Y)
+	panel.mouse_filter        = Control.MOUSE_FILTER_IGNORE
 	panel.custom_minimum_size = Vector2(CARD_WIDTH, CARD_HEIGHT)
+	panel.size                = Vector2(CARD_WIDTH, CARD_HEIGHT)
+	panel.position            = Vector2(x, y + CARD_ENTRY_OFFSET_Y)
 	panel.modulate.a          = 0.0
+	_slot_panel = panel
+	_slot_rarity_key = ""   # forces the rarity material to be applied by _update_slot_display
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_theme_constant_override("separation", PUI.S2)
 
-	# Rarity tag
-	var rarity_lbl := Label.new()
-	rarity_lbl.text = ranking.to_upper()
-	rarity_lbl.add_theme_font_size_override("font_size", RARITY_TAG_FONT_SIZE)
-	rarity_lbl.add_theme_color_override("font_color", col)
-	rarity_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	# Rarity tag (text + colour, never colour alone)
+	var rarity_lbl := PUI.label(ranking.capitalize(), "MetaLabel")
+	rarity_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(rarity_lbl)
 	_slot_rarity_label = rarity_lbl
 
 	# Name
-	var name_lbl := Label.new()
-	name_lbl.text = buff.get("name", "???")
-	name_lbl.add_theme_font_size_override("font_size", NAME_FONT_SIZE)
+	var name_lbl := PUI.label(buff.get("name", "???"), "CardTitle")
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(name_lbl)
 	_slot_name_label = name_lbl
 
-	# Description
-	var desc_lbl := Label.new()
-	desc_lbl.text = buff.get("description", "")
-	desc_lbl.add_theme_font_size_override("font_size", DESC_FONT_SIZE)
+	vbox.add_child(PUI.divider())
+
+	# Description takes the spare height so the tradeoff always sits at the foot of the card.
+	var desc_lbl := PUI.label(buff.get("description", ""))
 	desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	desc_lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	desc_lbl.size_flags_vertical  = Control.SIZE_EXPAND_FILL
 	vbox.add_child(desc_lbl)
 	_slot_desc_label = desc_lbl
 
 	# Tradeoff
-	var td_lbl := Label.new()
+	var td_lbl := PUI.label("", "WarningLabel")
 	var tradeoff = buff.get("tradeoff", null)
-	td_lbl.text = "⚠ " + (tradeoff.get("description", "") if tradeoff != null else "")
-	td_lbl.add_theme_font_size_override("font_size", TRADEOFF_FONT_SIZE)
-	td_lbl.modulate = TRADEOFF_COLOR
+	td_lbl.text = (TRADEOFF_PREFIX + tradeoff.get("description", "")) if tradeoff != null else ""
 	td_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	td_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	td_lbl.visible = (tradeoff != null)
@@ -491,40 +482,19 @@ func _build_slot_card(x: float, y: float) -> void:
 	panel.add_child(vbox)
 	_ui_root.add_child(panel)
 
-	# Rarity square badge — bottom-right
-	var sq        := ColorRect.new()
-	sq.size        = Vector2(RARITY_SQUARE_SIZE, RARITY_SQUARE_SIZE)
-	sq.position    = Vector2(
-		x + CARD_WIDTH  - RARITY_SQUARE_SIZE - 6.0,
-		y + CARD_HEIGHT - RARITY_SQUARE_SIZE - 6.0 + CARD_ENTRY_OFFSET_Y)
-	sq.color       = col
-	sq.modulate.a  = 0.0
-	_ui_root.add_child(sq)
-	_slot_rarity_square = sq
-
 
 func _animate_slot_card_in(_card_x: float, card_y: float) -> void:
 	if _ui_root == null:
 		return
-	var panel  : Control = _ui_root.get_node_or_null("SlotPanel")
-	var border : Control = _slot_border_rect
-	var sq     : Control = _slot_rarity_square
-	if panel == null or border == null or sq == null:
+	var panel : Control = _ui_root.get_node_or_null("SlotPanel")
+	if panel == null:
 		return
-
-	var tgt_panel_y  : float = card_y
-	var tgt_border_y : float = card_y - 4.0
-	var tgt_sq_y     : float = card_y + CARD_HEIGHT - RARITY_SQUARE_SIZE - 6.0
 
 	var t := self.create_tween()
 	t.set_process_mode(Tween.TWEEN_PROCESS_IDLE)
 	t.set_parallel(true)
-	t.tween_property(panel,  "position:y", tgt_panel_y,  CARD_ENTRY_DURATION).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-	t.tween_property(border, "position:y", tgt_border_y, CARD_ENTRY_DURATION).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-	t.tween_property(sq,     "position:y", tgt_sq_y,     CARD_ENTRY_DURATION).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-	t.tween_property(panel,  "modulate:a", 1.0, CARD_ENTRY_DURATION * 0.75)
-	t.tween_property(border, "modulate:a", 1.0, CARD_ENTRY_DURATION * 0.75)
-	t.tween_property(sq,     "modulate:a", 1.0, CARD_ENTRY_DURATION * 0.75)
+	t.tween_property(panel, "position:y", card_y, CARD_ENTRY_DURATION).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	t.tween_property(panel, "modulate:a", 1.0, CARD_ENTRY_DURATION * 0.75)
 
 # ══════════════════════════════════════════════════════════════
 #  SLOT MACHINE — CYCLING
@@ -542,14 +512,13 @@ func _update_slot_display() -> void:
 		return
 	var buff     : Dictionary = _slot_pool[_slot_index]
 	var ranking  : String     = buff.get("ranking", "common")
-	var col      : Color      = _get_rarity_color(ranking)
 
 	if is_instance_valid(_slot_name_label):
 		_slot_name_label.text = buff.get("name", "???")
 
 	if is_instance_valid(_slot_rarity_label):
-		_slot_rarity_label.text = ranking.to_upper()
-		_slot_rarity_label.add_theme_color_override("font_color", col)
+		_slot_rarity_label.text = ranking.capitalize()
+		_slot_rarity_label.add_theme_color_override("font_color", PUI.rarity_text(ranking))
 
 	if is_instance_valid(_slot_desc_label):
 		_slot_desc_label.text = buff.get("description", "")
@@ -557,17 +526,19 @@ func _update_slot_display() -> void:
 	if is_instance_valid(_slot_tradeoff_label):
 		var tradeoff = buff.get("tradeoff", null)
 		if tradeoff != null:
-			_slot_tradeoff_label.text    = "⚠ " + tradeoff.get("description", "")
+			_slot_tradeoff_label.text    = TRADEOFF_PREFIX + tradeoff.get("description", "")
 			_slot_tradeoff_label.visible = true
 		else:
 			_slot_tradeoff_label.text    = ""
 			_slot_tradeoff_label.visible = false
 
-	if is_instance_valid(_slot_border_rect):
-		_slot_border_rect.color = col
-
-	if is_instance_valid(_slot_rarity_square):
-		_slot_rarity_square.color = col
+	# The card's edge (and, for the top tiers, its base glow) carries the rarity. Materials are built once
+	# per rarity and only swapped when the rarity actually changes.
+	if is_instance_valid(_slot_panel) and ranking != _slot_rarity_key:
+		_slot_rarity_key = ranking
+		if not _rarity_boxes.has(ranking):
+			_rarity_boxes[ranking] = PUI.rarity_card(ranking)
+		_slot_panel.add_theme_stylebox_override("panel", _rarity_boxes[ranking])
 
 # ══════════════════════════════════════════════════════════════
 #  INPUT — A PRESS TO STOP
@@ -671,8 +642,8 @@ func _destroy_ui() -> void:
 	_slot_desc_label     = null
 	_slot_rarity_label   = null
 	_slot_tradeoff_label = null
-	_slot_border_rect    = null
-	_slot_rarity_square  = null
+	_slot_panel          = null
+	_slot_rarity_key     = ""
 	_slot_pool.clear()
 
 # ══════════════════════════════════════════════════════════════
@@ -866,12 +837,6 @@ func begin_timed_schizophrenia(seconds: float) -> void:
 # ══════════════════════════════════════════════════════════════
 #  HELPERS
 # ══════════════════════════════════════════════════════════════
-
-func _get_rarity_color(ranking: String) -> Color:
-	match ranking:
-		"rare":      return RARITY_COLOR_RARE
-		"legendary": return RARITY_COLOR_LEGENDARY
-		_:           return RARITY_COLOR_COMMON
 
 # ══════════════════════════════════════════════════════════════
 #  PUBLIC API
