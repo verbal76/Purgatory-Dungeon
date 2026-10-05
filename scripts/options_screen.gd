@@ -168,7 +168,8 @@ func _build_ui() -> void:
 	_build_video_tab()
 	_build_gameplay_tab()
 	_build_accessibility_tab()
-	_build_controls_tab()
+	if not TouchControls.is_touch_platform():
+		_build_controls_tab()   # key/button remapping means nothing on a phone (touch layout: Gameplay tab)
 
 	_back_btn = Button.new()
 	_back_btn.text = "← Back"

@@ -2,7 +2,7 @@
 # with --rendering-driver opengl3; there is no GPU in CI). Not part of the game.
 #   PURGATORY_FORCE_TOUCH=1 xvfb-run -a -s "-screen 0 1496x672x24" godot --rendering-driver opengl3 \
 #     --path . --script tools/ui_shot.gd -- res://scenes/MainMenu.tscn /tmp/menu.png [frames]
-# Env: SHOT_CALL="method@frame" calls a method on the loaded scene root at that frame;
+# Env: SHOT_CALL="method@frame" (or "NodeName.method@frame") calls a method at that frame;
 #      SHOT_PRESS="action@frame,..." presses an input action (tap) at those frames;
 #      SHOT_CLASS=barbarian|mage sets the run class; SHOT_EXTRA="f1,f2" saves more shots at those
 #      frames as <out>_<frame>.png (the first shot is at [frames]).
@@ -58,7 +58,14 @@ func _process(_delta: float) -> bool:
 			ev.strength = 1.0 if pressed else 0.0
 			Input.parse_input_event(ev)
 	if _calls.has(_n) and current_scene != null:
-		current_scene.call(_calls[_n])
+		var spec: String = _calls[_n]
+		if spec.contains("."):   # "NodeName.method": call it on that node (found by name anywhere below the scene)
+			var parts := spec.split(".")
+			var target := current_scene.find_child(parts[0], true, false)
+			if target != null:
+				target.call(parts[1])
+		else:
+			current_scene.call(spec)
 	if _n in _extra:
 		_save(_out.get_basename() + "_%d.png" % _n)
 	if _n == _frames:

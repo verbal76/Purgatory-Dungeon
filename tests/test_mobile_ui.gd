@@ -52,6 +52,7 @@ func _ready() -> void:
 
 	await _audit_character_select_phone_mode()
 	await _audit_perf_overlay()
+	await _audit_options_tabs()
 	print("test_mobile_ui: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)
 
@@ -113,3 +114,22 @@ func _audit_perf_overlay() -> void:
 	await get_tree().process_frame
 	_check((ov._label as Label).visible and (ov._label as Label).text != "", "readout shows when enabled")
 	SettingsManager.gameplay_settings[PerfOverlay.KEY] = false
+
+
+# Phones have no key remapping: the Options screen has no Controls tab, but does have the touch sliders.
+func _audit_options_tabs() -> void:
+	var inst := (load("res://scenes/OptionsScreen.tscn") as PackedScene).instantiate()
+	add_child(inst)
+	for i in 6:
+		await get_tree().process_frame
+	var tabs := inst.find_children("*", "TabContainer", true, false)
+	_check(tabs.size() == 1, "options has one tab container")
+	if tabs.size() == 1:
+		var tc := tabs[0] as TabContainer
+		var titles: Array = []
+		for i in tc.get_tab_count():
+			titles.append(tc.get_tab_title(i))
+		_check(not titles.has("Controls"), "no key-remap tab on phones (%s)" % [titles])
+		_check(titles.has("Gameplay"), "Gameplay tab (touch sliders) present")
+	inst.queue_free()
+	await get_tree().process_frame

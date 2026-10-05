@@ -88,6 +88,33 @@ func _ready() -> void:
 	_check(get_tree().root.find_child("StudioSplash", true, false) == null, "splash is not replayed on resume")
 	_check(get_tree().get_nodes_in_group(TouchControls.GROUP).size() == 1, "still exactly one touch layer")
 
+	# The minimap re-renders the dungeon: on phones that is throttled (UPDATE_ONCE bursts), never ALWAYS.
+	var mm := main.get_node_or_null("minimap_function")
+	if mm == null:
+		for c in main.get_children():
+			if "minimap_viewport" in c:
+				mm = c
+	if mm != null:
+		Input.action_press("minimap")   # the touch map button holds this action while the map is open
+		var always_seen := false
+		var once_seen := false
+		for i in 60:
+			await get_tree().process_frame
+			var mode: int = mm.minimap_viewport.render_target_update_mode
+			if mode == SubViewport.UPDATE_ALWAYS:
+				always_seen = true
+			if mode == SubViewport.UPDATE_ONCE:
+				once_seen = true
+		_check(mm._map_visible, "minimap opens from its action")
+		_check(not always_seen, "minimap does not render every frame on phones")
+		_check(once_seen, "minimap refreshes in throttled bursts on phones")
+		Input.action_release("minimap")
+		for i in 3:
+			await get_tree().process_frame
+		_check(mm.minimap_viewport.render_target_update_mode == SubViewport.UPDATE_DISABLED, "minimap stops rendering when closed")
+	else:
+		_check(false, "minimap node found")
+
 	# A second background/foreground cycle works the same way.
 	life.on_background()
 	_check(life.background_count == 2 and menu.is_menu_open(), "second cycle pauses again")
