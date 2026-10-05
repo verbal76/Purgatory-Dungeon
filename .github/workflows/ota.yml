@@ -257,6 +257,19 @@ jobs:
           python3 tools/ota/channel.py merge --out build/ota --key "$OTA_PRIVATE_KEY_PATH"
           python3 tools/ota/verify_bundle.py build/ota --pubkey "$RUNNER_TEMP/ota_trust.pem" "${prev[@]}"
 
+      - name: Check the bundle fits the channel host (git-hosted, 100 MB per file limit)
+        env:
+          VER: ${{ steps.p.outputs.ver }}
+          SEQ: ${{ steps.p.outputs.seq }}
+        run: |
+          set -euo pipefail
+          limit=$((95 * 1024 * 1024))
+          for f in build/ota/${VER}/*/update-${SEQ}/payload.pck; do
+            sz=$(stat -c %s "$f")
+            echo "$f: $sz bytes"
+            [[ "$sz" -le "$limit" ]] || { echo "::error::$f is $sz bytes; the git-hosted channel accepts at most 95 MiB per file. Ship this change as a new APK, or move the channel to bucket hosting."; exit 1; }
+          done
+
       - name: Upload the bundle (engineering artifact; the channel is only written by the next step when configured)
         uses: actions/upload-artifact@v4
         with:

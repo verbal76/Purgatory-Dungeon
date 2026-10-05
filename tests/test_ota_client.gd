@@ -121,6 +121,7 @@ func _ready() -> void:
 	_test_crash_loop_and_rollback()
 	_test_revocation_and_plan()
 	_test_save_preservation()
+	_test_channel_config()
 	_test_diagnostics()
 	OtaStore.remove_tree(_base)
 	print("test_ota_client: %d checks, %d failures" % [_checks, _fails])
@@ -489,6 +490,20 @@ func _test_save_preservation() -> void:
 	_check(_hash_tree(saves) == before, "saves still byte-identical after many updates")
 	# Nothing was written outside the OTA root next to the saves.
 	_check(not FileAccess.file_exists(saves.path_join("state.json")), "no OTA files are written into the save folder")
+
+
+func _test_channel_config() -> void:
+	# The production endpoint is baked into the APK (it cannot change over the air), so pin its shape.
+	var cfg: Variant = JSON.parse_string(FileAccess.get_file_as_string(OtaConst.CHANNEL_CONFIG_PATH))
+	_check(cfg is Dictionary and int((cfg as Dictionary).get("format", 0)) == 1, "ota_channel.json is format 1")
+	var url: String = str((cfg as Dictionary).get("channel_url", "")) if cfg is Dictionary else ""
+	_check(url == "https://raw.githubusercontent.com/verbal76/purgatory-dungeon-updates/main/",
+			"the production channel is the dedicated public OTA repository via raw.githubusercontent.com (%s)" % url)
+	_check(url.begins_with("https://") and url.ends_with("/"), "channel URL is https and ends with a slash")
+	_check(not url.contains("Purgatory-Dungeon/") and not url.contains("/Purgatory-Dungeon"), "the channel is not the private source repository")
+	OS.set_environment(OtaConst.ENV_CHANNEL, "")
+	_check(OtaIdentity.channel_url() == url, "OtaIdentity.channel_url() reads the baked endpoint")
+	_check(OtaIdentity.channel_url().begins_with("https://"), "no plain-http endpoint in the shipped config")
 
 
 func _test_diagnostics() -> void:
