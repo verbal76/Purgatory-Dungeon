@@ -237,8 +237,15 @@ func _position_label() -> void:
 		"move": at = _tc.stick_default + Vector2(0.0, -150.0)
 		"look": at = Vector2(view.x * 0.70, view.y * 0.30)
 		_:
-			var action: String = {"attack": "attack", "use": "equip", "block": "block", "burst": "AOE"}.get(active, "attack")
-			var b: TouchButton = _tc.buttons.get(action)
-			if b != null:
-				at = b.center + Vector2(-b.radius * 2.6, -b.radius * 1.2)
+			# Above the whole action cluster, so the hint never sits on a button the player must press.
+			var top: float = view.y
+			var cx: float = view.x * 0.8
+			for action in ["attack", "kick", "jump", "block", "AOE", "equip"]:
+				var b: TouchButton = _tc.buttons.get(action)
+				if b != null and b.visible:
+					top = minf(top, b.center.y - b.radius)
+			var ref: TouchButton = _tc.buttons.get("attack")
+			if ref != null:
+				cx = ref.center.x - 140.0
+			at = Vector2(cx, top - 24.0 - _label.size.y * 0.5)
 	_label.position = (at - Vector2(_label.size.x * 0.5, _label.size.y * 0.5)).clamp(Vector2(8, 8), view - _label.size - Vector2(8, 8))

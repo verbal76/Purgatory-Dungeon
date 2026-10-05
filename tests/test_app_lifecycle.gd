@@ -52,6 +52,13 @@ func _ready() -> void:
 	await _frames(3)
 	_check(Input.is_action_pressed("attack"), "attack held before the lock")
 
+	# Progress made in the run, not yet saved: potions stashed, a perk bought, a touch setting changed.
+	SaveManager.current_profile["meta_currency"] = int(SaveManager.current_profile.get("meta_currency", 0)) + 7
+	SaveManager.current_profile["perks"]["potency"] = 2
+	SaveManager.current_profile["keys"]["gold"] = 1
+	SettingsManager.update_setting(TouchControls.KEY_SCALE, 130.0)
+	var want_currency: int = SaveManager.current_profile["meta_currency"]
+
 	var saves_before := SaveManager.save_count
 	life.on_background()
 	await _frames(3)
@@ -60,6 +67,17 @@ func _ready() -> void:
 	_check(get_tree().paused and menu.is_menu_open(), "the run is paused behind the pause menu")
 	_check(SaveManager.save_count == saves_before + 1, "profile written on background (%d -> %d)" % [saves_before, SaveManager.save_count])
 	var clock_day: int = GameClock.current_day if "current_day" in GameClock else -1
+
+	# "Android reclaims the process": forget everything in memory, then come back from disk only.
+	SaveManager.current_profile = SaveManager.get_default_profile()
+	SettingsManager.gameplay_settings[TouchControls.KEY_SCALE] = 100.0
+	SaveManager.load_slot(SaveManager.active_slot_index)
+	SettingsManager.load_settings()
+	_check(int(SaveManager.current_profile.get("meta_currency", -1)) == want_currency, "stashed potions survive a reclaimed process (%s)" % SaveManager.current_profile.get("meta_currency"))
+	_check(int(SaveManager.current_profile["perks"].get("potency", -1)) == 2, "bought perk survives a reclaimed process")
+	_check(int(SaveManager.current_profile["keys"].get("gold", -1)) == 1, "keys survive a reclaimed process")
+	_check(is_equal_approx(float(SettingsManager.gameplay_settings.get(TouchControls.KEY_SCALE, 0.0)), 130.0), "touch settings survive a reclaimed process")
+	_check(SaveManager.current_profile.get("character_name", "") == "Lifecycle", "character identity survives")
 
 	# Repeated notifications (PAUSED + FOCUS_OUT both fire on a real phone) must not stack effects.
 	life.on_background()

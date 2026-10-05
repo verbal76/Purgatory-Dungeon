@@ -246,6 +246,22 @@ func _ready() -> void:
 	_check(ob.is_done("use") and shows_before == 0, "a hint shown %d times without being used retires" % TouchOnboarding.MAX_SHOWS)
 	tc2.queue_free()
 
+	# Hints never sit on a button the player has to press.
+	tc.set_use_context(true, "OPEN")
+	for step in ["attack", "use", "block", "burst", "move", "look"]:
+		ob._activate(step)
+		await _frames(2)
+		ob._position_label()
+		var lbl_rect := Rect2(ob._label.position, ob._label.size)
+		var hit := ""
+		for action in tc.buttons:
+			var b: TouchButton = tc.buttons[action]
+			if b.visible and lbl_rect.intersects(Rect2(b.center - Vector2(b.radius, b.radius), Vector2(b.radius, b.radius) * 2.0)):
+				hit = action
+		_check(hit == "", "the '%s' hint does not cover a button (covers '%s')" % [step, hit])
+		ob._deactivate()
+	tc.set_use_context(false)
+
 	# A chest the player can open asks for the USE button, and gives it back when they walk away.
 	var chest := (load("res://scripts/chest.gd") as GDScript).new() as StaticBody3D
 	chest.set("color", "bronze")
