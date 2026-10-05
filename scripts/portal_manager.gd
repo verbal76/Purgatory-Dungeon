@@ -19,7 +19,6 @@ const PORTAL_LIGHT_RANGE   : float = 18.0
 const PORTAL_LIGHT_ENERGY  : float = 6.0
 const PORTAL_SPHERE_RADIUS : float = 1.2
 const ENTRY_RADIUS         : float = 2.5     # metres — how close to trigger entry
-const ANNOUNCE_FONT_SIZE   : int   = 28
 const KILL_PLANE_Y         : float = -15.0   # Below this a guard fell out of the world
 # Failsafe: if only a few enemies are left and none has died for this long, they are treated
 # as unreachable (sealed in geometry, stuck) and the portal opens anyway. The run must never
@@ -414,15 +413,19 @@ func _show_not_ready_hint(remaining: int) -> void:
 		_hint_layer.process_mode = Node.PROCESS_MODE_ALWAYS
 		get_tree().root.add_child(_hint_layer)
 
-		_hint_label       = Label.new()
-		_hint_label.add_theme_font_size_override("font_size", 22)
-		_hint_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2, 1.0))
+		# A blocked-state warning over the world: WarningLabel (blood) with an outline, no plate.
+		_hint_label       = PUI.label("", "WarningLabel")
+		_hint_label.add_theme_constant_override("outline_size", 5)
+		_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_hint_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+		_hint_label.autowrap_mode        = TextServer.AUTOWRAP_WORD_SMART
 		_hint_label.set_anchors_preset(Control.PRESET_CENTER)
 		_hint_label.offset_top    = -80.0
 		_hint_label.offset_bottom =  80.0
 		_hint_label.offset_left   = -400.0
 		_hint_label.offset_right  =  400.0
+		PUI.adopt(_hint_label)   # a CanvasLayer child does not inherit the root theme
 		_hint_layer.add_child(_hint_label)
 
 	_hint_label.text = "%d enemies remain — clear them all to enter the portal!" % remaining
@@ -472,25 +475,31 @@ func _show_announce(portal_pos: Vector3) -> void:
 	_announce_layer.process_mode = Node.PROCESS_MODE_ALWAYS
 	get_tree().root.add_child(_announce_layer)
 
-	var bg := ColorRect.new()
-	bg.color = Color(0.0, 0.0, 0.0, 0.65)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_announce_layer.add_child(bg)
+	_announce_layer.add_child(PUI.background("veil"))
 
-	var lbl := Label.new()
-	lbl.text = "DAY 30 — AN EXIT HAS APPEARED IN THE DEPTHS\nFind it on your minimap."
-	lbl.add_theme_font_size_override("font_size", ANNOUNCE_FONT_SIZE)
-	lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2, 1.0))
+	var centre := CenterContainer.new()
+	centre.set_anchors_preset(Control.PRESET_FULL_RECT)
+	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	PUI.adopt(centre)   # a CanvasLayer child does not inherit the root theme
+	_announce_layer.add_child(centre)
+
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(760.0, 0.0)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_theme_constant_override("separation", PUI.S3)
+	centre.add_child(box)
+
+	var lbl := PUI.label("Day 30 \u2014 an exit has appeared in the depths", "ScreenTitle")
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 	lbl.autowrap_mode        = TextServer.AUTOWRAP_WORD_SMART
-	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
-	lbl.offset_left   = -300.0
-	lbl.offset_right  =  300.0
-	lbl.offset_top    = -80.0
-	lbl.offset_bottom =  80.0
-	_announce_layer.add_child(lbl)
+	lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	box.add_child(lbl)
+
+	var sub := PUI.label("Find it on your minimap.", "SecondaryLabel")
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.add_theme_constant_override("outline_size", 4)
+	sub.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	box.add_child(sub)
 
 	# Fade out after 6 seconds.
 	get_tree().create_timer(6.0).timeout.connect(_announce_layer.queue_free)

@@ -90,6 +90,17 @@ Set `control.theme_type_variation = &"Name"` in a scene, or use `PUI.button(text
 **Text input** (`LineEdit`): inset iron, ember edge on focus, ember caret.
 **Scroll bars**, **option buttons / pop‑ups**, **tooltips**, **dialogs (`AcceptDialog`)**, **item lists**: all in the theme.
 **Divider**: `PUI.divider()` / `BrassDivider` — a thin brass line.
+**Rarity ramp** (buff cards, pickups — `PUI.rarity_card(r)`, `PUI.rarity_edge(r)`, `PUI.rarity_text(r)`): a restrained ramp built only from the palette, never a rainbow.
+
+| Rarity | Card edge | Tag text | Base glow |
+|---|---|---|---|
+| common | `BONE_FAINT` | `BONE_DIM` | none |
+| rare | `EDGE_BRASS` | `EMBER` | none |
+| epic | `EMBER` | `EMBER_BRIGHT` | faint ember |
+| legendary | `EMBER_BRIGHT` | `EMBER_BRIGHT` | strong ember |
+| cursed | `BLOOD` | `BLOOD_BRIGHT` | faint blood |
+
+Rarity is always also written as a text tag ("Common", "Rare", "Legendary"), never colour alone.
 **HUD meter**: `PUIBar.make(size, colour)` — iron frame, lit fill, recent‑loss trail.
 
 ## 4. Backgrounds
@@ -111,6 +122,7 @@ Use `PUIIcon.make(kind, px, tint)`. No emoji, no font glyphs (the Latin font sub
 
 * HUD elements are small, material‑backed (outline text or a thin iron plate) — never large opaque boxes; the dungeon stays dominant. Health = `PUIBar` + `HudValue`; counters = icon + `HudValue`; labels = `HudLabel`.
 * In‑run layout (`scripts/ui/hud_kit.gd`, `HudKit`): **top‑left cluster** = health bar + value, ember rapid‑attack bar + caption (`HudVitals`, shared by Barbarian and Mage), then kills (blade icon + "Kills: N") with the heading letter on a small iron plate (`GameplayCompassLabel`) right‑aligned with the bar. **Top‑right** = day counter (hourglass + `HudValue`). **Wallet** = potion / bronze / silver / gold key rows (icon + `HudLabel` + `HudValue`, key icons tinted with `PUI.key_tint`, zero count dims the row): bottom‑right on desktop, top‑right under the day counter on phones. **Trap statuses** = `HudStatusPanel` (small veil plate, warning role, bottom centre). The map overlay keeps its dark iron ground with a thin brass frame, Cinzel compass letters (north in ember), bone player arrow, ember portal diamond and blood enemy dots, all with a dark rim.
+* **In-run overlays and prompts** (buff roulette, YOU DIED, run end, trap banners, chest/portal hints, globe alerts): full-screen moments sit on `PUI.background("veil"|"void")` with a `VeilPanel`/`CardPanel` where a panel is needed; titles are `ScreenTitle` (the death title is `GameTitle` in `BLOOD_BRIGHT`), explanations `SecondaryLabel`/`MetaLabel`, exits are the unified buttons (one `PrimaryButton`). Prompts over the world are outline text (`HudValue`/`HudLabel`/`WarningLabel`) or a thin translucent iron plate (trap banners, blood edge) — never opaque boxes. Hostile/blocked = blood, positive/active = ember, everything else bone. Key prompts take their glyph from `InputManager.glyph()`; no ☰/Ⓐ/⚠ font glyphs. `tools/overlay_preview.tscn` renders each of them in isolation (`OVERLAY=died|buff_rare|runend|traps|…`).
 * Touch controls keep their positions and sizes. Attack is the dominant combat control: dark iron rim, bone icon, ember response. Dash, burst and block are the same family and subordinate. Pause/map are quieter. The joystick is a subtle dark radial surface with a clear thumb.
 
 ## 8. Accessibility and performance
@@ -121,4 +133,5 @@ Contrast (measured, WCAG): bone on iron 11.5–14:1, dim bone 5.9–7.2:1, ember
 
 1. Pick the role (title/section/body/…) and the component (button kind, panel kind) — do not invent colours or sizes.
 2. Use a theme variation or the `PUI` helpers. If something needs a new look, add it to `pui.gd` and this document.
-3. Check it in `tools/ui_showcase.tscn` and with `tools/ui_shot.gd` at phone shape and desktop shape.
+3. UI built in code under a `CanvasLayer` does **not** inherit the root theme (Godot stops the lookup at the layer): give the top-level Control `PUI.adopt(control)`; children inherit it. (Direct children of a scene's root Control are fine.)
+4. Check it in `tools/ui_showcase.tscn` and with `tools/ui_shot.gd` at phone shape and desktop shape.
