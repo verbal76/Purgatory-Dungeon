@@ -290,7 +290,7 @@ func _show_empty_state(message: String) -> void:
 	medal.add_child(PUIIcon.make("hourglass", 72.0))
 	box.add_child(medal)
 
-	var lbl := PUI.label(message, "ParchmentCardTitle")
+	var lbl := PUI.label(message, "ParchmentBody")   # a sentence: Source Sans
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(lbl)

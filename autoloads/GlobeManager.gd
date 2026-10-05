@@ -132,6 +132,8 @@ func _build_alert_ui() -> void:
 	# One outlined label (no drop-shadow twin); its alpha is animated through modulate.
 	_alert_label = PUI.label(ALERT_TEXT, "CardTitle")
 	_alert_label.add_theme_constant_override("outline_size", 5)
+	# Cinzel's lowercase is small caps, so a world-space alert is set a step larger than the role size.
+	_alert_label.add_theme_font_size_override("font_size", int(round(PUI.fs("card_title") * 1.3)))
 	_alert_label.add_theme_color_override("font_color", ALERT_COLOR)
 	_alert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_alert_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER

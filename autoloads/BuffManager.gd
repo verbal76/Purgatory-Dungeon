@@ -402,7 +402,7 @@ func _show_slot_ui() -> void:
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	header.add_child(title)
 
-	var day_label := PUI.label("Day %d" % GameClock.current_day, "SecondaryLabel")
+	var day_label := PUI.label("Day %d" % GameClock.current_day, "StatLabel")
 	day_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	day_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	header.add_child(day_label)
@@ -457,7 +457,7 @@ func _build_slot_card(x: float, y: float) -> void:
 	vbox.add_theme_constant_override("separation", PUI.S2)
 
 	# Rarity tag (text + colour, never colour alone)
-	var rarity_lbl := PUI.label(ranking.capitalize(), "MetaLabel")
+	var rarity_lbl := PUI.label(ranking.capitalize(), "StatLabel")
 	rarity_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(rarity_lbl)
 	_slot_rarity_label = rarity_lbl

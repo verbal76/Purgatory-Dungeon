@@ -236,7 +236,7 @@ func _build_nav_buttons() -> void:
 	_prev_icon = PUI.button_chevron(_prev_btn, "chevron_left", true)
 	_nav_bar.add_child(_prev_btn)
 
-	_page_label = PUI.label("1 / 1", "SecondaryLabel")
+	_page_label = PUI.label("1 / 1", "StatLabel")
 	_page_label.name = "PageLabel"
 	_page_label.custom_minimum_size.x = 96.0
 	_page_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
