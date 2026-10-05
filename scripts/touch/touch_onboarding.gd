@@ -51,13 +51,20 @@ func setup(tc: Node) -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_label = Label.new()
-	_label.add_theme_font_size_override("font_size", 30)
-	_label.add_theme_color_override("font_color", Color(1.0, 0.93, 0.78, 1.0))
-	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	_label.add_theme_constant_override("outline_size", 8)
+	# Brand typography: body role, bone text on a tiny dark iron plate (the plate is the Label's own
+	# "normal" stylebox, so the label's rect - which placement keeps clear of every button - includes it).
+	PUI.apply_role(_label, "body", PUI.BONE_BRIGHT)
+	_label.add_theme_font_override("font", PUI.font("body_semi"))
+	_label.add_theme_constant_override("outline_size", 3)
+	_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.9))
+	var plate := PUI.box(Color(0.07, 0.055, 0.045, 0.88), PUI.EDGE_BRASS.darkened(0.3), Color(0.05, 0.04, 0.035, 0.9), 0.05, 0.25, 0.02, Color(0, 0, 0, 0), 8)
+	plate.content_margin_left = PUI.S4
+	plate.content_margin_right = PUI.S4
+	plate.content_margin_top = PUI.S2
+	plate.content_margin_bottom = PUI.S2
+	_label.add_theme_stylebox_override("normal", plate)
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_label.custom_minimum_size = Vector2(420, 0)
+	_label.autowrap_mode = TextServer.AUTOWRAP_OFF   # hints are short; the plate hugs the text
 	_label.modulate.a = 0.0
 	_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_label)
@@ -202,6 +209,7 @@ func _activate(step: String) -> void:
 	active = step
 	_shown_for = 0.0
 	_label.text = TEXT[step]
+	_label.reset_size()   # shrink the plate to the new text
 	_count_show(step)
 	_set_highlight(step, true)
 

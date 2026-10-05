@@ -311,6 +311,7 @@ func _refresh_button_status() -> void:
 	if b == null:
 		return
 	var player := get_tree().get_first_node_in_group("player")
+	_refresh_charge(player)
 	var cd: float = 0.0
 	if player != null:
 		var remain: float = 0.0
@@ -328,6 +329,19 @@ func _refresh_button_status() -> void:
 		b.cooldown = cd
 		b.badge = badge
 		b.queue_redraw()
+
+
+# Hold-to-charge progress of the Rapid Attack (both classes expose it) as an ember ring on ATTACK.
+func _refresh_charge(player: Node) -> void:
+	var atk: TouchButton = buttons.get("attack")
+	if atk == null:
+		return
+	var ch: float = 0.0
+	if player != null and "_rapid_attack_charge" in player:
+		ch = clampf(float(player.get("_rapid_attack_charge")), 0.0, 1.0)
+	if not is_equal_approx(atk.charge, ch):
+		atk.charge = ch
+		atk.queue_redraw()
 
 
 # ── Contextual USE button ─────────────────────────────────────────────────────
@@ -527,12 +541,21 @@ func release_all() -> void:
 
 # ── Drawing ───────────────────────────────────────────────────────────────────
 
+const STICK_IDLE_ALPHA := 0.62   # resting joystick: faint but always findable (the opacity setting scales it further)
+
+
+## Floating stick: a dark radial well with a faint iron rim and a bone/iron thumb. Cached textures only;
+## redrawn when the stick state changes, never per frame.
 func _draw_stick() -> void:
 	var radius: float = STICK_RADIUS * ui_scale
 	var base: Vector2 = _stick_base if _stick_active else stick_default
-	var a: float = 1.0 if _stick_active else 0.45
-	_stick_draw.draw_circle(base, radius, Color(TouchIcons.INK.r, TouchIcons.INK.g, TouchIcons.INK.b, 0.45 * a))
-	_stick_draw.draw_arc(base, radius, 0.0, TAU, 56, Color(TouchIcons.BONE.r, TouchIcons.BONE.g, TouchIcons.BONE.b, 0.55 * a), 3.0, true)
+	var a: float = 1.0 if _stick_active else STICK_IDLE_ALPHA
+	var tint := Color(1, 1, 1, a)
+	_stick_draw.draw_texture_rect(TouchButton.stick_base_texture(), Rect2(base - Vector2(radius, radius), Vector2(radius, radius) * 2.0), false, tint)
+	_stick_draw.draw_arc(base, radius - 1.5, 0.0, TAU, 56, Color(PUI.EDGE.lightened(0.2), a), 3.0, true)
+	_stick_draw.draw_arc(base, radius - 4.0, PI * 1.08, PI * 1.62, 20, Color(PUI.EDGE_BRASS.r, PUI.EDGE_BRASS.g, PUI.EDGE_BRASS.b, 0.55 * a), 1.5, true)
+	var kr: float = radius * 0.42
 	var knob: Vector2 = base + _stick_vec * radius
-	_stick_draw.draw_circle(knob, radius * 0.42, Color(TouchIcons.INK.r, TouchIcons.INK.g, TouchIcons.INK.b, 0.80 * a))
-	_stick_draw.draw_arc(knob, radius * 0.42, 0.0, TAU, 40, TouchIcons.EMBER if _stick_active else Color(TouchIcons.BONE.r, TouchIcons.BONE.g, TouchIcons.BONE.b, 0.6), 3.0, true)
+	_stick_draw.draw_texture_rect(TouchButton.stick_knob_texture(), Rect2(knob - Vector2(kr, kr), Vector2(kr, kr) * 2.0), false, tint)
+	var ring: Color = PUI.EMBER if _stick_active else PUI.EDGE_BRASS
+	_stick_draw.draw_arc(knob, kr - 1.5, 0.0, TAU, 40, Color(ring.r, ring.g, ring.b, a), 3.0, true)
