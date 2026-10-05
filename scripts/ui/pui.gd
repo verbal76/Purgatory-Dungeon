@@ -38,12 +38,12 @@ const EMBER         := Color("cf8a2e")   # THE accent: selection, focus, active,
 const EMBER_BRIGHT  := Color("efae4d")   # accent on hover / pressed / highlighted values
 const EMBER_DEEP    := Color("8a5a1d")   # accent edges at rest, fills under the accent
 const BLOOD         := Color("8c2a28")   # danger edges / fills (semantic only)
-const BLOOD_BRIGHT  := Color("d0524a")   # danger text
+const BLOOD_BRIGHT  := Color("e2685d")   # danger text
 const MOSS          := Color("7f9a58")   # positive / available (semantic only - never an accent)
-const PARCHMENT     := Color("cdb88a")   # aged paper (lore, records, the Alchemist's ledger)
-const PARCHMENT_DK  := Color("a98f5f")   # paper shading / edges
-const INK           := Color("2a1d11")   # text on parchment
-const INK_DIM       := Color("5c4a32")   # secondary text on parchment
+const PARCHMENT     := Color("d3bf93")   # aged paper (lore, records, the Alchemist's ledger)
+const PARCHMENT_DK  := Color("b09665")   # paper shading / edges
+const INK           := Color("1a1008")   # text on parchment
+const INK_DIM       := Color("4a3a25")   # secondary text on parchment
 const SCRIM         := Color(0.04, 0.03, 0.03, 0.62)   # veil over the dungeon behind menus
 
 # ── Spacing / size tokens (virtual px; multiples of 4) ───────────────────────────────────────
@@ -488,7 +488,7 @@ static func _theme_labels(t: Theme) -> void:
 	_role_label(t, "CaptionLabel", "caption")
 	# parchment contexts: same hierarchy, ink colours
 	_role_label(t, "ParchmentTitle", "screen_title", INK)
-	_role_label(t, "ParchmentHeading", "section", Color("7a4a14"))
+	_role_label(t, "ParchmentHeading", "section", Color("6b3f0f"))
 	_role_label(t, "ParchmentCardTitle", "card_title", INK)
 	_role_label(t, "ParchmentBody", "body", INK)
 	_role_label(t, "ParchmentMeta", "metadata", INK_DIM)

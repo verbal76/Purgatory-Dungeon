@@ -28,9 +28,9 @@ no per-frame UI cost. Materials are tiny 9‑slice textures generated once at st
 | Primary text | `PUI.BONE` (`BONE_BRIGHT` on hover) | `#eadfc6` | warm bone — never pure white |
 | Secondary text | `PUI.BONE_DIM` / `BONE_FAINT` | `#ab9f89` / `#6f6657` | secondary / disabled |
 | **Accent** | `PUI.EMBER` / `EMBER_BRIGHT` / `EMBER_DEEP` | `#cf8a2e` / `#efae4d` / `#8a5a1d` | THE brand interaction colour: selection, focus, active tab, primary action, key values |
-| Danger | `PUI.BLOOD` / `BLOOD_BRIGHT` | `#8c2a28` / `#d0524a` | only for danger: Hardcore warning, destructive actions, death, invalid |
+| Danger | `PUI.BLOOD` / `BLOOD_BRIGHT` | `#8c2a28` / `#e2685d` | only for danger: Hardcore warning, destructive actions, death, invalid |
 | Positive | `PUI.MOSS` | `#7f9a58` | only where green has meaning (affordable/available). Never an accent |
-| Parchment | `PUI.PARCHMENT` / `PARCHMENT_DK` / `INK` / `INK_DIM` | `#cdb88a` / `#a98f5f` / `#2a1d11` / `#5c4a32` | lore/records paper and its ink |
+| Parchment | `PUI.PARCHMENT` / `PARCHMENT_DK` / `INK` / `INK_DIM` | `#d3bf93` / `#b09665` / `#1a1008` / `#4a3a25` | lore/records paper and its ink |
 
 Rules: one accent (ember). Selected, active, focused and primary all use it. No blue, no bright white outlines, no green call‑to‑action.
 Colour is never the only signal: selected = amber edge **and** tinted fill; disabled = desaturated **and** dim text; danger = edge + wording.
@@ -124,7 +124,7 @@ Use `PUIIcon.make(kind, px, tint)`. No emoji, no font glyphs (the Latin font sub
 
 ## 8. Accessibility and performance
 
-Contrast: bone on iron ≥ 11:1, dim bone ≥ 6:1, ink on parchment ≥ 10:1. Selected/disabled/danger are never colour‑only. Focus is always visible. Text ≥ 16 px (body ≥ 20 on phones). No blur, no continuous UI animation; the materials are generated once (≈ 40 small textures).
+Contrast (measured, WCAG): bone on iron 11.5–14:1, dim bone 5.9–7.2:1, ember (bright) on iron 7.9–9.7:1, danger text 4.6–5.7:1, ink on parchment 10.4:1, dim ink 6.1:1. Selected/disabled/danger are never colour‑only. Focus is always visible. Text ≥ 16 px (body ≥ 20 on phones). No blur, no continuous UI animation; the materials are generated once (≈ 40 small textures).
 
 ## 9. Adding UI
 
