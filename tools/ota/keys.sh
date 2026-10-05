@@ -62,7 +62,7 @@ _ota_gh_download() {   # $1 = release id, $2 = destination; retries while the cr
     sleep 5
   done
   [[ -n "$aid" ]] || { echo "ota keys: the stored key release $id has no ota-signing.key asset" >&2; return 1; }
-  ( umask 077; gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/$aid" > "$dest" )
+  ( umask 077; gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$aid" > "$dest" )
   chmod 600 "$dest"
 }
 
@@ -101,7 +101,7 @@ _ota_keys() {
     case "$arg" in
       --public-only) mode=public ;;
       --no-create) no_create=1 ;;
-      -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}"; return 0 ;;
+      -h|--help) awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "${BASH_SOURCE[0]}"; return 0 ;;
       -*) echo "ota keys: unknown option $arg" >&2; return 2 ;;
       *) out="$arg" ;;
     esac
