@@ -57,6 +57,7 @@ const NAME_FONT_SIZE     : int   = 22
 const DESC_FONT_SIZE     : int   = 14
 const TRADEOFF_FONT_SIZE : int   = 13
 const PROMPT_FONT_SIZE   : int   = 16
+const PROMPT_FONT_SIZE_PHONE : int = 28
 const RARITY_TAG_FONT_SIZE : int = 11
 
 const TRADEOFF_COLOR   : Color = Color(1.0, 0.6,  0.2)
@@ -413,8 +414,8 @@ func _show_slot_ui() -> void:
 
 	# Prompt
 	var prompt := Label.new()
-	prompt.text = "Ⓐ Stop"
-	prompt.add_theme_font_size_override("font_size", PROMPT_FONT_SIZE)
+	prompt.text = "TAP to stop" if InputManager.is_touch() else "Ⓐ Stop"
+	prompt.add_theme_font_size_override("font_size", PROMPT_FONT_SIZE_PHONE if InputManager.is_touch() else PROMPT_FONT_SIZE)
 	prompt.add_theme_color_override("font_color", PROMPT_COLOR)
 	prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	prompt.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -578,7 +579,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Only accept input during ROLLING — once slowing starts, lock out further presses.
 	if _slot_state != SlotState.ROLLING:
 		return
-	if event.is_action_pressed("ui_accept") or event.is_action_pressed("equip"):
+	# Touch: the whole screen is the button (the touch layer is hidden while the game is paused).
+	var tapped: bool = event is InputEventScreenTouch and (event as InputEventScreenTouch).pressed
+	if tapped or event.is_action_pressed("ui_accept") or event.is_action_pressed("equip"):
 		_slot_state   = SlotState.SLOWING
 		_slot_elapsed = 0.0
 		_slot_timer   = 0.0

@@ -191,6 +191,16 @@ func _exit_tree() -> void:
 	release_all()
 
 
+## Screens that take over the whole display (death, run end) switch the layer off so its buttons never
+## sit over - or swallow taps meant for - their own buttons.
+func set_enabled(on: bool) -> void:
+	touch_enabled = on
+	if not on:
+		release_all()
+	if _root != null:
+		_root.visible = on and not get_tree().paused
+
+
 func _notification(what: int) -> void:
 	# Phone call, Home button, app switcher, screen lock: never leave an input stuck down.
 	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT \

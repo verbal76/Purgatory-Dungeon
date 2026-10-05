@@ -34,7 +34,7 @@ for scene in res://tests/validate_project.tscn res://tests/test_save_manager.tsc
 done
 # Touch layer (Android): runs as a touch platform so the layer is built; the desktop bindings test runs
 # WITHOUT it and proves keyboard / controller input is untouched.
-for scene in res://tests/test_touch_controls.tscn res://tests/test_mobile_ui.tscn; do
+for scene in res://tests/test_touch_controls.tscn res://tests/test_mobile_ui.tscn res://tests/test_app_lifecycle.tscn; do
 	PURGATORY_FORCE_TOUCH=1 run "$scene" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene"
 done
 run "res://tests/test_input_desktop.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_input_desktop.tscn

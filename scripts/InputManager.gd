@@ -24,6 +24,7 @@ func _ready() -> void:
 	if TouchControls.is_touch_platform():
 		current_scheme = Scheme.TOUCH
 		MobileUi.install(get_tree())
+		AppLifecycle.install(get_tree())
 
 
 func _input(event: InputEvent) -> void:
