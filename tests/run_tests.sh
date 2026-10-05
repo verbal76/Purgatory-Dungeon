@@ -13,6 +13,8 @@ LOG="$SCRATCH/last.log"
 # run <label> <cmd...>: runs a command, echoes output, fails on non-zero exit OR any "SCRIPT ERROR".
 run() {
 	local label="$1"; shift
+	# TEST_FILTER (a regex) runs only the matching stages (used by the Android job for the mobile subset).
+	if [ -n "${TEST_FILTER:-}" ] && ! echo "$label" | grep -Eq "$TEST_FILTER"; then return; fi
 	echo "=== $label"
 	"$@" > "$LOG" 2>&1
 	local code=$?

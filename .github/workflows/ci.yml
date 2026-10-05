@@ -16,7 +16,7 @@ name: CI
 #     branch, and the agent environment cannot push tags.)
 on:
   push:
-    branches: [main, 'promote/**', 'release/v[0-9]*']
+    branches: [main, 'promote/**', 'release/v[0-9]*', 'android-port']
     tags: ['v[0-9]*']
   pull_request:
   workflow_dispatch:
@@ -33,8 +33,9 @@ permissions:
 
 jobs:
   validate-and-export:
-    # A promote tag publishes an existing artifact; it must not rebuild anything.
-    if: ${{ !startsWith(github.ref, 'refs/heads/promote/') }}
+    # A promote tag publishes an existing artifact; it must not rebuild anything. Pushes to the
+    # android-port working branch build only the Android job (the full Windows run happens on the PR).
+    if: ${{ !startsWith(github.ref, 'refs/heads/promote/') && github.ref != 'refs/heads/android-port' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -138,9 +139,117 @@ jobs:
           retention-days: 7
           compression-level: 6
 
+  # Android APK: built, signed with the stable app key and qualified (identity, API 36 target, 16 KB
+  # alignment, signature, game content) by the same scripts anyone can run (tools/android/).
+  android:
+    if: ${{ !startsWith(github.ref, 'refs/heads/promote/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: android-signing-key      # first run creates the key; never two at once
+      cancel-in-progress: false
+    permissions:
+      contents: write                 # stores the signing key in a private draft release on the first run
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache Godot editor + Android export templates
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_RELEASE }}-android-templates-v1
+
+      - name: Install Godot ${{ env.GODOT_RELEASE }} + Android templates
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}"
+          mkdir -p ~/godot-bin && cd ~/godot-bin
+          curl -fsSL -O "${base}/SHA512-SUMS.txt"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          grep -E "Godot_v${GODOT_RELEASE}_(linux.x86_64.zip|export_templates.tpz)$" SHA512-SUMS.txt | sha512sum -c -
+          unzip -q "Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          tpl="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$tpl"
+          unzip -q "Godot_v${GODOT_RELEASE}_export_templates.tpz" 'templates/android_*' 'templates/version.txt' -d tmp
+          mv tmp/templates/* "$tpl"/
+          rm -rf tmp *.zip *.tpz
+
+      - name: Locate Godot
+        run: echo "GODOT=$HOME/godot-bin/Godot_v${GODOT_RELEASE}_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: Verify Godot version
+        run: |
+          "$GODOT" --version
+          "$GODOT" --version | grep -q "^${GODOT_VERSION}.stable"
+
+      - name: Check public version consistency
+        run: |
+          rel=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then rel="$GITHUB_REF_NAME"; fi
+          if [[ "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="v${GITHUB_REF_NAME#release/v}"; fi
+          if [[ -n "$rel" ]]; then python3 tools/release_tool.py check --tag "$rel"; else python3 tools/release_tool.py check; fi
+
+      - name: Mobile input / splash / menu tests
+        env:
+          REQUIRE_STUDIO_LOGO: ${{ (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')) && '1' || '' }}
+          TEST_FILTER: touch_controls|input_desktop|studio_splash|release_metadata|menu_scenes|misc_fixes|settings_controls
+        run: tests/run_tests.sh "$GODOT"
+
+      - name: Write build_info.json (shipped inside the game)
+        run: |
+          rel=""
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="--release"; fi
+          python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" $rel
+
+      - name: Android signing key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: source tools/android/signing.sh
+
+      - name: Build and qualify the APK
+        run: tools/android/build_apk.sh "$GODOT" build/android/Purgatory-Dungeon-Android.apk
+
+      - name: Android build record
+        run: |
+          apk=build/android/Purgatory-Dungeon-Android.apk
+          {
+            echo "Purgatory Dungeon - Android build"
+            echo "source_sha=${SOURCE_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "godot=$("$GODOT" --version)"
+            echo "package=com.hotatticgames.purgatorydungeon"
+            echo "version_name=$(cat VERSION)"
+            echo "version_code=$(cat VERSION)"
+            echo "cert_sha256=${ANDROID_CERT_SHA256}"
+            echo "apk_sha256=$(sha256sum "$apk" | cut -d' ' -f1)"
+          } | tee build/android/ANDROID_BUILD_INFO.txt
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PurgatoryDungeon-android-${{ env.SOURCE_SHA }}
+          path: |
+            build/android/Purgatory-Dungeon-Android.apk
+            build/android/ANDROID_BUILD_INFO.txt
+          retention-days: 7
+          compression-level: 0
+
   # Tag push or release/v<N> branch push -> publish the release built by this very run.
   publish:
-    needs: validate-and-export
+    needs: [validate-and-export, android]
     if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')
     runs-on: ubuntu-latest
     permissions:
@@ -152,9 +261,14 @@ jobs:
         with:
           name: PurgatoryDungeon-windows-${{ env.SOURCE_SHA }}
           path: artifact
-      - name: Publish "Purgatory Dungeon v<N>"
+      - uses: actions/download-artifact@v4
+        with:
+          name: PurgatoryDungeon-android-${{ env.SOURCE_SHA }}
+          path: android-artifact
+      - name: Publish "Purgatory Dungeon v<N>" (Windows zip + Android APK)
         env:
           GH_TOKEN: ${{ github.token }}
+          ANDROID_ARTIFACT_DIR: android-artifact
         run: |
           ver="${GITHUB_REF_NAME#release/}"
           tools/publish_release.sh "${ver#v}" "$SOURCE_SHA" artifact "$GITHUB_RUN_ID" true
