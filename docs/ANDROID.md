@@ -118,29 +118,45 @@ needed so neighbours cannot overlap. Hit areas are 1.3x the drawn radius; a touc
 always resolves to that button. Canvases shorter than 720 px shrink the cluster (down to 0.8x) instead of
 colliding with Pause/Map. Idle look marker sits left of the cluster at the move stick's height.
 
-### Button anatomy (`scripts/touch/touch_button.gd`; same anatomy at every size, all PUI palette colours)
-A physical control, drawn from cached radial textures plus a handful of arcs, only redrawn when its state changes
-(no shaders, no blur, no per-frame work). Fractions are of the drawn radius r (constants `RING_FRAC` etc.):
+### Button anatomy and baked art (`scripts/touch/touch_button.gd`, `assets/touch/`)
+Art direction: `docs/art/PD_Mobile_Control_Art_Reference.png` (direction only, never shipped or traced). The buttons are
+physical round controls: a soft drop shadow, a chunky segmented aged-bronze rim, a recessed dark cracked-slate face with an
+inner bevel, and a faceted hand-painted icon. The art is original, authored as faceted polygons and rendered OFFLINE by
+`tools/make_control_art.gd` into PNGs (seeded: a re-run is identical). Drawing in game is a few cached `draw_texture_rect`s
+(no shaders, no blur, no per-frame allocation); textures load once and are cached (`TouchButton.art_texture`), sampled
+with `TEXTURE_FILTER_LINEAR_WITH_MIPMAPS`. A missing file falls back to the code-drawn button, so controls never vanish.
 
-| Layer | Value |
-|---|---|
-| Drop shadow | cached radial disc, peak alpha 0.55, reach 1.16 r, offset 0.07 r down (4 px sub / 7 px Attack); 0.03 r while pressed |
-| Bezel (ring) | 0.22 r thick = 11% of the diameter (Pause/Map 0.18 r); Attack 22 px, subordinates 12.3 px; dark 1.5 px contact edge, faint lit upper-left / shaded lower-right arcs |
-| Hairline | 0.03 r (min 1.5 px) bright brass at the bezel's inner edge |
-| Face | recessed disc, radius 0.78 r (78% inset) of blackened iron (IRON centre to IRON_DEEP edge), a 0.07 r dark inner shadow line under the bezel (upper-left) and a faint lit lip (lower-right) |
-| Icon | bone, radius 0.84 x face radius, art fills ~55% of the face diameter, centred |
-| Sizes | Attack r 100 (200 px, 19.8 mm), slide/kick/block/burst r 56 (112 px, 11.1 mm), USE r 60, Pause/Map r 38; ATTACK = 1.79x a subordinate |
+| Asset (`assets/touch/`) | Px | Used by |
+|---|---|---|
+| `base_attack_<state>.png` | 512 | Attack: 24-block bronze rim, slate face, four diamond studs at the cardinal points |
+| `base_sub_<state>.png` | 256 | slide, kick, block, burst, USE: 20-block rim, no studs |
+| `icon_sword / shield / boot / flask / chevrons / key _<state>.png` | 256 | attack, block, kick, burst (red gem), slide (chevrons), USE |
+Pause / Map stay code-drawn (quieter family members). 32 PNGs, about 1.2 MB with their `.import` files (budget 6 MB).
+**Size choice**: Attack is drawn at 200 virtual px = 374 Pixel device px, so a 512 px base is ~1.4x oversampled; subordinates are
+112 px = 210 device px from a 256 px base (1.2x); icons draw at ~1.15 x the face radius, 256 px is ample. Mipmaps keep other
+densities clean. Imports are lossless (`compress/mode=0`, mipmaps on): crisp alpha edges and no ETC2/ASTC dependency on Android.
 
-| State | Bezel | Hairline | Face | Icon |
-|---|---|---|---|---|
-| rest | Attack aged brass (EDGE_BRASS -30%); others iron/brass mix; USE ember-deep; Pause/Map iron | brass +28% | IRON to IRON_DEEP | BONE (Pause/Map BONE_DIM) |
-| held / toggled | EMBER (Pause/Map EMBER_DEEP) | EMBER_BRIGHT | 30% darker + faint ember warmth, shadow tightens | BONE_BRIGHT warmed to ember, 0.03 r lower |
-| charging | bezel fills clockwise with EMBER_BRIGHT | | | |
-| burst cooldown | ember arc on the bezel + dark wedge over the face, shrinking | | | |
+Geometry (art units, disc radius 1.0): rim 0.80-1.00 (10% of the diameter, two bevel planes per block), inner bevel
+0.715-0.80, slate face radius 0.715; the canvas half-size is 1.12 so the pressed glow fits (the game draws the base at half-size
+r x 1.12). The code-drawn pieces that carry meaning stay on top: charge fill (ember arc on the rim), flask cooldown arc and dark
+wedge, count badge, USE caption (Cinzel, `PUI.MIN_DISPLAY_SIZE`), the onboarding pulse, the drag ring, and for USE a thin ember ring.
 
-The move and look sticks share the language: a recessed well in a 0.10 r aged-brass bezel with hairline and inner
-shadow line, and a bone thumb set in its own small bezel with a contact shadow; ember bezel while held. Resting
-sticks keep the idle alpha (`STICK_IDLE_ALPHA` 0.62) and everything is scaled by the Control Opacity setting.
+| State | When | Base | Icon |
+|---|---|---|---|
+| default | at rest | bronze rim, slate face | steel / bronze / bone / red gem |
+| pressed | held or toggled | rim lit toward ember + inner glow + soft outer glow, face slightly darker (pushed in; icon sits 0.03 r lower, shadow tightens) | warmed toward ember |
+| cooldown | `cooldown > 0` (flask) | desaturated, cooler grey | desaturated, cool |
+| disabled | `unavailable` (flask with no potions; input is unaffected) | dark grey | dark grey |
+
+Regenerate: `xvfb-run -a -s "-screen 0 1280x720x24" godot --rendering-driver opengl3 --path . --script tools/make_control_art.gd`
+(optional name filter after `--`, e.g. `-- icon_sword`), then `godot --headless --path . --import` and commit the PNGs with
+their `.import` files (keep `mipmaps/generate=true`). `tests/test_touch_art.gd` checks every referenced file exists, imports with
+mipmaps, has the expected size and mip chain, has all four states, and that the buttons pick the right one.
+
+Code-drawn fallback / Pause / Map / sticks (same family, from primitives): shadow (cached radial, alpha 0.55, reach 1.16 r,
+offset 0.07 r down), bezel 0.22 r (Pause/Map 0.18 r) with a hairline and inner shadow line, recessed iron face, bone icon, ember
+bezel when held. The move and look sticks use this language: a recessed well in a 0.10 r aged-brass bezel with a bone thumb in its
+own bezel; resting sticks keep the idle alpha (`STICK_IDLE_ALPHA` 0.62); the Control Opacity setting scales everything.
 
 Options > Gameplay > Touch Controls: control scheme, opacity, size, look sensitivity. Buttons are laid out inside the
 system safe area (cutouts, rounded corners, gesture bar). Onboarding shows one contextual hint at a
