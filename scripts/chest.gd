@@ -95,6 +95,7 @@ var _opened    : bool   = false
 var _player_in_range : bool = false
 
 # Prompt HUD (local CanvasLayer — only visible while player is in range).
+var _use_ctx       : bool        = false   # this chest is currently asking the touch layer for its USE button
 var _prompt_layer  : CanvasLayer = null
 var _prompt_label  : Label       = null
 
@@ -161,6 +162,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_set_use_context(false)
 	if has_node("/root/PlayerWallet") and PlayerWallet.wallet_changed.is_connected(_on_wallet_changed):
 		PlayerWallet.wallet_changed.disconnect(_on_wallet_changed)
 
@@ -184,6 +186,7 @@ func _on_body_near(body: Node) -> void:
 	_player_in_range = true
 	_refresh_prompt()
 	_prompt_layer.visible = true
+	_sync_use_context()
 
 
 func _on_body_leave(body: Node) -> void:
@@ -192,11 +195,13 @@ func _on_body_leave(body: Node) -> void:
 	_player_in_range = false
 	if _prompt_layer != null:
 		_prompt_layer.visible = false
+	_set_use_context(false)
 
 
 func _on_wallet_changed(_n: int) -> void:
 	if _player_in_range and not _opened:
 		_refresh_prompt()
+		_sync_use_context()
 
 
 func _refresh_prompt() -> void:
@@ -204,9 +209,26 @@ func _refresh_prompt() -> void:
 		return
 	var color_title : String = color.capitalize()
 	if has_node("/root/PlayerWallet") and PlayerWallet.get_key_count(color) > 0:
-		_prompt_label.text = "[A] Use %s Key" % color_title
+		_prompt_label.text = "[%s] Use %s Key" % [_use_glyph(), color_title]
 	else:
 		_prompt_label.text = "Locked — come back with a %s Key" % color_title
+
+
+func _use_glyph() -> String:
+	return InputManager.glyph("equip") if has_node("/root/InputManager") else "E"
+
+
+# Phones have no key to press: while the player stands at a chest they can open, the touch layer
+# shows its USE button (and hides it again when they walk away, or the chest opens).
+func _sync_use_context() -> void:
+	_set_use_context(has_node("/root/PlayerWallet") and PlayerWallet.get_key_count(color) > 0)
+
+
+func _set_use_context(want: bool) -> void:
+	if want == _use_ctx or not is_inside_tree():
+		return
+	_use_ctx = want
+	get_tree().call_group(TouchControls.GROUP, "set_use_context", want, "OPEN")
 
 
 func _attempt_unlock() -> void:
@@ -217,6 +239,7 @@ func _attempt_unlock() -> void:
 	if not PlayerWallet.spend_key(color):
 		return
 	_opened = true
+	_set_use_context(false)
 	_area.set_deferred("monitoring", false)
 	_prompt_layer.visible = false
 	_play_unlock_sequence()

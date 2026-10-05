@@ -246,6 +246,27 @@ func _ready() -> void:
 	_check(ob.is_done("use") and shows_before == 0, "a hint shown %d times without being used retires" % TouchOnboarding.MAX_SHOWS)
 	tc2.queue_free()
 
+	# A chest the player can open asks for the USE button, and gives it back when they walk away.
+	var chest := (load("res://scripts/chest.gd") as GDScript).new() as StaticBody3D
+	chest.set("color", "bronze")
+	add_child(chest)
+	await _frames(2)
+	var body := CharacterBody3D.new()
+	body.add_to_group("player")
+	add_child(body)
+	tc.set_use_context(false)   # baseline: nothing else asking
+	var base_ctx: int = tc._use_context
+	chest._on_body_near(body)
+	_check(not tc.buttons["equip"].visible, "no USE button at a chest the player has no key for")
+	PlayerWallet.add_key("bronze")
+	chest._on_body_near(body)
+	_check(tc.buttons["equip"].visible and tc.buttons["equip"].label == "OPEN", "USE (OPEN) shown at a chest the player can open")
+	chest._on_body_leave(body)
+	_check(tc._use_context == base_ctx, "USE button released when the player walks away (%d vs %d)" % [tc._use_context, base_ctx])
+	chest.queue_free()
+	body.queue_free()
+	await _frames(2)
+
 	# Teardown: nothing may be left pressed.
 	tc.queue_free()
 	await _frames(2)
