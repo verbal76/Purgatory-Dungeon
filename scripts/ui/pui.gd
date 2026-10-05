@@ -759,3 +759,144 @@ static func _theme_popups(t: Theme) -> void:
 	t.set_font_size("font_size", "ItemList", fs("body"))
 	t.set_color("font_color", "ItemList", BONE)
 	t.set_color("font_selected_color", "ItemList", EMBER_BRIGHT)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+#  PAPER  (additive block: the Codex page and the Alchemist's ledger)
+#  The owner's parchment.jpeg, toned once into a light aged-paper 9-slice with a burnt edge and a dark
+#  brass-brown rim, so ink (PUI.INK) reads at >= 10:1 and the sheet sits inside the iron UI like a physical
+#  artifact. Controls placed on it stay iron/brass (Button, PrimaryButton, NavButton).
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+
+const PAPER_SOURCE := "res://Music & background images/parchment.jpeg"
+const PAPER_BASE := Color("e8d8ae")      # light aged paper: INK on it is ~11:1
+const PAPER_SLIP := Color("f0e3bf")      # a slip/label pasted on the sheet (a touch lighter)
+const PAPER_SLIP_DIM := Color("cfc3a2")  # the same slip when it is unavailable (greyer, darker)
+const PAPER_RIM := Color("4a3a24")       # dark brass-brown edge of the sheet
+
+
+## The paper sheet: PanelContainer with the toned parchment stylebox. `content_pad` = inner margins.
+static func paper_panel(content_pad: Vector2 = Vector2(32, 22)) -> PanelContainer:
+	var p := PanelContainer.new()
+	p.name = "ParchmentPanel"
+	var sb: StyleBoxTexture = paper_box()
+	sb.content_margin_left = content_pad.x
+	sb.content_margin_right = content_pad.x
+	sb.content_margin_top = content_pad.y
+	sb.content_margin_bottom = content_pad.y
+	p.add_theme_stylebox_override("panel", sb)
+	return p
+
+
+## Toned parchment.jpeg as a 9-slice (cached). Falls back to flat paper if the file is missing.
+static func paper_box(radius: int = RADIUS) -> StyleBoxTexture:
+	var key := "paper|%d" % radius
+	if _boxes.has(key):
+		return _boxes[key].duplicate()
+	var w := 192
+	var h := 128
+	var burn_w := 22.0
+	var src: Image = null
+	if ResourceLoader.exists(PAPER_SOURCE):
+		var tex := load(PAPER_SOURCE) as Texture2D
+		if tex != null:
+			src = tex.get_image()
+			if src != null:
+				if src.is_compressed():
+					src.decompress()
+				src.resize(w, h, Image.INTERPOLATE_BILINEAR)
+	# mean luminance (coarse grid) so the stains are expressed relative to the sheet's own average
+	var mean_l: float = 0.78
+	if src != null:
+		var acc: float = 0.0
+		var n: int = 0
+		for gy in range(4, h, 8):
+			for gx in range(4, w, 8):
+				var sc: Color = src.get_pixel(gx, gy)
+				acc += 0.299 * sc.r + 0.587 * sc.g + 0.114 * sc.b
+				n += 1
+		mean_l = acc / float(maxi(n, 1))
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	var rim_w := 2.0
+	var hw: float = float(w) * 0.5
+	var hh: float = float(h) * 0.5
+	var burn_col: Color = PARCHMENT_DK.darkened(0.25)
+	for y in h:
+		for x in w:
+			var px: float = absf(float(x) + 0.5 - hw) - (hw - float(radius))
+			var py: float = absf(float(y) + 0.5 - hh) - (hh - float(radius))
+			var d: float = Vector2(maxf(px, 0.0), maxf(py, 0.0)).length() + minf(maxf(px, py), 0.0) - float(radius)
+			var cov: float = clampf(0.5 - d, 0.0, 1.0)
+			if cov <= 0.0:
+				continue
+			var depth: float = -d
+			var c: Color
+			if depth < rim_w:
+				c = PAPER_RIM
+			else:
+				var k: float = 1.0
+				if src != null:
+					var sc2: Color = src.get_pixel(x, y)
+					k = clampf(1.0 + ((0.299 * sc2.r + 0.587 * sc2.g + 0.114 * sc2.b) - mean_l) * 1.1, 0.90, 1.03)
+				# stains darken and warm (blue falls fastest) instead of greying, and never drop below the contrast floor
+				c = Color(PAPER_BASE.r * (0.5 + 0.5 * k), PAPER_BASE.g * k, PAPER_BASE.b * k * k, 1.0)
+				c.r = clampf(c.r + (_hash(x, y, 11) - 0.5) * 0.02, 0.0, 1.0)
+				c.g = clampf(c.g + (_hash(x, y, 11) - 0.5) * 0.02, 0.0, 1.0)
+				c.b = clampf(c.b + (_hash(x, y, 11) - 0.5) * 0.02, 0.0, 1.0)
+				var burn: float = clampf(1.0 - (depth - rim_w) / burn_w, 0.0, 1.0)
+				c = c.lerp(burn_col, pow(burn, 1.8) * 0.55)
+			img.set_pixel(x, y, Color(c.r, c.g, c.b, cov))
+	var sb := StyleBoxTexture.new()
+	sb.texture = ImageTexture.create_from_image(img)
+	var m: float = burn_w + rim_w + 2.0
+	sb.texture_margin_left = m
+	sb.texture_margin_right = m
+	sb.texture_margin_top = m
+	sb.texture_margin_bottom = m
+	sb.content_margin_left = S6
+	sb.content_margin_right = S6
+	sb.content_margin_top = S5
+	sb.content_margin_bottom = S5
+	_boxes[key] = sb
+	return sb.duplicate()
+
+
+## A slip of paper on the sheet (an upgrade card, a lore entry). state: "active" (ember edge, warm base),
+## "normal" (brown edge), "dim" (unavailable: greyer, darker, muted edge).
+static func paper_slip(state: String = "normal") -> StyleBoxTexture:
+	match state:
+		"active":
+			return box(PAPER_SLIP, EMBER, PAPER_SLIP.darkened(0.06), 0.0, 0.10, 0.02, Color(EMBER.r, EMBER.g, EMBER.b, 0.20))
+		"dim":
+			return box(PAPER_SLIP_DIM, PARCHMENT_DK.darkened(0.25), PAPER_SLIP_DIM.darkened(0.06), 0.0, 0.10, 0.02)
+	return box(PAPER_SLIP, PARCHMENT_DK.darkened(0.45), PAPER_SLIP.darkened(0.06), 0.0, 0.10, 0.02)
+
+
+## Ink colour for text on a dimmed slip (still >= 6:1).
+static func ink_muted() -> Color:
+	return INK.lerp(INK_DIM, 0.5)
+
+
+## Draws a PUIIcon chevron inside a button (arrows are not in the Latin font subset). `centered` = in the middle
+## (icon-only pager buttons); otherwise at the leading edge (chevron_left) or trailing edge (chevron_right).
+static func button_chevron(btn: Button, kind: String, centered: bool = false, px: float = 28.0) -> PUIIcon:
+	var tint: Color = BONE_DIM if btn.theme_type_variation == &"NavButton" else BONE_BRIGHT
+	var ic := PUIIcon.make(kind, px, tint)
+	var half: float = px * 0.5
+	if centered:
+		ic.set_anchors_preset(Control.PRESET_CENTER)
+		ic.offset_left = -half
+		ic.offset_right = half
+	else:
+		var left: bool = kind == "chevron_left"
+		ic.anchor_left = 0.0 if left else 1.0
+		ic.anchor_right = ic.anchor_left
+		ic.anchor_top = 0.5
+		ic.anchor_bottom = 0.5
+		ic.offset_left = float(S5 - S1) if left else -(float(S5 - S1) + px)
+		ic.offset_right = ic.offset_left + px
+	ic.offset_top = -half
+	ic.offset_bottom = half
+	btn.add_child(ic)
+	return ic
+
