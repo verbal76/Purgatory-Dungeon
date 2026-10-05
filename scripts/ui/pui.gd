@@ -468,9 +468,9 @@ static func _theme_labels(t: Theme) -> void:
 	t.set_font_size("normal_font_size", "ParchmentRich", fs("body"))
 	# divider
 	t.set_type_variation("BrassDivider", "HSeparator")
-	t.set_stylebox("separator", "BrassDivider", flat(EDGE_BRASS, Color(0, 0, 0, 0), 0, 0))
+	t.set_stylebox("separator", "BrassDivider", _rule_box(EDGE_BRASS))
 	t.set_constant("separation", "BrassDivider", 2)
-	t.set_stylebox("separator", "HSeparator", flat(EDGE, Color(0, 0, 0, 0), 0, 0))
+	t.set_stylebox("separator", "HSeparator", _rule_box(EDGE))
 	t.set_constant("separation", "HSeparator", 2)
 
 
@@ -832,7 +832,7 @@ static func paper_box(radius: int = RADIUS) -> StyleBoxTexture:
 					var sc2: Color = src.get_pixel(x, y)
 					k = clampf(1.0 + ((0.299 * sc2.r + 0.587 * sc2.g + 0.114 * sc2.b) - mean_l) * 1.1, 0.90, 1.03)
 				# stains darken and warm (blue falls fastest) instead of greying, and never drop below the contrast floor
-				c = Color(PAPER_BASE.r * k, PAPER_BASE.g * (0.5 + 0.5 * k), PAPER_BASE.b * k * k, 1.0)
+				c = Color(PAPER_BASE.r * (0.5 + 0.5 * k), PAPER_BASE.g * k, PAPER_BASE.b * k * k, 1.0)
 				c.r = clampf(c.r + (_hash(x, y, 11) - 0.5) * 0.02, 0.0, 1.0)
 				c.g = clampf(c.g + (_hash(x, y, 11) - 0.5) * 0.02, 0.0, 1.0)
 				c.b = clampf(c.b + (_hash(x, y, 11) - 0.5) * 0.02, 0.0, 1.0)
@@ -892,3 +892,12 @@ static func button_chevron(btn: Button, kind: String, centered: bool = false, px
 	ic.offset_bottom = half
 	btn.add_child(ic)
 	return ic
+
+
+## A 2 px rule. A StyleBoxFlat has no minimum size, and HSeparator draws its stylebox at that height - the
+## dividers were invisible until the box got content margins (1 px top + 1 px bottom = 2 px line).
+static func _rule_box(col: Color) -> StyleBoxFlat:
+	var sb := flat(col, Color(0, 0, 0, 0), 0, 0)
+	sb.content_margin_top = 1.0
+	sb.content_margin_bottom = 1.0
+	return sb

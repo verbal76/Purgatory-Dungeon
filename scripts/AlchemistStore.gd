@@ -221,7 +221,7 @@ func _build_nav_buttons() -> void:
 
 	_load_char_btn = PUI.button("Load Character", "nav")
 	_load_char_btn.name = "LoadCharacterButton"
-	_load_char_btn.custom_minimum_size = Vector2(280, PUI.BUTTON_H)
+	_load_char_btn.custom_minimum_size = Vector2(400, PUI.BUTTON_H)
 	_load_char_btn.pressed.connect(_go_to_character_selection)
 	PUI.button_chevron(_load_char_btn, "chevron_left")
 	_nav_bar.add_child(_load_char_btn)
@@ -254,7 +254,7 @@ func _build_nav_buttons() -> void:
 
 	_new_run_btn = PUI.button("Start Another Run", "primary")
 	_new_run_btn.name = "StartAnotherRunButton"
-	_new_run_btn.custom_minimum_size = Vector2(280, PUI.BUTTON_H_PRIMARY)
+	_new_run_btn.custom_minimum_size = Vector2(400, PUI.BUTTON_H_PRIMARY)
 	_new_run_btn.pressed.connect(_start_new_run)
 	PUI.button_chevron(_new_run_btn, "chevron_right")
 	_nav_bar.add_child(_new_run_btn)
@@ -274,7 +274,7 @@ func _expander() -> Control:
 # Phones: a 72-high bottom bar with wider buttons. The ledger takes the remaining height.
 func _fit_nav_for_phone() -> void:
 	for b in [_load_char_btn, _new_run_btn]:
-		b.custom_minimum_size = Vector2(320, 72)
+		b.custom_minimum_size = Vector2(420, 72)
 
 
 func _fit_pager_for_phone() -> void:
