@@ -118,6 +118,30 @@ needed so neighbours cannot overlap. Hit areas are 1.3x the drawn radius; a touc
 always resolves to that button. Canvases shorter than 720 px shrink the cluster (down to 0.8x) instead of
 colliding with Pause/Map. Idle look marker sits left of the cluster at the move stick's height.
 
+### Button anatomy (`scripts/touch/touch_button.gd`; same anatomy at every size, all PUI palette colours)
+A physical control, drawn from cached radial textures plus a handful of arcs, only redrawn when its state changes
+(no shaders, no blur, no per-frame work). Fractions are of the drawn radius r (constants `RING_FRAC` etc.):
+
+| Layer | Value |
+|---|---|
+| Drop shadow | cached radial disc, peak alpha 0.55, reach 1.16 r, offset 0.07 r down (4 px sub / 7 px Attack); 0.03 r while pressed |
+| Bezel (ring) | 0.22 r thick = 11% of the diameter (Pause/Map 0.18 r); Attack 22 px, subordinates 12.3 px; dark 1.5 px contact edge, faint lit upper-left / shaded lower-right arcs |
+| Hairline | 0.03 r (min 1.5 px) bright brass at the bezel's inner edge |
+| Face | recessed disc, radius 0.78 r (78% inset) of blackened iron (IRON centre to IRON_DEEP edge), a 0.07 r dark inner shadow line under the bezel (upper-left) and a faint lit lip (lower-right) |
+| Icon | bone, radius 0.84 x face radius, art fills ~55% of the face diameter, centred |
+| Sizes | Attack r 100 (200 px, 19.8 mm), slide/kick/block/burst r 56 (112 px, 11.1 mm), USE r 60, Pause/Map r 38; ATTACK = 1.79x a subordinate |
+
+| State | Bezel | Hairline | Face | Icon |
+|---|---|---|---|---|
+| rest | Attack aged brass (EDGE_BRASS -30%); others iron/brass mix; USE ember-deep; Pause/Map iron | brass +28% | IRON to IRON_DEEP | BONE (Pause/Map BONE_DIM) |
+| held / toggled | EMBER (Pause/Map EMBER_DEEP) | EMBER_BRIGHT | 30% darker + faint ember warmth, shadow tightens | BONE_BRIGHT warmed to ember, 0.03 r lower |
+| charging | bezel fills clockwise with EMBER_BRIGHT | | | |
+| burst cooldown | ember arc on the bezel + dark wedge over the face, shrinking | | | |
+
+The move and look sticks share the language: a recessed well in a 0.10 r aged-brass bezel with hairline and inner
+shadow line, and a bone thumb set in its own small bezel with a contact shadow; ember bezel while held. Resting
+sticks keep the idle alpha (`STICK_IDLE_ALPHA` 0.62) and everything is scaled by the Control Opacity setting.
+
 Options > Gameplay > Touch Controls: control scheme, opacity, size, look sensitivity. Buttons are laid out inside the
 system safe area (cutouts, rounded corners, gesture bar). Onboarding shows one contextual hint at a
 time, fades when the player does the thing, is saved, and is retired after 3 ignored showings.

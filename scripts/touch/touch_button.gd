@@ -23,9 +23,21 @@ enum Mode { HOLD, TOGGLE }
 enum Tier { COMBAT, PRIMARY, CONTEXT, QUIET }
 
 const RIM_SEGMENTS := 56
-# Typography rule: short labels (USE / OPEN, the potion count) are Cinzel; 16 px is the smallest caption.
-# TODO: switch to PUI.MIN_DISPLAY_SIZE once the typography branch lands (it is the same 16).
-const CAPTION_MIN_FS := 16
+# Typography rule: short labels (USE / OPEN, the potion count) are Cinzel; PUI.MIN_DISPLAY_SIZE is the smallest caption.
+const CAPTION_MIN_FS := PUI.MIN_DISPLAY_SIZE
+
+# ── Button anatomy (fractions of the DRAWN radius r; every button uses the same anatomy at its own size) ──
+# A physical control: a soft drop shadow, a thick aged-brass/iron BEZEL (the ring), a thin brighter brass HAIRLINE
+# on the bezel's inner edge, a recessed blackened-iron FACE with an inner shadow line, and a bone ICON.
+const RING_FRAC     := 0.22   # bezel thickness: 11% of the diameter (Pause/Map: RING_FRAC_QUIET)
+const RING_FRAC_QUIET := 0.18
+const HAIRLINE_FRAC := 0.03   # bright hairline on the bezel's inner edge (>= 1.5 px)
+const ICON_FRAC     := 0.84   # icon radius as a fraction of the FACE radius (the icon art fills ~55% of the face diameter)
+const SHADOW_DROP   := 0.07   # drop shadow offset (down), fraction of r
+const SHADOW_DROP_DOWN := 0.03   # ... while pressed (the button sits lower, the shadow tightens)
+const SHADOW_REACH  := 1.16   # drop shadow disc radius, fraction of r
+const SHADOW_ALPHA  := 0.55   # peak alpha of the (cached, radial) shadow texture
+const FACE_INSET_SHADOW := 0.07   # width of the dark inner shadow line under the bezel, fraction of r
 
 var action    : String = ""
 var icon_kind : String = ""
@@ -115,38 +127,45 @@ static func _clear(c: Color) -> Color:
 	return Color(c.r, c.g, c.b, 0.0)
 
 
-## Button face: iron lifted at the centre, blackened toward the rim. down = pressed / toggled (a faint ember warmth).
+## Button face: a recessed disc of blackened iron, a touch lighter at the centre, darker toward the bezel (kept subtle:
+## a well, not a glossy dome). down = pressed in: darker, with a faint ember warmth at the centre.
 static func body_texture(p_tier: int, down: bool) -> Texture2D:
 	var key := "body|%d|%s" % [p_tier, down]
 	if _skin.has(key):
 		return _skin[key]
-	var hi: Color = PUI.IRON_RAISED
-	var mid: Color = PUI.IRON
+	var hi: Color = PUI.IRON
+	var mid: Color = PUI.IRON.lerp(PUI.IRON_DEEP, 0.55)
 	var lo: Color = PUI.IRON_DEEP
-	var a: float = 0.94
+	var a: float = 0.97
 	match p_tier:
 		Tier.PRIMARY:
-			hi = PUI.IRON_HOVER.darkened(0.05)
-			mid = PUI.IRON_RAISED.darkened(0.18)
+			hi = PUI.IRON_RAISED.darkened(0.12)
 		Tier.CONTEXT:
-			hi = PUI.IRON_RAISED.lerp(PUI.EMBER_DEEP, 0.22)
-			mid = PUI.IRON.lerp(PUI.EMBER_DEEP, 0.10)
+			hi = PUI.IRON.lerp(PUI.EMBER_DEEP, 0.16)
+			mid = PUI.IRON_DEEP.lerp(PUI.EMBER_DEEP, 0.07)
 		Tier.QUIET:
-			hi = PUI.IRON
-			mid = PUI.IRON.darkened(0.12)
-			lo = PUI.IRON_DEEP.darkened(0.2)
-			a = 0.84
+			hi = PUI.IRON.darkened(0.08)
+			a = 0.90
 	if down:
-		hi = hi.lerp(PUI.EMBER_DEEP, 0.38)
-		mid = mid.darkened(0.25)
-		lo = lo.darkened(0.2)
+		hi = hi.darkened(0.30).lerp(PUI.EMBER_DEEP, 0.12)
+		mid = mid.darkened(0.30)
+		lo = lo.darkened(0.30)
 	var edge := Color(lo.r, lo.g, lo.b, a)
 	return _radial(key, [
 		[0.0, Color(hi.r, hi.g, hi.b, a)],
-		[0.62, Color(mid.r, mid.g, mid.b, a)],
+		[0.66, Color(mid.r, mid.g, mid.b, a)],
 		[0.97, edge],
 		[1.0, _clear(edge)],
 	], 128)
+
+
+## Soft drop shadow: a dark disc fading to nothing at its edge. One cached texture for every button.
+static func shadow_texture() -> Texture2D:
+	return _radial("shadow", [
+		[0.0, Color(0, 0, 0, SHADOW_ALPHA)],
+		[0.70, Color(0, 0, 0, SHADOW_ALPHA * 0.72)],
+		[1.0, Color(0, 0, 0, 0.0)],
+	], 96)
 
 
 ## Joystick base: a dark well, a touch lighter toward its rim; the iron rim ring is drawn on top.
@@ -173,18 +192,15 @@ static func stick_knob_texture() -> Texture2D:
 
 # ── Drawing ───────────────────────────────────────────────────────────────────
 
-func _rim_color(down: bool) -> Color:
-	var rim: Color
-	match tier:
-		Tier.PRIMARY: rim = PUI.EDGE_BRASS.darkened(0.22)
-		Tier.CONTEXT: rim = PUI.EMBER_DEEP
-		Tier.QUIET:   rim = PUI.EDGE.darkened(0.05)
-		_:            rim = PUI.EDGE.lightened(0.28)
+## Bezel colour: aged brass for the primary, iron-with-brass for the family, ember when held.
+func _ring_color(down: bool) -> Color:
 	if down:
-		rim = PUI.EMBER if tier != Tier.QUIET else PUI.EMBER_DEEP
-	if tier == Tier.CONTEXT and down:
-		rim = PUI.EMBER_BRIGHT
-	return rim
+		return PUI.EMBER if tier != Tier.QUIET else PUI.EMBER_DEEP
+	match tier:
+		Tier.PRIMARY: return PUI.EDGE_BRASS.darkened(0.30)
+		Tier.CONTEXT: return PUI.EMBER_DEEP.darkened(0.15)
+		Tier.QUIET:   return PUI.EDGE.darkened(0.10)
+	return PUI.EDGE.lerp(PUI.EDGE_BRASS, 0.55)
 
 
 func _draw() -> void:
@@ -192,39 +208,51 @@ func _draw() -> void:
 	var r: float = radius
 	var down: bool = pressed_visual or toggled_on
 	var quiet: bool = tier == Tier.QUIET
-	var rw: float = maxf(r * (0.088 if tier == Tier.PRIMARY else (0.056 if quiet else 0.072)), 2.5)
+	var rw: float = maxf(r * (RING_FRAC_QUIET if quiet else RING_FRAC), 3.0)   # bezel thickness
+	var fr: float = r - rw                                                      # face radius
+	var ring: Color = _ring_color(down)
+	var hair: float = maxf(r * HAIRLINE_FRAC, 1.5)
 
-	# contact shadow, face, rim (+ bevel), groove between rim and face
-	draw_arc(c, r + 1.5, 0.0, TAU, RIM_SEGMENTS, Color(0, 0, 0, 0.30), 3.0, true)
-	draw_texture_rect(body_texture(tier, down), Rect2(c - Vector2(r, r), Vector2(r, r) * 2.0), false)
-	var rim: Color = _rim_color(down)
-	draw_arc(c, r - rw * 0.5, 0.0, TAU, RIM_SEGMENTS, rim, rw, true)
+	# soft drop shadow: floats the button above the scene (smaller offset when pushed in)
+	var drop: float = r * (SHADOW_DROP_DOWN if down else SHADOW_DROP)
+	var reach: float = r * SHADOW_REACH
+	draw_texture_rect(shadow_texture(), Rect2(c + Vector2(0.0, drop) - Vector2(reach, reach), Vector2(reach, reach) * 2.0), false)
+
+	# bezel: dark contact edge, the thick ring, restrained lit / shaded arcs
+	draw_arc(c, r - 0.75, 0.0, TAU, RIM_SEGMENTS, Color(0, 0, 0, 0.55), 1.5, true)
+	draw_arc(c, r - rw * 0.5, 0.0, TAU, RIM_SEGMENTS, ring, rw - 1.0, true)
 	if not quiet:
-		draw_arc(c, r - rw * 0.28, PI * 1.02, PI * 1.62, 20, rim.lightened(0.42), rw * 0.36, true)   # lit upper-left edge
-		draw_arc(c, r - rw * 0.76, PI * 0.06, PI * 0.74, 20, rim.darkened(0.55), rw * 0.46, true)    # shaded lower edge
-	draw_arc(c, r - rw - 1.0, 0.0, TAU, RIM_SEGMENTS, Color(0, 0, 0, 0.5), 2.0, true)
+		draw_arc(c, r - rw * 0.30, PI * 1.05, PI * 1.60, 20, ring.lightened(0.30), rw * 0.26, true)   # lit upper-left
+		draw_arc(c, r - rw * 0.72, PI * 0.05, PI * 0.62, 20, ring.darkened(0.40), rw * 0.30, true)    # shaded lower-right
+	# recessed face
+	draw_texture_rect(body_texture(tier, down), Rect2(c - Vector2(fr, fr) - Vector2(1, 1), Vector2(fr + 1.0, fr + 1.0) * 2.0), false)
+	# hairline on the bezel's inner edge, then the inner shadow line it casts on the face
+	var hair_col: Color = PUI.EMBER_BRIGHT if down else PUI.EDGE_BRASS.lightened(0.28)
+	draw_arc(c, fr + hair * 0.5, 0.0, TAU, RIM_SEGMENTS, Color(hair_col.r, hair_col.g, hair_col.b, 0.85 if not quiet else 0.6), hair, true)
+	var sh: float = maxf(r * FACE_INSET_SHADOW, 2.0)
+	draw_arc(c, fr - sh * 0.5, PI * 0.85, PI * 1.95, 24, Color(0, 0, 0, 0.62 if down else 0.50), sh, true)   # upper-left: the bezel shades the well
+	draw_arc(c, fr - sh * 0.3, PI * 0.0, PI * 0.80, 24, Color(1, 1, 1, 0.05), sh * 0.5, true)               # lower-right: a faint lit lip
 	if down:
-		draw_arc(c, r - rw - r * 0.09, 0.0, TAU, RIM_SEGMENTS, Color(PUI.EMBER.r, PUI.EMBER.g, PUI.EMBER.b, 0.26), r * 0.14, true)
+		draw_arc(c, fr - sh - r * 0.05, 0.0, TAU, RIM_SEGMENTS, Color(PUI.EMBER.r, PUI.EMBER.g, PUI.EMBER.b, 0.16), r * 0.08, true)
 
-	# hold-to-charge: the rim fills with ember
+	# hold-to-charge: the bezel fills with bright ember
 	if charge > 0.0:
-		draw_arc(c, r - rw * 0.9, -PI * 0.5, -PI * 0.5 + TAU * clampf(charge, 0.0, 1.0), RIM_SEGMENTS, PUI.EMBER_BRIGHT, rw * 1.8, true)
+		draw_arc(c, r - rw * 0.5, -PI * 0.5, -PI * 0.5 + TAU * clampf(charge, 0.0, 1.0), RIM_SEGMENTS, PUI.EMBER_BRIGHT, rw * 0.78, true)
 
 	# onboarding pulse: a single expanding ember ring
 	if highlighted:
 		var t: float = fmod(Time.get_ticks_msec() * 0.001, 1.2) / 1.2
 		draw_arc(c, r * (1.05 + 0.30 * t), 0.0, TAU, RIM_SEGMENTS, Color(PUI.EMBER_BRIGHT.r, PUI.EMBER_BRIGHT.g, PUI.EMBER_BRIGHT.b, 1.0 - t), maxf(r * 0.07, 3.0), true)
 
-	var icon_tint: Color = PUI.BONE_BRIGHT if down else (PUI.BONE_DIM if quiet else PUI.BONE)
-	TouchIcons.draw_icon(self, icon_kind, c + Vector2(0.0, r * 0.03 if down else 0.0), r * 0.84, icon_tint)
+	var icon_tint: Color = PUI.BONE_BRIGHT.lerp(PUI.EMBER_BRIGHT, 0.28) if down else (PUI.BONE_DIM if quiet else PUI.BONE)
+	TouchIcons.draw_icon(self, icon_kind, c + Vector2(0.0, r * 0.03 if down else 0.0), fr * ICON_FRAC, icon_tint)
 
 	if cooldown > 0.0:
-		# Dark wedge over the face and an ember arc on the rim, both shrinking as the cooldown runs out.
+		# Dark wedge over the face and an ember arc on the bezel, both shrinking as the cooldown runs out.
 		var a0: float = -PI * 0.5
 		var a1: float = a0 + TAU * clampf(cooldown, 0.0, 1.0)
-		var ri: float = r - rw
-		draw_arc(c, ri * 0.5, a0, a1, 32, Color(0.03, 0.02, 0.02, 0.58), ri, false)
-		draw_arc(c, r - rw * 0.5, a0, a1, RIM_SEGMENTS, PUI.EMBER, rw, true)
+		draw_arc(c, fr * 0.5, a0, a1, 32, Color(0.03, 0.02, 0.02, 0.62), fr, false)
+		draw_arc(c, r - rw * 0.5, a0, a1, RIM_SEGMENTS, PUI.EMBER, rw * 0.7, true)
 
 	if label != "":
 		_draw_label(c, r)
