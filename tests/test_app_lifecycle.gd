@@ -51,6 +51,20 @@ func _ready() -> void:
 	_check(tc._held.has("attack"), "touch layer registers the held attack")
 	await _frames(3)
 	_check(Input.is_action_pressed("attack"), "attack held before the lock")
+	# Twin-stick (the default): a finger on the look stick and one dragging from ATTACK are turning the camera.
+	_check(tc.is_twin(), "the run uses the twin-stick scheme by default")
+	tc.view_override = Vector2(1602, 720)   # the headless window is tiny: lay the layer out as on a phone
+	tc.layout_override_insets = Vector4.ZERO
+	tc._relayout()
+	var player_node := get_tree().get_first_node_in_group("player") as Node3D
+	tc._touch_down(5, tc.look_default)
+	tc._touch_move(5, tc.look_default + Vector2(0, 90), Vector2.ZERO)
+	var atk_btn: TouchButton = tc.buttons["attack"]
+	tc._touch_down(6, atk_btn.center)
+	tc._touch_move(6, atk_btn.center + Vector2(-90, 0), Vector2.ZERO)
+	await _frames(3)
+	_check(tc._look_cmd != Vector2.ZERO and tc._look_index == 5 and tc._atk_index == 6, "look stick and attack drag are live before the lock")
+	var yaw_live: float = player_node.rotation.y if player_node != null else 0.0
 
 	# Progress made in the run, not yet saved: potions stashed, a perk bought, a touch setting changed.
 	SaveManager.current_profile["meta_currency"] = int(SaveManager.current_profile.get("meta_currency", 0)) + 7
@@ -65,6 +79,7 @@ func _ready() -> void:
 	await _frames(3)
 	_check(not Input.is_action_pressed("attack"), "held attack released on background")
 	_check(tc._owners.is_empty() and tc._held.is_empty(), "touch layer holds no fingers/actions after background")
+	_check(tc._look_cmd == Vector2.ZERO and tc._look_index == -1 and tc._atk_index == -1, "look velocity and the attack drag are reset by the background")
 	_check(get_tree().paused and menu.is_menu_open(), "the run is paused behind the pause menu")
 	_check(SaveManager.save_count == saves_before + 1, "profile written on background (%d -> %d)" % [saves_before, SaveManager.save_count])
 	var clock_day: int = GameClock.current_day if "current_day" in GameClock else -1
@@ -95,6 +110,11 @@ func _ready() -> void:
 	menu.close_menu()
 	_check(not get_tree().paused, "Resume unpauses")
 	await _frames(30)
+	if player_node != null:
+		var yaw_back: float = player_node.rotation.y
+		await _frames(10)
+		_check(absf(player_node.rotation.y - yaw_back) < 0.0001, "nothing keeps turning after returning from the background (yaw %.3f -> %.3f)" % [yaw_live, yaw_back])
+	_check(not Input.is_action_pressed("attack"), "nothing keeps attacking after returning")
 
 	# Nothing was rebuilt.
 	_check(gen.placed_modules.size() == modules_before, "dungeon not regenerated (%d modules)" % modules_before)

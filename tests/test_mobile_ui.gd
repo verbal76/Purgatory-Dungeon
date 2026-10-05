@@ -131,5 +131,18 @@ func _audit_options_tabs() -> void:
 			titles.append(tc.get_tab_title(i))
 		_check(not titles.has("Controls"), "no key-remap tab on phones (%s)" % [titles])
 		_check(titles.has("Gameplay"), "Gameplay tab (touch sliders) present")
+		# Control scheme selector (twin-stick / classic): present, readable, thumb-sized, on screen
+		tc.current_tab = titles.find("Gameplay")
+		for i in 6:
+			await get_tree().process_frame
+		var view := get_viewport().get_visible_rect()
+		for nm in ["Scheme_twin", "Scheme_classic"]:
+			var b := inst.find_child(nm, true, false) as Button
+			_check(b != null, "control scheme selector %s exists" % nm)
+			if b != null:
+				var r := b.get_global_rect()
+				_check(r.size.y >= MIN_BUTTON_H, "%s is thumb-sized (h=%.0f)" % [nm, r.size.y])
+				_check(b.get_theme_font_size("font_size") >= MIN_FONT, "%s text readable (%d)" % [nm, b.get_theme_font_size("font_size")])
+				_check(view.grow(2.0).encloses(r), "%s lies on screen (%s in %s)" % [nm, r, view])
 	inst.queue_free()
 	await get_tree().process_frame

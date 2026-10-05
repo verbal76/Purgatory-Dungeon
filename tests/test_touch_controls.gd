@@ -63,6 +63,9 @@ func _ready() -> void:
 		get_tree().quit(2)
 		return
 	Input.use_accumulated_input = false
+	# This file proves the CLASSIC scheme (swipe look, original cluster) is exactly what it was; twin-stick is
+	# covered by test_twin_stick.gd. Twin-stick is the default, so pick Classic explicitly.
+	SettingsManager.gameplay_settings[TouchControls.KEY_SCHEME] = TouchControls.SCHEME_CLASSIC
 	# Fresh tutorial state so onboarding is testable.
 	SettingsManager.gameplay_settings.erase(TouchOnboarding.SETTINGS_KEY)
 	SettingsManager.gameplay_settings.erase(TouchOnboarding.SHOWS_KEY)
@@ -287,5 +290,6 @@ func _ready() -> void:
 	tc.queue_free()
 	await _frames(2)
 	_check(_any_action_down().is_empty(), "removing the layer leaves nothing pressed")
+	SettingsManager.update_setting(TouchControls.KEY_SCHEME, TouchControls.DEFAULT_SCHEME)   # leave the shared scratch settings as found
 	print("test_touch_controls: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)

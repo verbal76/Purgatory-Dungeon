@@ -3,7 +3,10 @@
 #   PURGATORY_SAVE_ROOT=/tmp/x PURGATORY_FORCE_TOUCH=1 xvfb-run -a -s "-screen 0 1496x672x24" godot \
 #     --rendering-driver opengl3 --resolution 1496x672 --path . --script tools/ui_shot.gd -- \
 #     res://tools/touch_preview.tscn /tmp/touch.png 40
-# Env: TOUCH_OPACITY (percent, default 70), TOUCH_SCALE (percent, default 100), TOUCH_STICK=idle|active|none,
+# Env: TOUCH_SCHEME=twin|classic (default twin), TOUCH_LOOK=active (twin: the right look stick held out),
+#      TOUCH_ATTACK_DRAG=1 (twin: a finger on ATTACK dragged out to aim), TOUCH_DPI (default 480: the Pixel panel,
+#      for the mm minimums),
+#      TOUCH_OPACITY (percent, default 70), TOUCH_SCALE (percent, default 100), TOUCH_STICK=idle|active|none,
 #      TOUCH_PRESSED="attack,block" (buttons drawn pressed), TOUCH_HINT=<onboarding step>, TOUCH_BRIGHT=1 (light wall),
 #      TOUCH_COOLDOWN (0..1, default 0.45), TOUCH_BADGE (default "3"), TOUCH_CHARGE (0..1, default none),
 #      TOUCH_MAP_ON=1 (map toggled on), TOUCH_DUMP=1 (print every button centre/radius, for before/after comparison).
@@ -25,9 +28,13 @@ func _ready() -> void:
 	SettingsManager.gameplay_settings[TouchControls.KEY_OPACITY] = float(op) if op != "" else 70.0
 	SettingsManager.gameplay_settings[TouchControls.KEY_SCALE] = float(sc) if sc != "" else 100.0
 	# Mark the first-run hints done so only the requested one shows.
-	SettingsManager.gameplay_settings[TouchOnboarding.SETTINGS_KEY] = {"move": true, "look": true, "attack": true, "use": true, "block": true, "burst": true}
+	SettingsManager.gameplay_settings[TouchOnboarding.SETTINGS_KEY] = {"move": true, "look": true, "look_stick": true, "attack": true, "aim": true, "use": true, "block": true, "burst": true}
+	var scheme: String = OS.get_environment("TOUCH_SCHEME")
+	SettingsManager.gameplay_settings[TouchControls.KEY_SCHEME] = scheme if scheme != "" else "twin"
 	_tc = TouchControls.new()
 	_tc.layout_override_insets = Vector4(0, 0, 0, 0)
+	var dpi: String = OS.get_environment("TOUCH_DPI")
+	_tc.dpi_override = float(dpi) if dpi != "" else 480.0
 	add_child(_tc)
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -50,12 +57,20 @@ func _ready() -> void:
 		var p: Vector2 = _tc.stick_default + Vector2(10, 0)
 		_tc._touch_down(7, p)
 		_tc._touch_move(7, p + Vector2(58, -36), Vector2.ZERO)
+	if OS.get_environment("TOUCH_LOOK") == "active" and _tc.is_twin():
+		var lp: Vector2 = _tc.look_default + Vector2(10, 0)
+		_tc._touch_down(8, lp)
+		_tc._touch_move(8, lp + Vector2(60, -34), Vector2.ZERO)
+	if OS.get_environment("TOUCH_ATTACK_DRAG") == "1" and _tc.is_twin():
+		var ab: TouchButton = _tc.buttons["attack"]
+		_tc._touch_down(9, ab.center + Vector2(12, 10))
+		_tc._touch_move(9, ab.center + Vector2(12, 10) + Vector2(-70, -48), Vector2.ZERO)
 	var hint: String = OS.get_environment("TOUCH_HINT")
 	if hint != "":
 		_tc.onboarding._activate(hint)
 		_tc.onboarding._poll = 1.0
 	if OS.get_environment("TOUCH_DUMP") == "1":
-		print("VIEW ", _tc.view_size(), " stick_default ", _tc.stick_default)
+		print("VIEW ", _tc.view_size(), " scheme ", _tc.scheme, " ppmm ", _tc.device_px_per_mm(), " stick_default ", _tc.stick_default, " look_default ", _tc.look_default)
 		for a in _tc.buttons:
 			var b: TouchButton = _tc.buttons[a]
 			print("BTN ", a, " c=", b.center, " r=", b.radius, " pos=", b.position, " size=", b.size, " vis=", b.visible)
