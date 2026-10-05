@@ -228,7 +228,16 @@ func _build_buff_hud() -> void:
 	_hud_container.anchor_bottom = 0.0
 	_hud_container.offset_left   = -HUD_WIDTH - HUD_MARGIN_X
 	_hud_container.offset_right  = -HUD_MARGIN_X
-	_hud_container.offset_top    = HUD_START_Y
+	_hud_container.offset_top    = HUD_START_Y + 22.0   # clear of the day counter row
+	if TouchControls.is_touch_platform():
+		# Phones: the top-right belongs to the day counter, the wallet and the pause/map buttons, so the active
+		# buffs list under the left vitals cluster instead.
+		var o: Vector2 = HudKit.origin(get_viewport())
+		_hud_container.anchor_left   = 0.0
+		_hud_container.anchor_right  = 0.0
+		_hud_container.offset_left   = o.x
+		_hud_container.offset_right  = o.x + HUD_WIDTH
+		_hud_container.offset_top    = o.y + HudKit.kills_row_top() + float(HudKit.ROW_KILLS_H) + float(PUI.S4)
 
 	PUI.adopt(_hud_container)
 	_hud_layer.add_child(_hud_container)

@@ -954,6 +954,19 @@ static func button_chevron(btn: Button, kind: String, centered: bool = false, px
 		ic.anchor_bottom = 0.5
 		ic.offset_left = float(S5 - S1) if left else -(float(S5 - S1) + px)
 		ic.offset_right = ic.offset_left + px
+		# Reserve room for the icon so a long label never runs into it: widen the content margin on the icon's side.
+		var vt: StringName = btn.theme_type_variation if btn.theme_type_variation != &"" else &"Button"
+		for st in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:
+			var sb: StyleBox = theme().get_stylebox(st, vt)
+			if sb == null:
+				continue
+			var d: StyleBox = sb.duplicate()
+			var extra: float = px + float(S3)
+			if left:
+				d.content_margin_left = maxf(d.content_margin_left, 0.0) + extra
+			else:
+				d.content_margin_right = maxf(d.content_margin_right, 0.0) + extra
+			btn.add_theme_stylebox_override(st, d)
 	ic.offset_top = -half
 	ic.offset_bottom = half
 	btn.add_child(ic)
