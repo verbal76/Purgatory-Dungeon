@@ -164,7 +164,10 @@ func _watch_damage() -> void:
 	var p := get_tree().get_first_node_in_group("player")
 	if p == null or not ("_current_health" in p):
 		return
-	var h: float = float(p.get("_current_health"))
+	var raw: Variant = p.get("_current_health")
+	if not (raw is float or raw is int):   # null while the player is still initialising
+		return
+	var h: float = float(raw)
 	if _last_health >= 0.0 and h < _last_health - 0.5:
 		_took_damage = true
 	_last_health = h
