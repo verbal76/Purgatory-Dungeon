@@ -144,9 +144,7 @@ var _rapid_attack_cooldown_remain  : float = 0.0
 var _rapid_attack_attack_timer     : float = 0.0
 
 # ── Rapid Attack HUD ────────────────────────────────────────────────────────────
-var _rapid_attack_bar_bg   : ColorRect = null
-var _rapid_attack_bar_fill : ColorRect = null
-var _rapid_attack_bar_label: Label     = null
+var _rapid_attack_bar_label: Label     = null   # caption beside the ability bar (owned by _vitals)
 var _hit_targets     : Dictionary = {}
 
 # ── Buff System Hooks ──────────────────────────────────────────
@@ -178,8 +176,7 @@ var _streak_fire   : GPUParticles3D = null
 
 # ── HUD ────────────────────────────────────────────────────────
 var _hud_layer       : CanvasLayer = null
-var _health_bar_bg    : ColorRect   = null
-var _health_bar_fill : ColorRect   = null
+var _vitals          : HudVitals   = null   # health bar + value, ability bar + caption (scripts/ui/hud_vitals.gd)
 var _health_label    : Label       = null
 
 # ── Damage vignette ────────────────────────────────────────────
@@ -760,80 +757,30 @@ func _build_hud() -> void:
 	_hud_layer.name = "HUD"
 	add_child(_hud_layer)
 
-	_health_bar_bg          = ColorRect.new()
-	_health_bar_bg.color    = Color(0.15, 0.0, 0.0, 0.8)
-	_health_bar_bg.size     = Vector2(220.0, 22.0)
-	_health_bar_bg.position = Vector2(20.0, 20.0)
-	_hud_layer.add_child(_health_bar_bg)
-
-	_health_bar_fill          = ColorRect.new()
-	_health_bar_fill.color    = Color(0.85, 0.1, 0.1, 1.0)
-	_health_bar_fill.size     = Vector2(220.0, 22.0)
-	_health_bar_fill.position = Vector2(20.0, 20.0)
-	_hud_layer.add_child(_health_bar_fill)
-
-	_health_label          = Label.new()
-	_health_label.position = Vector2(24.0, 20.0)
-	_health_label.add_theme_font_size_override("font_size", 14)
-	_health_label.add_theme_color_override("font_color", Color.WHITE)
-	_hud_layer.add_child(_health_label)
-
+	# Health bar + value, rapid-attack bar + caption: one shared component (the Mage uses the same).
+	_vitals = HudVitals.new()
+	_hud_layer.add_child(_vitals)
+	_health_label            = _vitals.health_label
+	_rapid_attack_bar_label  = _vitals.ability_label
 	_refresh_health_bar(max_health, max_health)
-
-	_rapid_attack_bar_bg          = ColorRect.new()
-	_rapid_attack_bar_bg.color    = Color(0.08, 0.08, 0.08, 0.8)
-	_rapid_attack_bar_bg.size     = Vector2(220.0, 8.0)
-	_rapid_attack_bar_bg.position = Vector2(20.0, 46.0)
-	_hud_layer.add_child(_rapid_attack_bar_bg)
-
-	_rapid_attack_bar_fill          = ColorRect.new()
-	_rapid_attack_bar_fill.color    = Color(0.15, 0.5, 0.15, 0.7)
-	_rapid_attack_bar_fill.size     = Vector2(220.0, 8.0)
-	_rapid_attack_bar_fill.position = Vector2(20.0, 46.0)
-	_hud_layer.add_child(_rapid_attack_bar_fill)
-
-	_rapid_attack_bar_label          = Label.new()
-	_rapid_attack_bar_label.position = Vector2(20.0, 55.0)
-	_rapid_attack_bar_label.add_theme_font_size_override("font_size", 11)
-	_rapid_attack_bar_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9, 0.7))
-	_hud_layer.add_child(_rapid_attack_bar_label)
-
 	_refresh_rapid_attack_bar()
 
 	# Damage vignette — sits above all other HUD elements so it bleeds over
 	# the health bar and fills the whole screen. mouse_filter IGNORE so it
 	# doesn't block any UI clicks on menus that appear while paused.
 	_damage_vignette = ColorRect.new()
-	_damage_vignette.color = Color(0.85, 0.0, 0.0, 0.0)
+	_damage_vignette.color = Color(PUI.BLOOD, 0.0)
 	_damage_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_damage_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud_layer.add_child(_damage_vignette)
 
-	# ── Active trap effects label ──────────────────────────────────────────────
-	# Semi-transparent dark panel sits at the bottom-centre of the screen.
-	# Visible only when at least one trap effect is active. Updates every 0.5s.
-	_status_panel = ColorRect.new()
-	_status_panel.color         = Color(0.0, 0.0, 0.0, 0.65)
-	_status_panel.anchor_left   = 0.5
-	_status_panel.anchor_top    = 1.0
-	_status_panel.anchor_right  = 0.5
-	_status_panel.anchor_bottom = 1.0
-	_status_panel.offset_left   = -200.0
-	_status_panel.offset_top    = -130.0
-	_status_panel.offset_right  =  200.0
-	_status_panel.offset_bottom = -80.0
-	_status_panel.visible       = false
-	_status_panel.mouse_filter  = Control.MOUSE_FILTER_IGNORE
-	_hud_layer.add_child(_status_panel)
-
-	_status_label = Label.new()
-	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_status_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_status_label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_status_label.add_theme_font_size_override("font_size", 14)
-	_status_label.add_theme_color_override("font_color", Color(1.0, 0.55, 0.1, 1.0))
-	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_status_panel.add_child(_status_label)
+	# ── Active trap effects list ───────────────────────────────────────────────
+	# Small plate at the bottom-centre of the screen, sized to its text. Visible only when at
+	# least one trap effect is active. Updates every 0.5s.
+	var status := HudStatusPanel.new()
+	_hud_layer.add_child(status)
+	_status_panel = status
+	_status_label = status.label
 
 
 func _on_health_changed(new_health: float, max_val: float) -> void:
@@ -841,44 +788,28 @@ func _on_health_changed(new_health: float, max_val: float) -> void:
 
 
 func _refresh_health_bar(current: float, max_val: float) -> void:
-	if _health_bar_fill == null: return
-	var pct : float = clampf(current / max_val, 0.0, 1.0)
-	_health_bar_fill.size.x = 220.0 * pct
-	_health_bar_fill.color  = Color(0.85, 0.1 + 0.6 * pct, 0.1, 1.0)
-	if _health_label != null:
-		_health_label.text = "%d / %d" % [int(current), int(max_val)]
+	if _vitals == null: return
+	_vitals.set_health(current, max_val)
 
 
 func _refresh_rapid_attack_bar() -> void:
-	if _rapid_attack_bar_fill == null:
+	if _vitals == null:
 		return
 
 	if _rapid_attack_active:
-		var pct : float = clampf(_rapid_attack_timer / rapid_attack_duration, 0.0, 1.0)
-		_rapid_attack_bar_fill.size.x = 220.0 * pct
-		_rapid_attack_bar_fill.color  = Color(1.0, 0.4, 0.0, 1.0)
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = "RAPID ATTACK  %.1fs" % _rapid_attack_timer
+		_vitals.set_ability(clampf(_rapid_attack_timer / rapid_attack_duration, 0.0, 1.0),
+				HudVitals.Ability.ACTIVE, _rapid_attack_timer)
 
 	elif _rapid_attack_cooldown_remain > 0.0:
-		var pct : float = 1.0 - clampf(_rapid_attack_cooldown_remain / rapid_attack_cooldown, 0.0, 1.0)
-		_rapid_attack_bar_fill.size.x = 220.0 * pct
-		_rapid_attack_bar_fill.color  = Color(0.7, 0.15, 0.05, 0.85)
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = "Cooldown  %.0fs" % _rapid_attack_cooldown_remain
+		_vitals.set_ability(1.0 - clampf(_rapid_attack_cooldown_remain / rapid_attack_cooldown, 0.0, 1.0),
+				HudVitals.Ability.COOLDOWN, _rapid_attack_cooldown_remain)
 
 	elif _attack_held:
-		_rapid_attack_bar_fill.size.x = 220.0 * _rapid_attack_charge
-		_rapid_attack_bar_fill.color  = Color(0.95, 0.75, 0.1, 1.0) if _rapid_attack_charge < 1.0 \
-				else Color(1.0, 0.4, 0.0, 1.0)
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = "RELEASE!" if _rapid_attack_charge >= 1.0 else "Charging…"
+		_vitals.set_ability(_rapid_attack_charge,
+				HudVitals.Ability.RELEASE if _rapid_attack_charge >= 1.0 else HudVitals.Ability.CHARGING)
 
 	else:
-		_rapid_attack_bar_fill.size.x = 220.0
-		_rapid_attack_bar_fill.color  = Color(0.15, 0.5, 0.15, 0.7)
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = ""
+		_vitals.set_ability(1.0, HudVitals.Ability.READY)
 
 
 # Called by BuffManager._finalize_close after the day-change slot machine
@@ -1447,23 +1378,23 @@ func _refresh_status_label() -> void:
 	var lines : Array[String] = []
 
 	if _status_reversed_view:
-		lines.append("⚠ Vision Reversed  (%d day%s)" % [
+		lines.append("Vision Reversed  (%d day%s)" % [
 			_status_day_effects_days,
 			"s" if _status_day_effects_days != 1 else ""])
 
 	if _status_heavy_gravity:
-		lines.append("⚠ Heavy Gravity  (%d day%s)" % [
+		lines.append("Heavy Gravity  (%d day%s)" % [
 			_status_day_effects_days,
 			"s" if _status_day_effects_days != 1 else ""])
 
 	if _status_drunk:
-		lines.append("⚠ Disoriented  (%.0fs)" % _status_drunk_timer)
+		lines.append("Disoriented  (%.0fs)" % _status_drunk_timer)
 
 	if _status_reversed_controls:
-		lines.append("⚠ Controls Reversed  (%.0fs)" % _status_controls_timer)
+		lines.append("Controls Reversed  (%.0fs)" % _status_controls_timer)
 
 	if _status_acid:
-		lines.append("⚠ Acid Burn  (%.0fs)" % _status_acid_timer)
+		lines.append("Acid Burn  (%.0fs)" % _status_acid_timer)
 
 	if lines.is_empty():
 		_status_panel.visible = false

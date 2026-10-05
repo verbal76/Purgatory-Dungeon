@@ -3,17 +3,19 @@
 # Path: res://scripts/touch/touch_icons.gd
 #
 # Description:
-#   Vector icons for the on-screen action buttons, drawn in code so they stay crisp at any
-#   phone resolution and need no image assets. Dark ember palette to match the dungeon.
+#   THE Purgatory icon family: vector icons drawn in code so they stay crisp at any resolution and need
+#   no image assets. One stroke weight (r * 0.09), one palette (PUI bone strokes + ember accent), one
+#   construction (filled bone silhouette, ember detail). Used by the touch buttons, the HUD and menus.
 #   Every icon is drawn into a unit circle of radius `r` around `c`.
 # ==============================================================================
 class_name TouchIcons
 extends RefCounted
 
-const BONE   := Color(0.97, 0.91, 0.78, 1.0)   # icon strokes/fills
-const EMBER  := Color(0.95, 0.48, 0.12, 1.0)   # accent
-const INK    := Color(0.06, 0.04, 0.04, 1.0)   # button face
-const KINDS  : Array[String] = ["attack", "kick", "slide", "block", "burst", "use", "map", "pause"]
+const BONE   := PUI.BONE         # icon strokes/fills
+const EMBER  := PUI.EMBER_BRIGHT # accent
+const INK    := PUI.IRON_DEEP    # button face / cut-outs
+const KINDS  : Array[String] = ["attack", "kick", "slide", "block", "burst", "use", "map", "pause",
+	"potion", "key", "hourglass", "blade", "chevron_left", "chevron_right"]
 
 
 static func draw_icon(ci: CanvasItem, kind: String, c: Vector2, r: float, tint: Color = BONE) -> void:
@@ -27,6 +29,12 @@ static func draw_icon(ci: CanvasItem, kind: String, c: Vector2, r: float, tint: 
 		"use":    _key(ci, c, r, w, tint)
 		"map":    _map(ci, c, r, w, tint)
 		"pause":  _pause(ci, c, r, tint)
+		"potion": _potion(ci, c, r, w, tint)
+		"key":    _key(ci, c, r, w, tint)
+		"hourglass": _hourglass(ci, c, r, w, tint)
+		"blade":  _blade(ci, c, r, w, tint)
+		"chevron_left":  _chevron(ci, c, r, w, tint, -1.0)
+		"chevron_right": _chevron(ci, c, r, w, tint, 1.0)
 
 
 static func _p(c: Vector2, r: float, x: float, y: float) -> Vector2:
@@ -110,3 +118,35 @@ static func _map(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -> 
 static func _pause(ci: CanvasItem, c: Vector2, r: float, col: Color) -> void:
 	ci.draw_rect(Rect2(_p(c, r, -0.30, -0.40), Vector2(0.20, 0.80) * r), col)
 	ci.draw_rect(Rect2(_p(c, r, 0.10, -0.40), Vector2(0.20, 0.80) * r), col)
+
+
+static func _potion(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -> void:
+	# A plain flask (the burst icon without the rays): stash / currency.
+	var flask := PackedVector2Array([
+		_p(c, r, -0.12, -0.52), _p(c, r, 0.12, -0.52), _p(c, r, 0.12, -0.20), _p(c, r, 0.42, 0.30),
+		_p(c, r, 0.36, 0.50), _p(c, r, -0.36, 0.50), _p(c, r, -0.42, 0.30), _p(c, r, -0.12, -0.20)])
+	ci.draw_colored_polygon(flask, col)
+	ci.draw_colored_polygon(PackedVector2Array([_p(c, r, -0.31, 0.20), _p(c, r, 0.31, 0.20), _p(c, r, 0.38, 0.40), _p(c, r, -0.38, 0.40)]), EMBER)
+	ci.draw_line(_p(c, r, -0.18, -0.58), _p(c, r, 0.18, -0.58), col, w * 1.6, true)
+
+
+static func _hourglass(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -> void:
+	var top := PackedVector2Array([_p(c, r, -0.38, -0.54), _p(c, r, 0.38, -0.54), _p(c, r, 0.04, -0.02), _p(c, r, -0.04, -0.02)])
+	var bot := PackedVector2Array([_p(c, r, -0.04, 0.02), _p(c, r, 0.04, 0.02), _p(c, r, 0.38, 0.54), _p(c, r, -0.38, 0.54)])
+	ci.draw_colored_polygon(top, col)
+	ci.draw_colored_polygon(bot, col)
+	ci.draw_colored_polygon(PackedVector2Array([_p(c, r, -0.20, 0.54), _p(c, r, 0.20, 0.54), _p(c, r, 0.0, 0.26)]), EMBER)
+	ci.draw_line(_p(c, r, -0.46, -0.58), _p(c, r, 0.46, -0.58), col, w * 1.6, true)
+	ci.draw_line(_p(c, r, -0.46, 0.58), _p(c, r, 0.46, 0.58), col, w * 1.6, true)
+
+
+static func _blade(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -> void:
+	# Two crossed blades: kills.
+	for flip in [-1.0, 1.0]:
+		var a := PackedVector2Array([_p(c, r, -0.50 * flip, 0.46), _p(c, r, 0.46 * flip, -0.50), _p(c, r, 0.54 * flip, -0.42), _p(c, r, -0.42 * flip, 0.54)])
+		ci.draw_colored_polygon(a, col)
+		ci.draw_line(_p(c, r, -0.58 * flip, 0.20), _p(c, r, -0.20 * flip, 0.58), EMBER, w * 1.5, true)
+
+
+static func _chevron(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color, dir: float) -> void:
+	ci.draw_polyline(PackedVector2Array([_p(c, r, -0.18 * dir, -0.46), _p(c, r, 0.22 * dir, 0.0), _p(c, r, -0.18 * dir, 0.46)]), col, w * 2.2, true)
