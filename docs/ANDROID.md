@@ -154,6 +154,12 @@ game's own keyboard, Alchemist 3x2 pages, pause menu Resume/Options/Exit, death-
 tap-to-stop buff roulette, wallet moved top-right). `tools/ui_shot.gd` renders any scene at phone
 shape for review (needs a display; opengl3 under xvfb works).
 
+## Updates (OTA)
+The APK contains the OTA update client and declares the INTERNET permission (needed only to fetch signed updates from the
+public channel repository; nothing else uses the network). Saves live in `user://PurgetoryDungeon`; OTA state lives in
+`user://ota`, so updates never write the save folder. How updates are made, published, applied and rolled back:
+`docs/OTA.md`. The main menu footer shows `Purgatory Dungeon vN` and `· update K` when an update is running.
+
 ## Lifecycle and saves
 - Saves live in the app's private `user://` (folder `PurgetoryDungeon`, spelling kept for
   compatibility); they survive app updates and process kills.
