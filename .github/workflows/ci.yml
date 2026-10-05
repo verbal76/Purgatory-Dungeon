@@ -202,7 +202,7 @@ jobs:
       - name: Mobile input / splash / menu tests
         env:
           REQUIRE_STUDIO_LOGO: ${{ (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')) && '1' || '' }}
-          TEST_FILTER: touch_controls|input_desktop|studio_splash|release_metadata|menu_scenes|misc_fixes|settings_controls
+          TEST_FILTER: touch_controls|mobile_ui|app_lifecycle|input_desktop|studio_splash|release_metadata|menu_scenes|misc_fixes|settings_controls|pause_options|pause_freeze|run_lifecycle|save_manager
         run: tests/run_tests.sh "$GODOT"
 
       - name: Write build_info.json (shipped inside the game)

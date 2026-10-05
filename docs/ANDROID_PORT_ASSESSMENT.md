@@ -1,3 +1,5 @@
+> Superseded by `docs/ANDROID.md` (the port exists). Kept as the original planning record.
+
 # Android Landscape Port — Assessment (planning only)
 
 Direction: the **same** Purgatory Dungeon on Windows PC + Android landscape. Nothing here is

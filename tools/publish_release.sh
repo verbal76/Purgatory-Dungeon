@@ -5,7 +5,7 @@
 # usage: publish_release.sh <version> <source_sha> <artifact_dir> <ci_run_id> <make_latest:true|false> [extra_notes_file]
 #   artifact_dir must contain PurgatoryDungeon.exe, PurgatoryDungeon.pck (and BUILD_INFO.txt).
 # Optional: ANDROID_ARTIFACT_DIR (contains Purgatory-Dungeon-Android.apk + ANDROID_BUILD_INFO.txt) attaches
-#   Purgatory-Dungeon-v<N>-Android.apk to the same release after verify_apk.py qualifies it.
+#   Purgatory-Dungeon-v<N>.apk to the same release after verify_apk.py qualifies it.
 # It never overwrites: if release or tag v<N> already exists the script fails.
 set -euo pipefail
 
@@ -14,7 +14,7 @@ REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY not set}"
 PRODUCT="Purgatory Dungeon"
 TAG="v${V}"
 ZIPNAME="Purgatory-Dungeon-v${V}-Windows.zip"
-APKNAME="Purgatory-Dungeon-v${V}-Android.apk"
+APKNAME="Purgatory-Dungeon-v${V}.apk"
 ADIR="${ANDROID_ARTIFACT_DIR:-}"
 
 [[ "$V" =~ ^[1-9][0-9]*$ ]] || { echo "version must be a positive integer, got '$V'"; exit 1; }
