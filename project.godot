@@ -24,6 +24,7 @@ config/windows_native_icon="res://Music & background images/VPP_logo_from_source
 
 [autoload]
 
+OtaBoot="*res://scripts/ota/ota_boot.gd"
 UiTheme="*res://scripts/ui/ui_theme.gd"
 GlobalRunData="*res://scripts/global_run_data.gd"
 SaveManager="*res://scripts/save_manager.gd"
@@ -35,6 +36,7 @@ GlobeManager="*res://autoloads/GlobeManager.gd"
 SettingsManager="*res://scripts/SettingsManager.gd"
 CodexManager="*res://scripts/codex_manager.gd"
 InputManager="*res://scripts/InputManager.gd"
+OtaUpdater="*res://scripts/ota/ota_updater.gd"
 
 [display]
 
