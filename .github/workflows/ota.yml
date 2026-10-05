@@ -85,8 +85,11 @@ jobs:
           TEST_FILTER: ota
         run: tests/run_tests.sh "$GODOT"
 
-      - name: Self-test the whole chain, Windows (throwaway key, HEAD as its own base)
-        run: tools/ota/build_ota.sh --platform windows --self-test --godot "$GODOT" --out build/ota-selftest/windows
+      - name: End-to-end device simulation (real build chain + real packaged game, Windows pack, throwaway key)
+        # Builds a real update with tools/ota/build_ota.sh --self-test (HEAD as its own base), serves the channel over
+        # local HTTP and drives the packaged game through download -> restart -> confirm, crash-loop rollback, corrupt /
+        # tampered / unreachable channel, wrong platform, --no-ota, revocation, replay and save protection.
+        run: python3 tests/ota_e2e.py "$GODOT" --platform windows
 
       - name: Self-test the whole chain, Android (same import settings as tools/android/build_apk.sh)
         # `--export-pack` / `--export-patch` need neither the Android SDK nor the export templates (verified locally).

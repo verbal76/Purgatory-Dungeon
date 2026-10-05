@@ -109,7 +109,7 @@ class Device:
         res["reason"] = m.group(1) if m else ""
         m = re.search(r"last_error=(.*)$", st)
         res["last_error"] = m.group(1) if m else ""
-        res["patched"] = res["PROBE_PATCHED"] == "True"
+        res["patched"] = (res["PROBE_PATCHED"] or "").lower() == "true"
         res["script_errors"] = "SCRIPT ERROR" in out
         return res
 
@@ -164,7 +164,13 @@ def make_saves(ctx):
     for i in range(3):
         open(os.path.join(d, "slot_%d.json" % i), "w").write(json.dumps({"name": "Hero%d" % i, "meta_currency": 7 * i}))
     open(os.path.join(ctx["saves"], "settings.json"), "w").write('{"master_volume": 0.5}')
-    return tree_hash(ctx["saves"])
+    return save_hash(ctx)
+
+
+def save_hash(ctx):
+    """Hash of the player's save slots (saves/*.json). The game itself rewrites settings.json / last_slot.json at every
+    start (SettingsManager / SaveManager), so those two are checked for presence only, never for bytes."""
+    return tree_hash(os.path.join(ctx["saves"], "saves"))
 
 
 def tampered_copy(ctx, name, mutate):
@@ -222,7 +228,7 @@ def main():
 
         print("\n== 4. confirmation, then steady state")
         r = d.launch("confirm", channel=None)
-        check(r["patched"] and r["CONFIRMED"] == "True", "the healthy window confirms the update")
+        check(r["patched"] and (r["CONFIRMED"] or "").lower() == "true", "the healthy window confirms the update")
         check(d.state().get("known_good") == 1 and d.state().get("boot_attempts") == 0, "state: known_good=1, attempts reset")
         for i in range(3):
             r = d.launch("plain", channel=None)
@@ -306,7 +312,9 @@ def main():
         check(not r["patched"], "the replay did not resurrect the revoked update")
 
         print("\n== 10. save protection")
-        check(tree_hash(ctx["saves"]) == saves_before, "the save folder is byte-identical after every scenario above")
+        check(save_hash(ctx) == saves_before, "the save slots are byte-identical after every scenario above")
+        names = sorted(os.listdir(ctx["saves"]))
+        check(all(n in ("saves", "settings.json", "last_slot.json") for n in names), "no OTA file was written into the save folder (%s)" % names)
     finally:
         for s in servers:
             s.shutdown()
