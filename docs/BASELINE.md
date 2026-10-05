@@ -265,11 +265,12 @@ is discarded and generated again (up to 6 times; `minimum_fill_fraction`, `max_l
 Layouts for a given seed differ from v2 builds (the random draws changed); a seed still reproduces
 its own layout. Test: `test_generation_growth` (normal / recover / exhaust cases).
 
-**Studio splash.** The Hot Attic Games splash (`scenes/StudioSplash.tscn`, the main scene) is built
-and tested (`test_studio_splash`: launch order, 2-3 s timing, aspect/transparency/whole-logo layout,
-no replay on re-entry, no stranding). **The canonical logo `Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png`
-was not present in the repository when this was written**, so the card is skipped at runtime until it
-is added (project root or `branding/`); release builds refuse to publish without it.
+**Studio splash.** The Hot Attic Games splash (`scenes/StudioSplash.tscn`, the main scene) is built and tested
+(`test_studio_splash`: launch order, 2-3 s timing, aspect/transparency/whole-logo layout, no replay on re-entry, no
+stranding). The canonical logo `Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png` (1536 x 1024 RGBA, SHA-256
+`e3d9bb5653eafb783eede827606e7ac73a4e45564a1c25b1ed13ad1429f48c4e`) is at the repository root, byte-identical to the
+owner's upload, and the tests verify its hash, size, transparency and fit at seven Windows resolutions. Release builds
+refuse to publish without it.
 
 **Globe pool bug.** `GlobeManager` loaded the data file's `_comment` lines as effects, so about a third of common globes
 (13 of 39 pool entries) rolled a no-op "effect". Entries without an `id` are now skipped; `test_buffs` checks the pool.
