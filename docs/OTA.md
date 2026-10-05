@@ -133,9 +133,104 @@ Principle: **an update can only ever make the next launch fall back to something
   (`none | active | pending | rolled_back:<reason> | disabled:<reason>`), active/pending/known-good seq, update
   source commit, short payload id, boot attempts, last check time and last error.
 
+## Hosting: the public channel repository (least privilege)
+Phones cannot read a private repository's releases (no login on the device), so updates are served from a
+**dedicated public repository that contains nothing but update files**:
+
+    https://raw.githubusercontent.com/verbal76/purgatory-dungeon-updates/main/      (baked into ota_channel.json)
+
+- The Purgatory Dungeon **source repository stays private.** The channel repo holds only `channel.json`,
+  `channel.json.sig` and `v<N>/<platform>/update-<K>/{manifest.json, manifest.sig, payload.pck}`, plus a short README.
+  No source, no CI configuration, no signing material, no development artifacts. A payload contains the *changed
+  game files in exported form* (compiled scripts, scenes, data, imported assets) and is useless without the signing
+  key: a device refuses anything not signed by it. Manifests name the source commit hash (not its contents).
+- The URL is part of the native build (`ota_channel.json` is APK-required) so no further APK is needed just to
+  establish it. It is HTTPS only; plain http is honoured in test runs only.
+- **CI access is one credential with one job.** `OTA_PUBLISH_TOKEN` (Actions secret in the private source repo) is a
+  fine-grained personal access token whose repository access is *only* `verbal76/purgatory-dungeon-updates` and whose
+  only permission is *Contents: read and write* (no other repositories, no admin, no workflows, no packages). It is
+  referenced by exactly one job (`ota-publish` in `.github/workflows/ota.yml`), which only runs on a branch named
+  `ota/v<N>/<K>`, pushes fast-forward only (no force, no tags) and never touches a GitHub Release. Give the token an
+  expiry and rotate it. (A repository *deploy key* with write access is an equivalent single-repo alternative.)
+- The private OTA signing key lives in the source repo's private draft release "OTA signing key (do not delete)"
+  (or the Actions secret `OTA_SIGNING_KEY_PEM_BASE64`), never in the channel repo and never in logs.
+- A git-hosted channel accepts at most 100 MB per file; CI refuses bundles with a payload above 95 MiB (ship that
+  change as an APK, or move the channel to bucket hosting). The channel repo grows with every update; the owner can
+  squash its history at any time (devices only ever read the latest `channel.json` and the update they need).
+
+### One-time setup (owner actions; nothing here has been done)
+1. Create the **public** repository `verbal76/purgatory-dungeon-updates` with a default branch `main` and a README that
+   says only that it distributes signed update files for Purgatory Dungeon. Nothing else is committed by hand.
+2. Create the fine-grained token described above and add it to the source repo as secret `OTA_PUBLISH_TOKEN`; add the
+   repository variable `OTA_CHANNEL_REPO` = `verbal76/purgatory-dungeon-updates`. Until both exist the publish job is a
+   dry run that uploads the bundle as a CI artifact and writes "NOTHING WAS PUBLISHED" to its summary.
+3. (Optional, recommended) Add the Actions secret `OTA_SIGNING_KEY_PEM_BASE64` to hold the signing key outside the draft release.
+
 ## CI and release integration
-See "Procedures" below. `tools/ota/classify.py` runs on every push (job `ota-validate` in
-`.github/workflows/ota.yml`) and the OTA tests are part of `tests/run_tests.sh`.
+- `.github/workflows/ci.yml`: job `ota-key` (serialised creation of the OTA signing key, the public half is handed on)
+  and both build jobs write the public key to `ota_trust.pem` before export. `tools/verify_package.py` /
+  `tools/verify_apk.py` fail a build that contains the OTA client but no trust anchor, contains key material, or
+  (Android) does not declare the INTERNET permission.
+- `.github/workflows/ota.yml`: `ota-validate` on every push (OTA unit tests, the end-to-end device simulation, an Android
+  self-test of the chain, classification against the latest native tag) and `ota-publish` only for `ota/v<N>/<K>`.
+- `tests/run_tests.sh` runs `tests/test_ota_client.gd` (150+ checks), `tests/test_mage_aim.gd` etc. and the python tool
+  tests (`tests/test_ota_tools.py`).
 
 ## Procedures
-(Filled in by `docs/OTA.md` sections below as the tooling lands: create, validate, publish, apply, verify, recover.)
+
+### Decide: OTA or APK?
+Run `python3 tools/ota/classify.py v<N> HEAD` against the native build the phone has installed (N = the number in the
+footer). Exit 0 = OTA-safe, 10 = APK required (each offending path and rule is listed), 11 = guarded save/settings code
+was touched (re-run with `--accept-guarded "<why a rollback still reads the saves>"` only if that is true).
+Rules: "What ships OTA and what needs a new APK" above.
+
+### Create
+1. Land the change on a branch that descends from tag `v<N>`; CI (`ci.yml` / `ota.yml`) must be green on it.
+2. Push a branch named `ota/v<N>/<K>` at that commit, where `K` is the next update number for `v<N>` (1 for the
+   first; the tooling refuses a number that already exists and the client never goes backwards). This push *is* the
+   publication request.
+
+### Validate (automatic, before anything can be published)
+`ota-validate` + `ota-publish` run: unit tests; the end-to-end device simulation; classification (APK-required aborts
+the job); an export of the *base* pack from `v<N>` and a byte comparison with the pack inside the shipped Windows
+zip / Android APK (import products only have to exist, everything else must match); `--export-patch` of the update
+commit against it; manifest generation from the pack's own directory; RSA signature; `verify_bundle.py` (signature,
+size/SHA-256, `files[]` against an independent PCK parser, compatibility fields, protected paths, channel
+consistency and generation). Any failure stops the job with a message; nothing is pushed.
+
+### Publish
+If `OTA_CHANNEL_REPO` and `OTA_PUBLISH_TOKEN` exist, the job pushes the bundle (payload folders and `channel.json`
+in one fast-forward commit) to the channel repository. Otherwise it stops after uploading the bundle as a CI artifact.
+It never creates a tag or a GitHub Release and never changes "Latest".
+
+### Apply (on the phone, automatic)
+Main menu, about 15 s after launch and at most every 6 h: download -> verify -> stage as *pending* (footer: "update K
+downloaded - restart to apply"). The next launch verifies again, backs up the saves, mounts it and shows "update K".
+After the main menu has been up for 10 s the update is confirmed healthy and becomes the rollback target.
+
+### Verify (what to look at)
+- Main menu footer: `Purgatory Dungeon v<N> · update <K>`.
+- `adb logcat -s godot` at startup prints `BuildInfo.diagnostics()`: native version, engine, base commit, OTA status,
+  active/pending/known-good update, source commit and payload id of the update, last check and last error.
+- CI: the `ota-publish` summary prints the channel generation and the update folders pushed.
+
+### Recover / roll back
+- Automatic: a bad file, signature, wrong build or failed mount -> the next launch runs the last known-good update or the
+  native build. An update that never reaches a healthy menu is dropped after two launches.
+- Kill switch (no phone access needed): `python3 tools/ota/channel.py revoke --out <channel checkout> --key <ota key>
+  --native-version N --platform P --base-commit C --seq K`, then push the channel repo. Devices that fetch the new
+  index stop using update K at their next launch and fall back to the previous known-good update or the native build.
+  Publishing a *fixed* update K+1 is the normal follow-up. Replayed older indexes are refused (generation check).
+- On the device: launch with `PURGATORY_NO_OTA=1` / `--no-ota` to skip OTA for that launch. Installing the next APK makes
+  every older update unusable (different base commit) and it is deleted at the next start.
+- Known limitation: `channel.json` has no expiry. A device that has never seen a revocation could be served an older
+  signed index by an attacker who can break TLS to raw.githubusercontent.com. A future format version can add
+  `expires_utc`; today the exposure is limited to re-offering an update that was once signed by us.
+
+### Protocol notes found while building it
+- `ProjectSettings.load_resource_pack()` returns true for a truncated pack, so size and SHA-256 are always checked first.
+- Godot's importer is not byte-deterministic (about 14% of imported files differ between two imports of one commit), so
+  the update build seeds the update tree with the base import cache; pack paths read `godot/...` because the project
+  uses a visible project-data directory.
+- Both `ota_trust.pem` and `ota_channel.json` are exported through `include_filter`; the client reads them from the base pack
+  and they are protected paths, so an update can never replace the trust anchor or the endpoint.
