@@ -48,6 +48,7 @@ extends Control
 # ══════════════════════════════════════════════════════════════
 
 var slot_grid: GridContainer
+var _slot_buttons: Array[Button] = []   # the focus / click target of each slot card
 var back_btn: Button
 var popup_layer: Control
 var choice_panel: PanelContainer
@@ -87,6 +88,10 @@ var selected_slot_state: String = "empty"
 func _ready() -> void:
 	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	# System screen: near-black ground with a faint warm vignette (PUI), behind everything.
+	var ground := PUI.background("void")
+	add_child(ground)
+	move_child(ground, 0)
 	_bind_nodes()
 	_connect_buttons()
 	_build_code_click_blocker()
@@ -140,7 +145,7 @@ func _bind_nodes() -> void:
 func _build_code_click_blocker() -> void:
 	var blocker = ColorRect.new()
 	blocker.name = "ClickBlocker"
-	blocker.color = Color(0, 0, 0, 0.6)
+	blocker.color = PUI.SCRIM
 
 	# Brute-force the size so it covers the entire viewport regardless
 	# of PopupLayer's own size.
@@ -169,20 +174,18 @@ func _build_code_click_blocker() -> void:
 func _lock_background_focus() -> void:
 	if back_btn:
 		back_btn.focus_mode = Control.FOCUS_NONE
-	if slot_grid:
-		for child in slot_grid.get_children():
-			if child is Button:
-				child.focus_mode = Control.FOCUS_NONE
+	for slot_btn in _slot_buttons:
+		if is_instance_valid(slot_btn):
+			slot_btn.focus_mode = Control.FOCUS_NONE
 
 
 # Call this when all popups close.
 func _unlock_background_focus() -> void:
 	if back_btn:
 		back_btn.focus_mode = Control.FOCUS_ALL
-	if slot_grid:
-		for child in slot_grid.get_children():
-			if child is Button:
-				child.focus_mode = Control.FOCUS_ALL
+	for slot_btn in _slot_buttons:
+		if is_instance_valid(slot_btn):
+			slot_btn.focus_mode = Control.FOCUS_ALL
 
 
 # ══════════════════════════════════════════════════════════════
@@ -212,20 +215,42 @@ func _connect_buttons() -> void:
 #  SLOT GRID POPULATION
 # ══════════════════════════════════════════════════════════════
 
-# Clears and rebuilds all 10 slot buttons with state-aware labels.
+# Clears and rebuilds all 10 slot cards (MenuKit.slot_card: CardPanel + a full-card button) with state-aware content.
 func _populate_slots() -> void:
-	# Clear existing slot buttons.
+	# Clear existing slot cards.
+	_slot_buttons.clear()
 	for child in slot_grid.get_children():
+		slot_grid.remove_child(child)
 		child.queue_free()
 
 	# Slots are inspected with SaveManager.peek_slot(), which has no side
 	# effects, so the active slot and last-slot preference are untouched.
 	for i in range(SaveManager.SLOT_COUNT):
-		var btn = Button.new()
-		btn.custom_minimum_size = Vector2(300, 50)
-		btn.text = _build_slot_label(i)
+		var parts := MenuKit.slot_card(i + 1, _slot_card_data(i))
+		var btn := parts["button"] as Button
+		btn.set_meta("slot_label", _build_slot_label(i))   # the plain-text description (kept for tools / debugging)
 		btn.pressed.connect(_on_slot_clicked.bind(i))
-		slot_grid.add_child(btn)
+		slot_grid.add_child(parts["card"])
+		_slot_buttons.append(btn)
+	# Rebuilt after a delete while a popup is closing: new buttons start focusable.
+	if popup_layer and popup_layer.visible:
+		_lock_background_focus()
+
+
+# What a card shows for one slot ({} = empty, {"broken": true}, or name / class / runs / deaths).
+func _slot_card_data(slot_index: int) -> Dictionary:
+	match SaveManager.get_slot_state(slot_index):
+		"valid":
+			var peeked := SaveManager.peek_slot(slot_index)
+			return {
+				"name": str(peeked.get("character_name", "")).strip_edges(),
+				"class": str(peeked.get("character_class", "")).capitalize(),
+				"runs": int(peeked.get("run_count", 0)),
+				"deaths": int(peeked.get("death_count", 0)),
+			}
+		"broken":
+			return {"broken": true}
+	return {}
 
 
 # Builds the display label for a single slot based on its state.

@@ -23,15 +23,6 @@ texture = ExtResource("2_bg")
 expand_mode = 1
 stretch_mode = 6
 
-[node name="BackgroundShade" type="ColorRect" parent="." unique_id=188028846]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-color = Color(0, 0, 0, 0.4)
-
 [node name="Margin" type="MarginContainer" parent="." unique_id=1541679549]
 layout_mode = 1
 anchors_preset = 15
@@ -39,52 +30,63 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/margin_left = 60
-theme_override_constants/margin_top = 60
-theme_override_constants/margin_bottom = 60
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 48
+theme_override_constants/margin_bottom = 48
 
 [node name="VBox" type="VBoxContainer" parent="Margin" unique_id=497319076]
-custom_minimum_size = Vector2(250, 0)
+custom_minimum_size = Vector2(380, 0)
 layout_mode = 2
 size_flags_horizontal = 0
-theme_override_constants/separation = 20
+theme_override_constants/separation = 16
 alignment = 1
 
-[node name="TitleLabel" type="Label" parent="Margin/VBox" unique_id=1436644233]
+[node name="TitleBlock" type="VBoxContainer" parent="Margin/VBox" unique_id=1203948810]
 layout_mode = 2
-theme_override_font_sizes/font_size = 48
-text = "PURGETORY"
+theme_override_constants/separation = 0
+
+[node name="TitleLabel" type="Label" parent="Margin/VBox/TitleBlock" unique_id=1436644233]
+layout_mode = 2
+theme_type_variation = &"GameTitle"
+text = "Purgatory"
+
+[node name="SubtitleLabel" type="Label" parent="Margin/VBox/TitleBlock" unique_id=1203948811]
+layout_mode = 2
+theme_type_variation = &"SectionHeading"
+text = "Dungeon"
 
 [node name="Spacer" type="Control" parent="Margin/VBox" unique_id=1692028662]
-custom_minimum_size = Vector2(0, 30)
+custom_minimum_size = Vector2(0, 12)
 layout_mode = 2
 
 [node name="StartButton" type="Button" parent="Margin/VBox" unique_id=954799385]
-custom_minimum_size = Vector2(0, 50)
+custom_minimum_size = Vector2(0, 64)
 layout_mode = 2
+theme_type_variation = &"PrimaryButton"
 text = "New Character"
 
 [node name="ProfileButton" type="Button" parent="Margin/VBox" unique_id=826716646]
-custom_minimum_size = Vector2(0, 50)
+custom_minimum_size = Vector2(0, 56)
 layout_mode = 2
 text = "Load Character"
 
 [node name="CodexButton" type="Button" parent="Margin/VBox" unique_id=1860210680]
-custom_minimum_size = Vector2(0, 50)
+custom_minimum_size = Vector2(0, 56)
 layout_mode = 2
 text = "Codex"
 
 [node name="OptionsButton" type="Button" parent="Margin/VBox" unique_id=1339806476]
-custom_minimum_size = Vector2(0, 50)
+custom_minimum_size = Vector2(0, 56)
 layout_mode = 2
 text = "Options"
 
 [node name="AlchemistButton" type="Button" parent="Margin/VBox" unique_id=20260329]
-custom_minimum_size = Vector2(0, 50)
+custom_minimum_size = Vector2(0, 56)
 layout_mode = 2
 text = "Alchemist Lab"
 
 [node name="QuitButton" type="Button" parent="Margin/VBox" unique_id=58264727]
-custom_minimum_size = Vector2(0, 50)
+custom_minimum_size = Vector2(0, 56)
 layout_mode = 2
+theme_type_variation = &"NavButton"
 text = "Quit"
