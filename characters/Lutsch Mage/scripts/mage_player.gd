@@ -907,7 +907,7 @@ func _do_spell_attack() -> void:
 		# so it always appears to go straight out from the crosshair.
 		var aim_dir : Vector3
 		if camera_3d != null:
-			aim_dir = camera_3d.project_ray_normal(get_viewport().size / 2.0)
+			aim_dir = camera_3d.project_ray_normal(_aim_screen_center())
 		else:
 			aim_dir = Vector3(-sin(_yaw), 0.0, -cos(_yaw))
 
@@ -1169,7 +1169,7 @@ func _spawn_scorch_mark(impact_pos: Vector3, travel_dir: Vector3) -> void:
 func _raycast_aim_target(range: float) -> Vector3:
 	if camera_3d == null:
 		return global_position + Vector3(-sin(_yaw), 0.0, -cos(_yaw)) * range
-	var screen_center : Vector2 = get_viewport().size / 2.0
+	var screen_center : Vector2 = _aim_screen_center()
 	var ray_origin    : Vector3 = camera_3d.project_ray_origin(screen_center)
 	var ray_dir       : Vector3 = camera_3d.project_ray_normal(screen_center)
 	var ray_end       : Vector3 = ray_origin + ray_dir * range
@@ -1470,12 +1470,19 @@ func _end_mage_rapid_attack() -> void:
 	_refresh_rapid_attack_bar()
 
 
-# Returns the world-space direction the crosshair is pointing. Using
-# viewport * 0.5 keeps aim at the exact screen center at any resolution,
-# FOV, or aspect ratio. Falls back to yaw if the camera is missing.
+# The crosshair position in the coordinates Camera3D.project_ray_*() expects: the centre of the VISIBLE
+# rectangle. This is NOT get_viewport().size / 2: with the Android stretch (canvas_items, expand) the
+# window is larger than the visible canvas (e.g. 2992x1344 vs 1602x720 on a Pixel), and halving the
+# window size aims ~58 degrees right and down of the crosshair (tests/test_mage_aim.gd).
+func _aim_screen_center() -> Vector2:
+	return get_viewport().get_visible_rect().size * 0.5
+
+
+# Returns the world-space direction the crosshair is pointing. Using the visible-rect centre keeps aim on
+# the exact screen centre at any resolution, FOV, aspect ratio or stretch. Falls back to yaw without a camera.
 func _get_camera_aim_dir() -> Vector3:
 	if camera_3d != null:
-		return camera_3d.project_ray_normal(get_viewport().size * 0.5).normalized()
+		return camera_3d.project_ray_normal(_aim_screen_center()).normalized()
 	return Vector3(-sin(_yaw), 0.0, -cos(_yaw))
 
 
