@@ -25,6 +25,7 @@ func _ready() -> void:
 		current_scheme = Scheme.TOUCH
 		MobileUi.install(get_tree())
 		AppLifecycle.install(get_tree())
+		PerfOverlay.install(get_tree())
 
 
 func _input(event: InputEvent) -> void:

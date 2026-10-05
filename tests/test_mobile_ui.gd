@@ -51,6 +51,7 @@ func _ready() -> void:
 		await get_tree().process_frame
 
 	await _audit_character_select_phone_mode()
+	await _audit_perf_overlay()
 	print("test_mobile_ui: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)
 
@@ -95,3 +96,20 @@ func _audit_character_select_phone_mode() -> void:
 	_check(name_in != null and not name_in.virtual_keyboard_enabled, "name field uses the game's own keyboard, not the OS one")
 	inst.queue_free()
 	await get_tree().process_frame
+
+
+# The playtest readout: off by default, formats real numbers once frames have been sampled.
+func _audit_perf_overlay() -> void:
+	var ov := get_node_or_null("/root/PerfOverlay")
+	_check(ov != null, "performance readout installed on touch platforms")
+	_check(not bool(SettingsManager.gameplay_settings.get(PerfOverlay.KEY, false)), "performance readout is off by default")
+	for i in 40:
+		await get_tree().process_frame
+	var text: String = ov.summary()
+	_check(text.contains("fps") and text.contains("low 1%") and text.contains("draws"), "readout text has fps / 1%% low / draws (%s)" % text)
+	_check(not (ov._label as Label).visible, "readout hidden while the setting is off")
+	SettingsManager.gameplay_settings[PerfOverlay.KEY] = true
+	ov._since_refresh = 10.0
+	await get_tree().process_frame
+	_check((ov._label as Label).visible and (ov._label as Label).text != "", "readout shows when enabled")
+	SettingsManager.gameplay_settings[PerfOverlay.KEY] = false

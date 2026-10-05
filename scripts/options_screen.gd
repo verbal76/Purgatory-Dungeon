@@ -378,6 +378,9 @@ func _build_gameplay_tab() -> void:
 		_slider(t, "Control Size",      TouchControls.KEY_SCALE,   70.0, 150.0, 5.0)
 		_slider(t, "Look Sensitivity",  TouchControls.KEY_LOOK,    40.0, 250.0, 5.0)
 		_hint(t, "Swipe the right side of the screen to look around.")
+		_section(t, "Playtest")
+		_checkbox(t, "Show performance readout", PerfOverlay.KEY)
+		_hint(t, "FPS, slowest 1% of frames, draw calls. Tell us these numbers if the game stutters.")
 
 
 func _build_accessibility_tab() -> void:

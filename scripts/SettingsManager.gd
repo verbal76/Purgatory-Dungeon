@@ -34,6 +34,7 @@ var gameplay_settings : Dictionary = {
 	"TouchOpacity"  : 70.0,
 	"TouchScale"    : 100.0,
 	"TouchLookSens" : 100.0,
+	"ShowPerf"      : false,   # phone playtests: frame-time readout (Options > Gameplay)
 }
 
 # Computed in _ready() — points to Documents/PurgetoryDungeon/settings.json.
