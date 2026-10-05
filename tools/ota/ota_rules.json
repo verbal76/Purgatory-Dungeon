@@ -10,9 +10,11 @@
   "max_payload_bytes": 536870912,
   "protected": {
     "exact": [
+      ".godot/extension_list.cfg",
       "VERSION",
       "build_info.json",
       "export_presets.cfg",
+      "godot/extension_list.cfg",
       "ota_channel.json",
       "ota_trust.pem",
       "project.binary",

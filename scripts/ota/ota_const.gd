@@ -35,10 +35,11 @@ const ENV_PLATFORM := "PURGATORY_OTA_PLATFORM"   # lets a Linux CI host act as "
 const ENV_DISABLE := "PURGATORY_NO_OTA"
 const ARG_DISABLE := "--no-ota"
 
-# Paths that can never arrive by OTA (see docs/OTA.md "What ships OTA").
+# Paths that can never arrive by OTA (see docs/OTA.md "What ships OTA"). This project exports with
+# use_hidden_project_data_directory=false, so pack paths read godot/... (the .godot/ spelling is kept too).
 const PROTECTED_EXACT: Array[String] = [
 	"project.godot", "project.binary", "export_presets.cfg", "ota_trust.pem", "ota_channel.json",
-	"build_info.json", "VERSION", ".godot/extension_list.cfg",
+	"build_info.json", "VERSION", "godot/extension_list.cfg", ".godot/extension_list.cfg",
 ]
 const PROTECTED_PREFIXES: Array[String] = ["scripts/ota/", "android/"]
 const PROTECTED_SUFFIXES: Array[String] = [".gdextension", ".so", ".dll", ".dylib"]

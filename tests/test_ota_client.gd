@@ -181,7 +181,7 @@ func _test_manifest_rules() -> void:
 func _test_protected_paths() -> void:
 	for p in ["project.godot", "project.binary", "export_presets.cfg", "ota_trust.pem", "ota_channel.json", "build_info.json",
 			"VERSION", "scripts/ota/ota_core.gd", "scripts/ota/ota_core.gdc", "android/build/x", "addons/foo/foo.gdextension",
-			"addons/foo/bin/libfoo.so", "bin/foo.dll", "x/foo.dylib", ".godot/extension_list.cfg", "/etc/passwd", "res://a.gd",
+			"addons/foo/bin/libfoo.so", "bin/foo.dll", "x/foo.dylib", "godot/extension_list.cfg", ".godot/extension_list.cfg", "/etc/passwd", "res://a.gd",
 			"user://x", "a/../b", "C:/x", "a//b", "", "Scripts/OTA/x.gd"]:
 		_check(OtaManifest.is_protected_path(p), "protected: '%s'" % p)
 	for p in ["scripts/enemy_manager.gdc", "data/buffs.json", ".godot/imported/a.png-1234.ctex", "scenes/MainMenu.tscn", "scripts/ota_like.gd"]:
