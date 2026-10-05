@@ -9,6 +9,7 @@ SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 export PURGATORY_SAVE_ROOT="$SCRATCH/PurgetoryDungeon"
 rc=0
+FAILED_STAGES=()
 LOG="$SCRATCH/last.log"
 # run <label> <cmd...>: runs a command, echoes output, fails on non-zero exit OR any "SCRIPT ERROR".
 run() {
@@ -19,8 +20,8 @@ run() {
 	"$@" > "$LOG" 2>&1
 	local code=$?
 	sed 's/\x1b\[[0-9;]*m//g' "$LOG"
-	if [ "$code" -ne 0 ]; then echo "!!! FAILED (exit $code): $label"; rc=1
-	elif grep -q 'SCRIPT ERROR' "$LOG"; then echo "!!! FAILED (script errors): $label"; rc=1; fi
+	if [ "$code" -ne 0 ]; then echo "!!! FAILED (exit $code): $label"; rc=1; FAILED_STAGES+=("$label (exit $code)")
+	elif grep -q 'SCRIPT ERROR' "$LOG"; then echo "!!! FAILED (script errors): $label"; rc=1; FAILED_STAGES+=("$label (script errors)"); fi
 }
 echo "=== release_tool check"
 python3 tools/release_tool.py check || { echo "!!! FAILED: version consistency"; rc=1; }
@@ -67,4 +68,8 @@ done
 for seed in 1 2 3 7 42 123 2024 98765; do
 	GEN_TEST_SEEDS="$seed" run "res://tests/test_dungeon_generation.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_dungeon_generation.tscn
 done
+if [ "${#FAILED_STAGES[@]}" -gt 0 ]; then
+	echo "=== FAILED STAGES (${#FAILED_STAGES[@]}):"
+	printf '  %s\n' "${FAILED_STAGES[@]}"
+fi
 exit $rc

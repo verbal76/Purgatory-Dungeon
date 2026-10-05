@@ -375,8 +375,11 @@ func _fly_homing(fb: Area3D, player: Node3D) -> void:
 		if tree.paused:
 			await tree.process_frame
 			continue
-		var dt := get_process_delta_time()
-		lifetime -= dt
+		var raw_dt := get_process_delta_time()
+		lifetime -= raw_dt
+		# A long frame (load hitch, phone resume) must not teleport the fireball into the player's
+		# face: advance at most 0.1 s of flight per frame (1 m at the default speed).
+		var dt := minf(raw_dt, 0.1)
 
 		if not fb.monitoring:
 			fb.monitoring = true   # Enable after first step (escape origin overlap)

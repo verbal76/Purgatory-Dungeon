@@ -32,22 +32,30 @@ func _ready() -> void:
 	var player = main.get_node("Player")
 	var pause = main.get_node("pause_menu_function")
 
-	# Launch a homing fireball from open space (a spot in a wall would free it on contact).
+	# Launch a homing fireball from open space (a spot in a wall would free it on contact). The dungeon
+	# is random: a free ray does not guarantee a 0.3 m sphere clear of props at the spawn point, so try
+	# each open direction until one fireball survives its first frames.
 	var space: PhysicsDirectSpaceState3D = player.get_world_3d().direct_space_state
-	var origin := Vector3.ZERO
+	var fb: Area3D = null
+	var found_open := false
 	for i in 8:
 		var d := Vector3.FORWARD.rotated(Vector3.UP, i * PI / 4.0)
 		var q := PhysicsRayQueryParameters3D.create(player.global_position + Vector3(0, 1.0, 0), player.global_position + Vector3(0, 1.0, 0) + d * 6.0)
 		q.collision_mask = 1
 		q.exclude = [player.get_rid()]
-		if space.intersect_ray(q).is_empty():
-			origin = player.global_position + d * 5.0
+		if not space.intersect_ray(q).is_empty():
+			continue
+		found_open = true
+		traps._launch_homing_fireball(player.global_position + d * 5.0, player)
+		await _frames(2)
+		if traps._homing_fireballs.size() > 0 and is_instance_valid(traps._homing_fireballs.back()):
+			fb = traps._homing_fireballs.back()
 			break
-	_check(origin != Vector3.ZERO, "found open space for the fireball")
-	traps._launch_homing_fireball(origin, player)
-	await _frames(1)
-	_check(traps._homing_fireballs.size() > 0, "homing fireball is in flight")
-	var fb: Area3D = traps._homing_fireballs.back()
+	_check(found_open, "found open space for the fireball")
+	_check(fb != null, "homing fireball is in flight")
+	if fb == null:
+		get_tree().quit(1)
+		return
 	pause.open_menu()
 	await _frames(2)
 	_check(get_tree().paused, "paused")
