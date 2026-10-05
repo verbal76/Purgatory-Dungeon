@@ -146,6 +146,8 @@ func _ready() -> void:
 
 	# Outline text over the world (HudValue role): no plate, the dungeon stays visible.
 	_prompt_label = PUI.label("", "HudValue")
+	_prompt_label.add_theme_constant_override("outline_size", 5)
+	_prompt_label.add_theme_font_size_override("font_size", int(round(PUI.fs("hud_value") * 1.25)))   # small caps read smaller   # stays when the locked sentence swaps the variation
 	_prompt_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_prompt_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
@@ -209,9 +211,12 @@ func _refresh_prompt() -> void:
 		return
 	var color_title : String = color.capitalize()
 	if has_node("/root/PlayerWallet") and PlayerWallet.get_key_count(color) > 0:
+		_prompt_label.theme_type_variation = &"HudValue"      # a short action prompt: Cinzel
 		_prompt_label.text = "[%s] Use %s Key" % [_use_glyph(), color_title]
 		_prompt_label.add_theme_color_override("font_color", PUI.BONE_BRIGHT)
 	else:
+		_prompt_label.theme_type_variation = &"WarningLabel"  # a sentence: Source Sans
+		_prompt_label.remove_theme_color_override("font_color")
 		_prompt_label.text = "Locked \u2014 come back with a %s Key" % color_title
 		_prompt_label.add_theme_color_override("font_color", PUI.BONE_DIM)
 

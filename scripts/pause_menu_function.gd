@@ -99,6 +99,7 @@ func _apply_panel_style() -> void:
 			row.custom_minimum_size.y = SettingsRows.SLIDER_H + PUI.S1 if row_name.contains("Volume") else SettingsRows.ROW_H
 			for child in row.get_children():
 				if child is Label:
+					(child as Label).theme_type_variation = &"ShortLabel"   # same Cinzel setting names as Options
 					(child as Label).custom_minimum_size.x = SettingsRows.LABEL_W - 50.0
 					(child as Label).vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 				elif child is HSlider:

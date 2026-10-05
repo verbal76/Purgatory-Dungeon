@@ -47,7 +47,8 @@ func _init() -> void:
 	health_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hp_row.add_child(health_bar)
 	health_label = HudKit.value_label("")
-	health_label.custom_minimum_size.x = 120.0   # "1000 / 1000" must not nudge the cluster
+	# "1000 / 1000" must not nudge the cluster: reserve the width the display face really needs for it (measured once).
+	health_label.custom_minimum_size.x = ceilf(PUI.font("display_bold").get_string_size("1000 / 1000", HORIZONTAL_ALIGNMENT_LEFT, -1, PUI.fs("hud_value")).x) + 4.0
 	health_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hp_row.add_child(health_label)
 

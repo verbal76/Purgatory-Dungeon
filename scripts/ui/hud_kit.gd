@@ -23,7 +23,7 @@ const ROW_KILLS_H := 32
 const ROW_GAP := PUI.S1
 const CLUSTER_GAP := PUI.S2
 const BAR_W := 240.0
-const COMPASS_W := 56.0
+const COMPASS_W := 72.0              # fits the widest heading ("NW") in the display face on a phone, plus the plate margins
 const HEALTH_BAR_H := 22.0
 const ABILITY_BAR_H := 12.0
 

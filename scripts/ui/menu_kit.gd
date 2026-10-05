@@ -146,14 +146,14 @@ static func slot_card(slot_number: int, data: Dictionary) -> Dictionary:
 	var top: Label
 	var sub: Label
 	if empty:
-		top = PUI.label("Empty slot", "SecondaryLabel")
+		top = PUI.label("Empty slot", "StatLabel")
 		sub = PUI.label("Slot %d  ·  %s to create a character" % [slot_number, "tap" if _is_touch() else "click"], "MetaLabel")
 	elif broken:
-		top = PUI.label("Corrupted save", "WarningLabel")
+		top = PUI.label("Corrupted save", "DangerTitle")
 		sub = PUI.label("Slot %d  ·  can be cleared" % slot_number, "MetaLabel")
 	else:
 		top = PUI.label(str(data.get("name", "")), "CardTitle")
-		sub = PUI.label("%s  ·  Slot %d" % [str(data.get("class", "")), slot_number], "MetaLabel")
+		sub = PUI.label("%s  ·  Slot %d" % [str(data.get("class", "")), slot_number], "StatLabel")
 	top.name = "SlotName"
 	sub.name = "SlotSub"
 	top.clip_text = true
@@ -170,7 +170,7 @@ static func slot_card(slot_number: int, data: Dictionary) -> Dictionary:
 		meta.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(meta)
 		for pair in [["Runs", int(data.get("runs", 0))], ["Deaths", int(data.get("deaths", 0))]]:
-			var m := PUI.label("%s %d" % [pair[0], pair[1]], "MetaLabel")
+			var m := PUI.label("%s %d" % [pair[0], pair[1]], "StatLabel")
 			m.name = "Meta" + str(pair[0])
 			m.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 			m.mouse_filter = Control.MOUSE_FILTER_IGNORE

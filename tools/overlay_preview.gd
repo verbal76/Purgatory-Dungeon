@@ -1,7 +1,7 @@
 # Dev utility (not shipped): renders ONE in-run overlay on a fake "dungeon" backdrop so it can be
 # screenshotted without the full game. Pick it with the OVERLAY env var:
 #   buff_common | buff_rare | buff_legendary | buff_hud | died | runend | chest | chest_locked
-#   portal_hint | portal_announce | traps | globe_curse | globe_blessing
+#   portal_hint | portal_announce | traps | status | loading | globe_curse | globe_blessing
 # Used with tools/ui_shot.gd:
 #   OVERLAY=died ... --script tools/ui_shot.gd -- res://tools/overlay_preview.tscn out.png 60
 extends Control
@@ -82,6 +82,17 @@ func _setup() -> void:
 				p._show_not_ready_hint(7)
 			else:
 				p._show_announce(Vector3.ZERO)
+		"loading":
+			# the real loading screen (it pauses the tree; a screenshot does not mind)
+			var ld := CanvasLayer.new()
+			ld.set_script(load("res://scripts/loading_screen.gd"))
+			add_child(ld)
+		"status":
+			# bottom-centre list of active trap effects
+			var sp := HudStatusPanel.new()
+			add_child(sp)
+			sp.label.text = "Reversed controls  12s\nAcid pool  4s\nHeavy gravity"
+			sp.visible = true
 		"traps":
 			var t := CanvasLayer.new()
 			t.set_script(load("res://scripts/trap_banner_hud.gd"))

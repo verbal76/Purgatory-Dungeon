@@ -17,7 +17,7 @@ const ROW_H: float = 56.0             # a row is at least a comfortable thumb ta
 const SLIDER_H: float = 44.0          # slider hit area
 
 
-## SectionHeading (Cinzel, ember) over a brass divider. `note` is a quiet qualifier on the right.
+## SectionHeading (Cinzel, ember) over a brass divider. `note` is a quiet qualifier on the right (Source Sans).
 static func section(parent: Control, text: String, note: String = "", space_above: bool = true) -> void:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", PUI.S2)
@@ -46,19 +46,26 @@ static func row(parent: Control, label_text: String, note: String = "") -> HBoxC
 	var r := HBoxContainer.new()
 	r.add_theme_constant_override("separation", PUI.S4)
 	r.custom_minimum_size.y = ROW_H
+	r.child_entered_tree.connect(_on_row_child)
 	parent.add_child(r)
 	var cell := VBoxContainer.new()
 	cell.custom_minimum_size.x = LABEL_W
 	cell.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	cell.add_theme_constant_override("separation", 0)
 	r.add_child(cell)
-	var lbl := Label.new()
-	lbl.text = label_text
+	var lbl := PUI.label(label_text, "ShortLabel")   # Cinzel: a setting's name is a short label
 	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	cell.add_child(lbl)
 	if note != "":
 		cell.add_child(PUI.label(note, "MetaLabel"))
 	return r
+
+
+## A plain Button placed in a settings row shows a value (a key binding), so it wears the body-face FieldButton look.
+## (Exact class check: CheckBox, OptionButton and the like keep their own theme.)
+static func _on_row_child(child: Node) -> void:
+	if child.get_class() == "Button" and (child as Button).theme_type_variation == &"":
+		(child as Button).theme_type_variation = &"FieldButton"
 
 
 ## The numeric read-out that sits right of a slider.

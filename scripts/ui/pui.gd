@@ -68,22 +68,43 @@ const BUTTON_H_PRIMARY := 64
 const RADIUS := 6
 
 # ── Type roles ───────────────────────────────────────────────────────────────────────────────
-# role -> [font key, base size, colour]. Sizes are the PHONE-legible values (>= 20); desktop applies TYPE_SCALE_DESKTOP.
+# role -> [font key, base size, colour]. Sizes are the PHONE-legible values; desktop applies TYPE_SCALE_DESKTOP.
+#
+# THE TYPE RULE (owner decision; docs/UI_DESIGN_SYSTEM.md section 2 and docs/TYPOGRAPHY_AUDIT.md):
+#   * Cinzel ("display_*") = identity: titles, headings, card titles, every button and tab, names, short labels and
+#     numbers (up to ~4 words). Never a sentence, description, lore, explanation, diagnostic or helper line.
+#   * Source Sans 3 ("body_*") = reading: sentences, descriptions, settings notes, lore, diagnostics, footers,
+#     text the player types, value fields (drop-downs) and anything whose case or length matters.
+# Cinzel's lowercase is small caps, so it needs >= MIN_DISPLAY_SIZE px to stay legible (test_typography enforces it).
 const TYPE_SCALE_DESKTOP := 0.86
+const MIN_DISPLAY_SIZE := 16     # smallest rendered size (px, after desktop scaling) a Cinzel role may have
+const MIN_BODY_SIZE := 14        # smallest rendered size of a Source Sans role
 const ROLES := {
+	# Cinzel (display)
 	"game_title":     ["display_black", 72, "BONE"],
 	"screen_title":   ["display_bold", 42, "BONE"],
 	"section":        ["display_semi", 22, "EMBER"],
 	"card_title":     ["display_semi", 26, "BONE"],
-	"button":         ["body_semi", 26, "BONE"],
+	"button":         ["display_semi", 24, "BONE"],          # every Button / tab; Nav, Selector, Danger share it
 	"button_primary": ["display_bold", 28, "BONE_BRIGHT"],
+	"label":          ["display_semi", 22, "BONE"],          # short names: settings rows, stat lines
+	"stat":           ["display_semi", 20, "BONE_DIM"],      # short quiet lines: slot meta, counters, tags
+	"hud_value":      ["display_bold", 24, "BONE"],          # numbers and short HUD names (lining figures)
+	"hud_label":      ["display_semi", 20, "BONE_DIM"],      # HUD captions: wallet, ability, buff names
+	# Source Sans 3 (body)
 	"body":           ["body_regular", 22, "BONE"],
 	"body_secondary": ["body_regular", 20, "BONE_DIM"],
 	"metadata":       ["body_regular", 18, "BONE_DIM"],
-	"hud_value":      ["body_bold", 24, "BONE"],
-	"hud_label":      ["body_semi", 18, "BONE_DIM"],
+	"field":          ["body_semi", 22, "BONE"],             # value fields: drop-downs, key-binding values
 	"warning":        ["body_semi", 22, "BLOOD_BRIGHT"],
 	"caption":        ["body_regular", 16, "BONE_DIM"],
+}
+
+# Which body weight draws the glyphs a display weight lacks (heavier Cinzel falls back to heavier Source Sans).
+const DISPLAY_FALLBACK := {
+	"display_black": "body_bold",
+	"display_bold":  "body_bold",
+	"display_semi":  "body_semi",
 }
 
 const FONT_PATHS := {
@@ -152,16 +173,45 @@ static func key_tint(metal: String) -> Color:
 	return BONE
 
 
+## The font for a key of FONT_PATHS, with its EXPLICIT glyph fallback chain:
+##   Cinzel (display)  ->  Source Sans 3 of the matching weight  ->  the engine font
+##   Source Sans 3     ->  the engine font
+## The shipped Latin subsets lack arrows, check marks, the multiplication sign, ellipsis, bullets and similar
+## functional symbols; they are drawn by the next font in the chain instead of showing a missing-glyph box.
+## (Built once and cached: no per-frame cost.) tests/test_typography.gd proves every shipped string is covered.
 static func font(key: String) -> Font:
 	if not _fonts.has(key):
 		var base := load(FONT_PATHS[key]) as Font
 		var fv := FontVariation.new()
 		fv.base_font = base
-		fv.fallbacks = [ThemeDB.fallback_font]   # arrows / check marks the Latin subset lacks
+		var chain: Array[Font] = []
+		if DISPLAY_FALLBACK.has(key):
+			chain.append(font(DISPLAY_FALLBACK[key]))   # same weight in the body family
+		chain.append(ThemeDB.fallback_font)
+		fv.fallbacks = chain
 		if key.begins_with("display"):
 			fv.spacing_glyph = 1
 		_fonts[key] = fv
 	return _fonts[key]
+
+
+## True when `text` can be drawn by font `key` (or its fallback chain) without a missing-glyph box.
+static func can_render(key: String, text: String) -> bool:
+	return missing_glyphs(key, text).is_empty()
+
+
+## The distinct characters of `text` that font `key` cannot draw (empty string = all good). Whitespace is fine.
+static func missing_glyphs(key: String, text: String) -> String:
+	var f: Font = font(key)
+	var out := ""
+	for i in text.length():
+		var code: int = text.unicode_at(i)
+		if code <= 32 or code == 0xA0:
+			continue
+		var ch: String = text[i]
+		if not out.contains(ch) and not f.has_char(code):
+			out += ch
+	return out
 
 
 ## Apply a type role to a label-like control directly (for one-off controls built in code).
@@ -501,10 +551,13 @@ static func _theme_labels(t: Theme) -> void:
 	_role_label(t, "ScreenTitle", "screen_title", Color(0, 0, 0, 0), 4)
 	_role_label(t, "SectionHeading", "section")
 	_role_label(t, "CardTitle", "card_title")
+	_role_label(t, "ShortLabel", "label")
+	_role_label(t, "StatLabel", "stat")
+	_role_label(t, "DangerTitle", "card_title", BLOOD_BRIGHT)
 	_role_label(t, "SecondaryLabel", "body_secondary")
 	_role_label(t, "MetaLabel", "metadata")
 	_role_label(t, "HudValue", "hud_value", Color(0, 0, 0, 0), 5)
-	_role_label(t, "HudLabel", "hud_label", Color(0, 0, 0, 0), 4)
+	_role_label(t, "HudLabel", "hud_label", Color(0, 0, 0, 0), 5)   # thin small caps over a bright wall need the heavier rim
 	_role_label(t, "WarningLabel", "warning")
 	_role_label(t, "CaptionLabel", "caption")
 	# parchment contexts: same hierarchy, ink colours
@@ -513,7 +566,9 @@ static func _theme_labels(t: Theme) -> void:
 	_role_label(t, "ParchmentCardTitle", "card_title", INK)
 	_role_label(t, "ParchmentBody", "body", INK)
 	_role_label(t, "ParchmentMeta", "metadata", INK_DIM)
-	for v in ["ParchmentTitle", "ParchmentHeading", "ParchmentCardTitle", "ParchmentBody", "ParchmentMeta"]:
+	_role_label(t, "ParchmentLabel", "label", INK)
+	_role_label(t, "ParchmentStat", "stat", INK_DIM)
+	for v in ["ParchmentTitle", "ParchmentHeading", "ParchmentCardTitle", "ParchmentBody", "ParchmentMeta", "ParchmentLabel", "ParchmentStat"]:
 		t.set_constant("outline_size", v, 0)
 	# rich text
 	t.set_font("normal_font", "RichTextLabel", font("body_regular"))
@@ -576,24 +631,24 @@ static func _button_styles(t: Theme, type_name: String, fill: Color, edge: Color
 static func _theme_buttons(t: Theme) -> void:
 	# SECONDARY (the default Button): blackened iron, brass-grey edge, bone label.
 	_button_styles(t, "Button", IRON_RAISED, EDGE, IRON_HOVER, EDGE_BRASS, IRON, EMBER_DEEP, Color(0, 0, 0, 0),
-		"body_semi", "button", BONE, BONE_BRIGHT, EMBER_BRIGHT)
+		ROLES["button"][0], "button", BONE, BONE_BRIGHT, EMBER_BRIGHT)
 	# PRIMARY: more weight - brass/ember edge, warm glow rising from the base, display face.
 	t.set_type_variation("PrimaryButton", "Button")
 	_button_styles(t, "PrimaryButton", IRON_RAISED, EMBER_DEEP, IRON_HOVER, EMBER, IRON, EMBER_BRIGHT,
-		Color(EMBER.r, EMBER.g, EMBER.b, 0.20), "display_bold", "button_primary", BONE_BRIGHT, Color.WHITE, EMBER_BRIGHT,
+		Color(EMBER.r, EMBER.g, EMBER.b, 0.20), ROLES["button_primary"][0], "button_primary", BONE_BRIGHT, Color.WHITE, EMBER_BRIGHT,
 		Vector2(S6, S4))
 	# DANGER: restrained blood edge.
 	t.set_type_variation("DangerButton", "Button")
 	_button_styles(t, "DangerButton", IRON_RAISED, BLOOD, IRON_HOVER, BLOOD_BRIGHT, IRON, BLOOD_BRIGHT, Color(BLOOD.r, BLOOD.g, BLOOD.b, 0.18),
-		"body_semi", "button", BONE, BONE_BRIGHT, BLOOD_BRIGHT)
+		ROLES["button"][0], "button", BONE, BONE_BRIGHT, BLOOD_BRIGHT)
 	# NAV (Back / Next / pagers): quieter, same family.
 	t.set_type_variation("NavButton", "Button")
 	_button_styles(t, "NavButton", IRON, EDGE, IRON_RAISED, EDGE_BRASS, IRON_DEEP, EMBER_DEEP, Color(0, 0, 0, 0),
-		"body_semi", "button", BONE_DIM, BONE_BRIGHT, EMBER_BRIGHT, Vector2(S5, S3))
+		ROLES["button"][0], "button", BONE_DIM, BONE_BRIGHT, EMBER_BRIGHT, Vector2(S5, S3))
 	# SELECTOR (class / difficulty / segmented choices): toggled-on = amber edge + ember tint (not just text colour).
 	t.set_type_variation("SelectorButton", "Button")
 	_button_styles(t, "SelectorButton", IRON, EDGE, IRON_RAISED, EDGE_BRASS, Color("3a2b19"), EMBER, Color(EMBER.r, EMBER.g, EMBER.b, 0.30),
-		"body_semi", "button", BONE_DIM, BONE_BRIGHT, EMBER_BRIGHT, Vector2(S5, S3))
+		ROLES["button"][0], "button", BONE_DIM, BONE_BRIGHT, EMBER_BRIGHT, Vector2(S5, S3))
 	# the selected look must not "depress" like a click
 	var sel := box(Color("3a2b19"), EMBER, Color("2c200f"), 0.12, 0.4, 0.016, Color(EMBER.r, EMBER.g, EMBER.b, 0.30))
 	sel.content_margin_left = S5
@@ -602,12 +657,18 @@ static func _theme_buttons(t: Theme) -> void:
 	sel.content_margin_bottom = S3
 	t.set_stylebox("pressed", "SelectorButton", sel)
 	t.set_stylebox("hover_pressed", "SelectorButton", sel)
+	# FIELD (a button that shows a VALUE: a key binding, "Pad Axis1-"): the same iron button in the body face, because
+	# Cinzel's digit 1 reads as a capital I and bindings are code-like strings. SettingsRows applies it to every plain
+	# Button placed in a settings row.
+	t.set_type_variation("FieldButton", "Button")
+	_button_styles(t, "FieldButton", IRON_RAISED, EDGE, IRON_HOVER, EDGE_BRASS, IRON, EMBER_DEEP, Color(0, 0, 0, 0),
+		ROLES["field"][0], "field", BONE, BONE_BRIGHT, EMBER_BRIGHT)
 	# toggles reuse the base box style
 	_button_styles(t, "OptionButton", IRON_RAISED, EDGE, IRON_HOVER, EDGE_BRASS, IRON, EMBER_DEEP, Color(0, 0, 0, 0),
-		"body_semi", "button", BONE, BONE_BRIGHT, EMBER_BRIGHT)
+		ROLES["field"][0], "field", BONE, BONE_BRIGHT, EMBER_BRIGHT)
 	t.set_constant("arrow_margin", "OptionButton", S3)
 	# LinkButton / MenuButton fall back to body styling
-	t.set_font("font", "MenuButton", font("body_semi"))
+	t.set_font("font", "MenuButton", font(ROLES["button"][0]))
 	t.set_font_size("font_size", "MenuButton", fs("button"))
 	t.set_color("font_color", "MenuButton", BONE)
 	# check box / check button / radio
@@ -761,7 +822,7 @@ static func _theme_tabs(t: Theme) -> void:
 		t.set_stylebox("tab_hovered", ty, hov)
 		t.set_stylebox("tab_focus", ty, _focus_ring())
 		t.set_stylebox("tab_disabled", ty, unsel)
-		t.set_font("font", ty, font("body_semi"))
+		t.set_font("font", ty, font(ROLES["button"][0]))
 		t.set_font_size("font_size", ty, fs("button"))
 		t.set_color("font_selected_color", ty, EMBER_BRIGHT)
 		t.set_color("font_unselected_color", ty, BONE_DIM)
