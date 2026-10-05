@@ -32,7 +32,7 @@ else
     echo "signing: using the stored key (draft release $REL_ID)"
     for pair in "android-release.p12:$KS" "android-release.pw:$KS_DIR/release.pw"; do
       name="${pair%%:*}"; dest="${pair#*:}"
-      aid="$(gh api "repos/$REPO/releases/$REL_ID" --jq ".assets[]|select(.name==\"$name\")|.id")"
+      aid="$(gh api "repos/$REPO/releases/$REL_ID" --jq "[.assets[]|select(.label==\"$name\" or .name==\"$name\" or .name==\"${name#android-}\")][0].id // empty")"
       [[ -n "$aid" ]] || { echo "stored key is incomplete: asset $name missing"; exit 1; }
       gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/$aid" > "$dest"
     done
