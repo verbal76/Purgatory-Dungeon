@@ -61,6 +61,7 @@ var _map_visible : bool = false
 var _gameplay_compass_label : Label = null
 var _edge_compass_labels    : Array[Label] = []
 var _edge_compass_angles    : Array[float] = []
+var _frame_border           : Panel = null
 
 # ── Portal marker ────────────────────────────────────────────
 var _portal_dot        : Polygon2D = null
@@ -163,26 +164,70 @@ func _configure_ui() -> void:
 
 	if player_arrow != null:
 		player_arrow.visible = true
-		player_arrow.color   = Color(0.9, 0.08, 0.08, 1.0)
+		player_arrow.color   = PUI.BONE_BRIGHT
 		player_arrow.scale   = Vector2(arrow_scale, arrow_scale)
+		_add_marker_outline(player_arrow, 1.35)
+
+	_build_frame_border()
 
 	_build_compass_overlays()
 
 
+# A dark rim behind a map marker so it reads on any floor colour (child drawn behind its parent).
+func _add_marker_outline(marker: Polygon2D, grow: float) -> void:
+	var rim := Polygon2D.new()
+	rim.name = "Rim"
+	rim.polygon = marker.polygon
+	rim.color = PUI.VOID
+	rim.scale = Vector2(grow, grow)
+	rim.show_behind_parent = true
+	marker.add_child(rim)
+
+
+# Thin dark-brass line frame inset from the screen edge (Root child, so it is not clipped with the map).
+func _build_frame_border() -> void:
+	if root_control == null or _frame_border != null:
+		return
+	if map_frame != null:
+		map_frame.add_theme_stylebox_override("panel", PUI.flat(Color(0, 0, 0, 0)))   # the scene's brown tint is retired
+	_frame_border = Panel.new()
+	_frame_border.name = "MapBorder"
+	_frame_border.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_frame_border.offset_left = PUI.S3
+	_frame_border.offset_top = PUI.S3
+	_frame_border.offset_right = -PUI.S3
+	_frame_border.offset_bottom = -PUI.S3
+	_frame_border.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_frame_border.add_theme_stylebox_override("panel", PUI.flat(Color(0, 0, 0, 0), PUI.EDGE_BRASS.darkened(0.15), 2, PUI.RADIUS))
+	_frame_border.visible = false
+	root_control.add_child(_frame_border)
+
+
+func _place_gameplay_compass() -> void:
+	if _gameplay_compass_label == null:
+		return
+	var o: Vector2 = HudKit.origin(get_viewport())
+	_gameplay_compass_label.position = Vector2(o.x + HudKit.BAR_W - HudKit.COMPASS_W, o.y + HudKit.kills_row_top())
+
+
 func _build_compass_overlays() -> void:
-	# 1. Standard HUD Compass (Anchored perfectly under the health bar)
+	# 1. Standard HUD Compass: the heading letter on a tiny iron plate, right-aligned with the health bar in the
+	#    kills row of the top-left cluster (see HudKit). The label itself wears the plate, so hiding it hides both.
 	if root_control != null and _gameplay_compass_label == null:
 		_gameplay_compass_label = Label.new()
 		_gameplay_compass_label.name = "GameplayCompassLabel"
-		_gameplay_compass_label.position = Vector2(20.0, 52.0)
-		_gameplay_compass_label.add_theme_font_size_override("font_size", 22)
-		_gameplay_compass_label.add_theme_color_override("font_color", Color(1.0, 0.95, 0.8, 1.0))
+		_gameplay_compass_label.theme_type_variation = &"HudValue"
+		_gameplay_compass_label.add_theme_stylebox_override("normal", HudKit.plate_style())
+		_gameplay_compass_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_gameplay_compass_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_gameplay_compass_label.custom_minimum_size = Vector2(HudKit.COMPASS_W, HudKit.ROW_KILLS_H)
+		_gameplay_compass_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_gameplay_compass_label.text = "" # Start empty to prevent random letters on load
+		_place_gameplay_compass()
 		root_control.add_child(_gameplay_compass_label)
 
 	# 2. Minimap Edge Compass Rose (Elliptical layout)
 	if map_frame != null and _edge_compass_labels.is_empty():
-		var map_ink_color := Color(0.102, 0.102, 0.102, 1.0)
 		
 		# Mathematically maps the 8 standard points to an elliptical ring
 		var directions = [
@@ -199,9 +244,12 @@ func _build_compass_overlays() -> void:
 		for dir in directions:
 			var lbl := Label.new()
 			lbl.text = dir["name"]
-			var font_size = 28 if dir["name"].length() == 1 else 20
-			lbl.add_theme_font_size_override("font_size", font_size)
-			lbl.add_theme_color_override("font_color", map_ink_color)
+			# Cardinals in the display face (north in ember, the one landmark), intercardinals quieter.
+			if dir["name"].length() == 1:
+				PUI.apply_role(lbl, "section", PUI.EMBER_BRIGHT if dir["name"] == "N" else PUI.BONE)
+			else:
+				PUI.apply_role(lbl, "metadata")
+			lbl.add_theme_constant_override("outline_size", 4)
 			lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 			
@@ -244,7 +292,7 @@ func _configure_camera() -> void:
 	# transparent_bg=false means the SubViewport shows this environment background instead of the main scene sky.
 	var cam_env := Environment.new()
 	cam_env.background_mode      = Environment.BG_COLOR
-	cam_env.background_color     = Color(0.06, 0.05, 0.04, 1.0)   # Very dark warm
+	cam_env.background_color     = PUI.IRON_DEEP   # very dark warm iron
 	cam_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	cam_env.ambient_light_color  = Color(0.60, 0.55, 0.50, 1.0)   # Warm neutral
 	cam_env.ambient_light_energy = 2.0
@@ -271,6 +319,8 @@ func _set_visible_state(state: bool) -> void:
 
 	if parchment_rect != null:
 		parchment_rect.visible = state
+	if _frame_border != null:
+		_frame_border.visible = state
 
 	if map_frame != null:
 		map_frame.visible = state
@@ -302,6 +352,7 @@ func _update_layout() -> void:
 	if root_control == null:
 		return
 
+	_place_gameplay_compass()
 	root_control.anchor_left   = 0.0
 	root_control.anchor_top    = 0.0
 	root_control.anchor_right  = 1.0
@@ -347,7 +398,7 @@ func _update_layout() -> void:
 		
 		# Calculate the elliptical ring for the edge compass
 		if not _edge_compass_labels.is_empty():
-			var padding := 35.0 # Increased to push NW/NE away from torn corners
+			var padding := 60.0 # keeps NW/NE clear of the corners and of the heading plate
 			var rx := maxf((frame_size.x * 0.5) - padding, 10.0)
 			var ry := maxf((frame_size.y * 0.5) - padding, 10.0)
 			
@@ -670,7 +721,8 @@ func set_portal_position(world_pos: Vector3) -> void:
 	_portal_dot.polygon = PackedVector2Array([
 		Vector2(0.0, -s), Vector2(s, 0.0), Vector2(0.0, s), Vector2(-s, 0.0)
 	])
-	_portal_dot.color = Color(1.0, 0.85, 0.0, 1.0)   # Gold
+	_portal_dot.color = PUI.EMBER_BRIGHT   # the one accent
+	_add_marker_outline(_portal_dot, 1.3)
 	_portal_dot.z_index = 5
 	map_frame.add_child(_portal_dot)
 
@@ -697,7 +749,8 @@ func _update_enemy_dots() -> void:
 		for i in 10:
 			pts.append(Vector2.from_angle(TAU * float(i) / 10.0) * 7.0)
 		dot.polygon = pts
-		dot.color   = Color(1.0, 0.15, 0.1, 1.0)   # Red, distinct from the gold portal diamond
+		dot.color   = PUI.BLOOD_BRIGHT   # danger (semantic), distinct from the ember portal diamond
+		_add_marker_outline(dot, 1.35)
 		dot.z_index = 5
 		map_frame.add_child(dot)
 		_enemy_dots.append(dot)

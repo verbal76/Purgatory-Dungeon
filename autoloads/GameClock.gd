@@ -25,11 +25,8 @@
 #    seconds_per_day     — how long one in-game day lasts in real time
 #    max_days            — total days before the run ends (default 30)
 #    buff_every_n_days   — how often a buff pick fires; set 0 to disable
-#    HUD_FONT_SIZE       — size of the day counter text
-#    HUD_MARGIN_X        — horizontal offset from the top-right corner
-#    HUD_MARGIN_Y        — vertical offset from the top-right corner
-#    HUD_TEXT_COLOR       — color of the day counter text
-#    HUD_SHADOW_COLOR     — color of the text shadow for readability
+#    The day counter is styled by the Purgatory UI theme (HudValue type role, hourglass
+#    PUIIcon) and positioned by HudKit (screen edge + phone safe area).
 #
 #  MOD NOTES:
 #    Call start_run() to begin the day timer after the player spawns.
@@ -83,25 +80,6 @@ signal buff_pick_triggered
 @export var buff_every_n_days : int   = 2
 
 
-# ── HUD layout settings ───────────────────────────────────
-# These control the day counter display in the top-right corner.
-
-# Font size of the day counter label.
-const HUD_FONT_SIZE    : int   = 20
-
-# Horizontal margin from the right edge of the screen.
-const HUD_MARGIN_X     : float = 20.0
-
-# Vertical margin from the top edge of the screen.
-const HUD_MARGIN_Y     : float = 20.0
-
-# Color of the day counter text.
-const HUD_TEXT_COLOR   : Color = Color(0.9, 0.85, 0.7)
-
-# Color of the text shadow behind the day counter for readability.
-const HUD_SHADOW_COLOR : Color = Color(0.0, 0.0, 0.0, 0.6)
-
-
 # ── Runtime state ──────────────────────────────────────────
 # These are managed internally — read them freely, but do not
 # set them directly from outside this script.
@@ -126,8 +104,8 @@ var _timer      : Timer
 
 # ── HUD references ────────────────────────────────────────
 var _hud_layer       : CanvasLayer = null
+var _day_row         : HBoxContainer = null
 var _day_label       : Label       = null
-var _day_shadow      : Label       = null
 
 
 # ── Lifecycle ──────────────────────────────────────────────
@@ -150,60 +128,63 @@ func _ready() -> void:
 
 # ── HUD construction ──────────────────────────────────────
 
-# Builds a small day counter in the top-right corner of the screen.
-# Fully self-contained — no external scene or font resource needed.
-# Starts hidden — made visible by start_run().
+# Builds the day counter in the top-right corner: hourglass icon + "Day 3 / 30" (HudValue, outlined, no box).
+# Fully self-contained. Starts hidden — made visible by start_run().
 func _build_day_hud() -> void:
 	_hud_layer       = CanvasLayer.new()
 	_hud_layer.layer = 5  # Above the game world, below buff pick UI (layer 10)
 	add_child(_hud_layer)
 
-	# Shadow label sits 2 pixels offset behind the main label
-	# so the text is readable against any background.
-	_day_shadow = Label.new()
-	_day_shadow.add_theme_font_size_override("font_size", HUD_FONT_SIZE)
-	_day_shadow.add_theme_color_override("font_color", HUD_SHADOW_COLOR)
-	_day_shadow.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	# Anchor to the top-right corner of the screen.
-	_day_shadow.anchor_left   = 1.0
-	_day_shadow.anchor_right  = 1.0
-	_day_shadow.anchor_top    = 0.0
-	_day_shadow.anchor_bottom = 0.0
-	_day_shadow.offset_left   = -200.0 - HUD_MARGIN_X + 2.0
-	_day_shadow.offset_right  = -HUD_MARGIN_X + 2.0
-	_day_shadow.offset_top    = HUD_MARGIN_Y + 2.0
-	_hud_layer.add_child(_day_shadow)
+	_day_row = HBoxContainer.new()
+	_day_row.name = "DayCounter"
+	_day_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_day_row.add_theme_constant_override("separation", PUI.S2)
+	_day_row.alignment = BoxContainer.ALIGNMENT_END
+	_day_row.custom_minimum_size.y = HudKit.ROW_HEALTH_H
+	# Anchored to the top-right corner; grows leftwards from there.
+	_day_row.anchor_left   = 1.0
+	_day_row.anchor_right  = 1.0
+	_day_row.anchor_top    = 0.0
+	_day_row.anchor_bottom = 0.0
+	_day_row.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_hud_layer.add_child(_day_row)
 
-	# Main day counter label.
-	_day_label = Label.new()
-	_day_label.add_theme_font_size_override("font_size", HUD_FONT_SIZE)
-	_day_label.add_theme_color_override("font_color", HUD_TEXT_COLOR)
-	_day_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	# Anchor to the top-right corner of the screen.
-	_day_label.anchor_left   = 1.0
-	_day_label.anchor_right  = 1.0
-	_day_label.anchor_top    = 0.0
-	_day_label.anchor_bottom = 0.0
-	_day_label.offset_left   = -200.0 - HUD_MARGIN_X
-	_day_label.offset_right  = -HUD_MARGIN_X
-	_day_label.offset_top    = HUD_MARGIN_Y
-	_hud_layer.add_child(_day_label)
+	var icon := PUIIcon.make("hourglass", HudKit.icon_px())
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_day_row.add_child(icon)
+
+	_day_label = HudKit.value_label("")
+	_day_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_day_row.add_child(_day_label)
+
+	_place_day_hud()
+	var vp := get_viewport()
+	if vp != null and not vp.size_changed.is_connected(_place_day_hud):
+		vp.size_changed.connect(_place_day_hud)
 
 	# Start hidden — shown when start_run() is called.
 	_hud_layer.visible = false
+
+
+func _place_day_hud() -> void:
+	if _day_row == null:
+		return
+	var tr: Vector2 = HudKit.top_right(get_viewport())
+	_day_row.offset_right = -tr.x
+	_day_row.offset_left  = -tr.x
+	_day_row.offset_top   = tr.y
+	_day_row.offset_bottom = tr.y
 
 
 # Updates the day counter label text.
 func _refresh_day_label() -> void:
 	var text : String
 	if legendary_mode:
-		text = "Day %d — LEGENDARY" % current_day
+		text = "Day %d — Legendary" % current_day
 	else:
 		text = "Day %d / %d" % [current_day, max_days]
 	if _day_label != null:
 		_day_label.text = text
-	if _day_shadow != null:
-		_day_shadow.text = text
 
 
 # ── Internal timer callback ────────────────────────────────
@@ -299,7 +280,7 @@ func start_run() -> void:
 
 
 # Enters Legendary Mode — the run continues beyond day 30 indefinitely.
-# The day counter switches to "Day X — LEGENDARY" and run_ended never fires again.
+# The day counter switches to "Day X — Legendary" and run_ended never fires again.
 func enter_legendary_mode() -> void:
 	legendary_mode = true
 	max_days       = 99999
