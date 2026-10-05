@@ -27,6 +27,8 @@ echo "=== release_tool check"
 python3 tools/release_tool.py check || { echo "!!! FAILED: version consistency"; rc=1; }
 echo "=== check_res_paths"
 python3 tests/check_res_paths.py || { echo "!!! FAILED: res:// path check"; rc=1; }
+echo "=== ota tools (tests/test_ota_tools.py)"
+GODOT="$GODOT" python3 tests/test_ota_tools.py || { echo "!!! FAILED: OTA build tooling tests"; rc=1; }
 # Refresh the import cache + global class registry (needed on a fresh clone).
 echo "=== import"
 "$GODOT" --headless --path . --import >/dev/null 2>&1 || true
