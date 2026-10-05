@@ -7,11 +7,47 @@ extends Node
 var _fails: int = 0
 var _checks: int = 0
 
+# THE TYPE RULE, as data (owner decision): Cinzel = identity (titles, headings, card titles, buttons, tabs, names,
+# short labels, numbers); Source Sans 3 = reading (sentences, descriptions, notes, lore, diagnostics, fields).
+const CINZEL := "Cinzel"
+const SOURCE := "SourceSans3"
+const ROLE_FAMILY := {
+	"game_title": CINZEL, "screen_title": CINZEL, "section": CINZEL, "card_title": CINZEL, "button": CINZEL,
+	"button_primary": CINZEL, "label": CINZEL, "stat": CINZEL, "hud_value": CINZEL, "hud_label": CINZEL,
+	"body": SOURCE, "body_secondary": SOURCE, "metadata": SOURCE, "field": SOURCE, "warning": SOURCE, "caption": SOURCE,
+}
+# Label theme variations -> family (the variations screens actually use).
+const LABEL_FAMILY := {
+	"GameTitle": CINZEL, "ScreenTitle": CINZEL, "SectionHeading": CINZEL, "CardTitle": CINZEL, "ShortLabel": CINZEL,
+	"StatLabel": CINZEL, "DangerTitle": CINZEL, "HudValue": CINZEL, "HudLabel": CINZEL,
+	"ParchmentTitle": CINZEL, "ParchmentHeading": CINZEL, "ParchmentCardTitle": CINZEL, "ParchmentLabel": CINZEL, "ParchmentStat": CINZEL,
+	"SecondaryLabel": SOURCE, "MetaLabel": SOURCE, "WarningLabel": SOURCE, "CaptionLabel": SOURCE,
+	"ParchmentBody": SOURCE, "ParchmentMeta": SOURCE, "Label": SOURCE,
+}
+# Other theme types -> [font item, family].
+const CONTROL_FAMILY := {
+	"Button": ["font", CINZEL], "PrimaryButton": ["font", CINZEL], "DangerButton": ["font", CINZEL],
+	"NavButton": ["font", CINZEL], "SelectorButton": ["font", CINZEL], "FieldButton": ["font", SOURCE], "MenuButton": ["font", CINZEL],
+	"TabContainer": ["font", CINZEL], "TabBar": ["font", CINZEL], "Window": ["title_font", CINZEL],
+	"OptionButton": ["font", SOURCE], "CheckBox": ["font", SOURCE], "CheckButton": ["font", SOURCE],
+	"LineEdit": ["font", SOURCE], "TextEdit": ["font", SOURCE], "PopupMenu": ["font", SOURCE], "ItemList": ["font", SOURCE],
+	"TooltipLabel": ["font", SOURCE], "ProgressBar": ["font", SOURCE],
+	"RichTextLabel": ["normal_font", SOURCE], "ParchmentRich": ["normal_font", SOURCE],
+}
+
+
+static func _family_of(f: Font) -> String:
+	var fv := f as FontVariation
+	if fv == null or fv.base_font == null:
+		return "?"
+	return (fv.base_font.resource_path.get_file() as String).split("-")[0]
+
 # Variations the design doc promises (type -> names).
 const VARIATIONS := {
-	"Label": ["GameTitle", "ScreenTitle", "SectionHeading", "CardTitle", "SecondaryLabel", "MetaLabel", "HudValue", "HudLabel",
-		"WarningLabel", "CaptionLabel", "ParchmentTitle", "ParchmentHeading", "ParchmentCardTitle", "ParchmentBody", "ParchmentMeta"],
-	"Button": ["PrimaryButton", "DangerButton", "NavButton", "SelectorButton"],
+	"Label": ["GameTitle", "ScreenTitle", "SectionHeading", "CardTitle", "ShortLabel", "StatLabel", "DangerTitle", "SecondaryLabel",
+		"MetaLabel", "HudValue", "HudLabel", "WarningLabel", "CaptionLabel", "ParchmentTitle", "ParchmentHeading", "ParchmentCardTitle",
+		"ParchmentLabel", "ParchmentStat", "ParchmentBody", "ParchmentMeta"],
+	"Button": ["PrimaryButton", "DangerButton", "NavButton", "SelectorButton", "FieldButton"],
 	"PanelContainer": ["CardPanel", "ParchmentPanel", "VeilPanel", "InsetPanel"],
 	"HSeparator": ["BrassDivider"],
 }
@@ -74,6 +110,32 @@ func _ready() -> void:
 	_check(families.size() == 2, "exactly two font families are used (%s)" % [families.keys()])
 	for role in PUI.ROLES:
 		_check(PUI.fs(role) >= 14, "type role %s is readable (%d px)" % [role, PUI.fs(role)])
+		_check(ROLE_FAMILY.has(role), "type role %s has a decided family" % role)
+		_check(_family_of(PUI.font(PUI.ROLES[role][0])) == ROLE_FAMILY.get(role, "?"), "role %s uses %s (uses %s)" % [role, ROLE_FAMILY.get(role, "?"), _family_of(PUI.font(PUI.ROLES[role][0]))])
+		# Cinzel's lowercase is small caps: it needs more pixels than the body face to stay legible
+		var floor_px: int = PUI.MIN_DISPLAY_SIZE if ROLE_FAMILY.get(role, SOURCE) == CINZEL else PUI.MIN_BODY_SIZE
+		_check(PUI.fs(role) >= floor_px, "role %s clears its floor (%d >= %d px)" % [role, PUI.fs(role), floor_px])
+	_check(ROLE_FAMILY.size() == PUI.ROLES.size(), "every type role is in the family map")
+	for v in LABEL_FAMILY:
+		var lf: Font = theme.get_font("font", v)
+		_check(_family_of(lf) == LABEL_FAMILY[v], "Label variation %s is %s (is %s)" % [v, LABEL_FAMILY[v], _family_of(lf)])
+		_check(theme.get_font_size("font_size", v) > 0, "Label variation %s has a size" % v)
+	for ty in CONTROL_FAMILY:
+		var spec: Array = CONTROL_FAMILY[ty]
+		var cf: Font = theme.get_font(spec[0], ty)
+		_check(_family_of(cf) == spec[1], "%s %s is %s (is %s)" % [ty, spec[0], spec[1], _family_of(cf)])
+	# the sentences stay readable: warnings, notes and descriptions are never Cinzel
+	for v in ["WarningLabel", "MetaLabel", "SecondaryLabel", "CaptionLabel", "ParchmentBody"]:
+		_check(_family_of(theme.get_font("font", v)) == SOURCE, "%s (sentence-length text) stays Source Sans" % v)
+	# text the player types keeps its case (Cinzel folds lowercase into small caps)
+	_check(_family_of(theme.get_font("font", "LineEdit")) == SOURCE, "typed text is Source Sans")
+	# glyph guarantee: every font a theme item can use draws the functional symbols through its fallback chain
+	for key in PUI.FONT_PATHS:
+		_check(PUI.can_render(key, "\u00b7\u2014\u2013\u2026\u00d7\u2191\u2193"), "font '%s' draws the dash, dot, ellipsis, multiplication sign and arrows through its chain" % key)
+	for ty in CONTROL_FAMILY:
+		var item: String = CONTROL_FAMILY[ty][0]
+		var ff: Font = theme.get_font(item, ty)
+		_check(ff.has_char(0x2014) and ff.has_char(0x00b7) and ff.has_char(0x2026), "%s font draws the em dash, middle dot and ellipsis" % ty)
 	_check(theme.get_font_size("font_size", "SectionHeading") == PUI.fs("section"), "SectionHeading uses the section role size")
 	_check(theme.get_color("font_color", "SectionHeading").is_equal_approx(PUI.EMBER), "section headings use the accent, not blue")
 
