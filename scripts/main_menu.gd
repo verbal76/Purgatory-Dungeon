@@ -41,6 +41,25 @@ func _ready() -> void:
 
 	_wire_button_clicks()
 	_add_version_label()
+	if TouchControls.is_touch_platform():
+		_fit_for_phone()
+
+
+# Phones: Quit has no place on Android (Home leaves the app) and the rest must fit a 720-high canvas
+# with thumb-sized buttons.
+func _fit_for_phone() -> void:
+	if quit_btn:
+		quit_btn.hide()
+	var box := find_child("VBox", true, false) as VBoxContainer
+	if box:
+		box.add_theme_constant_override("separation", 10)
+		var spacer := box.get_node_or_null("Spacer") as Control
+		if spacer:
+			spacer.custom_minimum_size.y = 0
+	var margin := find_child("Margin", true, false) as MarginContainer
+	if margin:
+		margin.add_theme_constant_override("margin_top", 24)
+		margin.add_theme_constant_override("margin_bottom", 24)
 
 
 # Small public-version label in the bottom-right corner ("Purgatory Dungeon v2"), plus the
@@ -93,7 +112,14 @@ func _reorder_buttons() -> void:
 		quit_btn,
 	]
 
+	# Keep the game title (and its spacer) above the buttons: moving the buttons to the front would
+	# otherwise push the title under them.
 	var btn_index : int = 0
+	for head_name in ["TitleLabel", "Spacer"]:
+		var head := container.get_node_or_null(head_name)
+		if head != null:
+			container.move_child(head, btn_index)
+			btn_index += 1
 	for btn in ordered:
 		if btn != null and btn.get_parent() == container:
 			container.move_child(btn, btn_index)

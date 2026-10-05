@@ -149,6 +149,7 @@ func _ready() -> void:
 	layer = 80
 	process_mode = Node.PROCESS_MODE_ALWAYS   # must notice pause / focus loss to release inputs
 	add_to_group(GROUP)
+	add_to_group(MobileUi.GROUP_OPT_OUT)
 	_apply_settings()
 	_strip_mouse_bindings()
 

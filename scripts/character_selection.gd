@@ -55,6 +55,13 @@ func _ready() -> void:
 	_connect_signals()
 	# Debug spawn/system toggles — must come before class picker so it lands above it
 	_build_debug_panel()
+	if TouchControls.is_touch_platform():
+		# Phones: the dev toggles do not fit and are not for players; the on-screen keyboard below is
+		# this game's own (the OS keyboard would cover the form in landscape).
+		if _debug_panel:
+			_debug_panel.hide()
+		if char_name_input:
+			char_name_input.virtual_keyboard_enabled = false
 	# Create or find the class selection buttons
 	_build_class_picker()
 	# Create or find the difficulty selection buttons

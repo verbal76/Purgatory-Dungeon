@@ -23,6 +23,7 @@ func _ready() -> void:
 	# Phones start on touch prompts (and the Android back button must not quit the game).
 	if TouchControls.is_touch_platform():
 		current_scheme = Scheme.TOUCH
+		MobileUi.install(get_tree())
 
 
 func _input(event: InputEvent) -> void:

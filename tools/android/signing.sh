@@ -52,7 +52,7 @@ else
   fi
 fi
 echo "::add-mask::$PW"
-FP="$(keytool -list -v -keystore "$KS" -storepass "$PW" -alias "$ALIAS" 2>/dev/null | sed -n 's/^ *SHA256: *//p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')"
+FP="$(keytool -list -v -keystore "$KS" -storepass "$PW" -alias "$ALIAS" 2>/dev/null | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')"
 [[ -n "$FP" ]] || { echo "could not read the signing certificate"; exit 1; }
 echo "signing certificate SHA-256: $FP"
 export ANDROID_CERT_SHA256="$FP"
