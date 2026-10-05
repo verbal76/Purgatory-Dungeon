@@ -30,6 +30,7 @@ const SPLASH_SCENE := "res://scenes/StudioSplash.tscn"
 # Developer / test hooks. Honoured ONLY in non-template builds (editor / test runs), never in a shipped game.
 const ENV_ROOT := "PURGATORY_OTA_ROOT"
 const ENV_CHANNEL := "PURGATORY_OTA_CHANNEL_URL"
+const ENV_PLATFORM := "PURGATORY_OTA_PLATFORM"   # lets a Linux CI host act as "android" / "windows"
 # Honoured everywhere: an escape hatch for the player / adb (skip every OTA step for this launch).
 const ENV_DISABLE := "PURGATORY_NO_OTA"
 const ARG_DISABLE := "--no-ota"

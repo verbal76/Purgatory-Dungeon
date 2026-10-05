@@ -99,6 +99,24 @@ def check_names(names, read, what, version, require_logo, release, sha, problems
         norm = n if n.startswith("res://") else "res://" + n   # APK assets carry no res:// prefix
         if norm.startswith(FORBIDDEN_PREFIXES) or any(x in n.lower() for x in FORBIDDEN_SUBSTR) or n.endswith(".md"):
             problems.append(f"the {what} contains a file that must not ship: {n}")
+    # OTA client present -> the build must carry the PUBLIC trust anchor and the channel config, and no key material.
+    if has("scripts/ota/ota_core"):
+        pem_name = next((n for n in names if n.endswith("ota_trust.pem") and "/" not in n.replace("res://", "")), "")
+        if not pem_name:
+            problems.append(f"the {what} contains the OTA client but no ota_trust.pem (CI writes it before export)")
+        else:
+            pem = read(pem_name).decode("utf-8", "replace")
+            if "-----BEGIN PUBLIC KEY-----" not in pem:
+                problems.append("ota_trust.pem is not a PEM public key")
+            if "PRIVATE" in pem:
+                problems.append("ota_trust.pem contains PRIVATE key material")
+            notes.append("OTA trust anchor present (public key only)")
+        if not has("ota_channel.json"):
+            problems.append(f"the {what} does not contain ota_channel.json")
+        for n in names:
+            low = n.lower()
+            if low.endswith((".key", ".p12", ".jks", ".keystore")) or "ota-signing" in low or "ota_signing" in low:
+                problems.append(f"the {what} contains key material: {n}")
     bi_name = next((n for n in names if n.endswith("build_info.json")), "")
     if bi_name:
         try:

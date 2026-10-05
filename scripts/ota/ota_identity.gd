@@ -11,6 +11,8 @@ extends RefCounted
 
 
 static func platform() -> String:
+	if not OS.has_feature("template") and OS.get_environment(OtaConst.ENV_PLATFORM) != "":
+		return OS.get_environment(OtaConst.ENV_PLATFORM)
 	match OS.get_name():
 		"Android":
 			return "android"

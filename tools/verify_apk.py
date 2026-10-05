@@ -60,6 +60,7 @@ def main():
     ap.add_argument("--require-logo", action="store_true")
     ap.add_argument("--sha", default="")
     ap.add_argument("--expect-cert", default="")
+    ap.add_argument("--require-permission", action="append", default=[], help="android.permission.X that must be declared")
     a = ap.parse_args()
     problems, notes = [], []
     if not os.path.isfile(a.apk):
@@ -93,8 +94,12 @@ def main():
         nc = re.search(r"native-code: ([^\n]*)", out)
         if not nc or "arm64-v8a" not in nc.group(1) or re.search(r"armeabi|x86", nc.group(1)):
             problems.append(f"native code should be arm64-v8a only (found {nc.group(1) if nc else 'none'})")
-        for perm in re.findall(r"uses-permission: name='([^']*)'", out):
+        declared = re.findall(r"uses-permission: name='([^']*)'", out)
+        for perm in declared:
             notes.append(f"permission: {perm}")
+        for need in a.require_permission:
+            if need not in declared:
+                problems.append(f"the APK does not declare {need} (declared: {declared})")
     else:
         problems.append("aapt2 not found (set ANDROID_HOME)")
 

@@ -153,6 +153,8 @@ static func quarantine(root_dir: String, seq: int, reason: String) -> void:
 ## Deletes every slot except the listed update numbers.
 static func prune_slots(root_dir: String, keep: Array) -> void:
 	var slots: String = root_dir.path_join("slots")
+	if not DirAccess.dir_exists_absolute(slots):
+		return
 	for d in DirAccess.get_directories_at(slots):
 		if not keep.has(int(d)):
 			remove_tree(slots.path_join(d))
@@ -173,6 +175,8 @@ static func backup_saves(root_dir: String, seq: int, save_root: String) -> Strin
 
 ## Keeps the newest `keep` sub-directories (by name's trailing timestamp / mtime) of a folder.
 static func _prune_dir(dir_path: String, keep: int) -> void:
+	if not DirAccess.dir_exists_absolute(dir_path):
+		return
 	var dirs: Array = []
 	for d in DirAccess.get_directories_at(dir_path):
 		dirs.append({"name": d, "t": FileAccess.get_modified_time(dir_path.path_join(d))})
