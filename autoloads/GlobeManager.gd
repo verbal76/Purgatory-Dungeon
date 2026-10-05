@@ -46,9 +46,9 @@ const RARITY_WEIGHTS : Dictionary = {
 const ALERT_TEXT      : String = "Potent Curse Sensed"
 const ALERT_DURATION  : float  = 2.5
 const ALERT_FADE_TIME : float  = 0.4
-const ALERT_FONT_SIZE : int    = 26
-const ALERT_COLOR     : Color  = Color(0.85, 0.35, 0.9)
-const ALERT_SHADOW_COLOR : Color = Color(0.0, 0.0, 0.0, 0.7)
+# Look: CardTitle role with an outline; a curse is blood (semantic), a blessing is ember.
+const ALERT_COLOR     : Color  = PUI.BLOOD_BRIGHT
+const BLESSING_COLOR  : Color  = PUI.EMBER_BRIGHT
 
 
 # ── Spawn settings ─────────────────────────────────────────
@@ -74,7 +74,6 @@ var _is_running : bool = false
 
 var _alert_layer   : CanvasLayer = null
 var _alert_label   : Label       = null
-var _alert_shadow  : Label       = null
 var _alert_timer   : float       = -1.0
 
 
@@ -126,29 +125,29 @@ func _load_effect_data() -> void:
 func _build_alert_ui() -> void:
 	_alert_layer       = CanvasLayer.new()
 	_alert_layer.layer = 6
+	# Transient HUD text keeps its role size on phones too.
+	_alert_layer.add_to_group("no_mobile_ui")
 	add_child(_alert_layer)
 
-	_alert_shadow = Label.new()
-	_alert_shadow.text = ALERT_TEXT
-	_alert_shadow.add_theme_font_size_override("font_size", ALERT_FONT_SIZE)
-	_alert_shadow.add_theme_color_override("font_color", Color(0.0, 0.0, 0.0, 0.0))
-	_alert_shadow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_alert_shadow.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_alert_shadow.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_alert_shadow.offset_top    = -180.0
-	_alert_shadow.offset_left   = 2.0
-	_alert_shadow.offset_right  = 2.0
-	_alert_layer.add_child(_alert_shadow)
-
-	_alert_label = Label.new()
-	_alert_label.text = ALERT_TEXT
-	_alert_label.add_theme_font_size_override("font_size", ALERT_FONT_SIZE)
-	_alert_label.add_theme_color_override("font_color", Color(ALERT_COLOR.r, ALERT_COLOR.g, ALERT_COLOR.b, 0.0))
+	# One outlined label (no drop-shadow twin); its alpha is animated through modulate.
+	_alert_label = PUI.label(ALERT_TEXT, "CardTitle")
+	_alert_label.add_theme_constant_override("outline_size", 5)
+	# Cinzel's lowercase is small caps, so a world-space alert is set a step larger than the role size.
+	_alert_label.add_theme_font_size_override("font_size", int(round(PUI.fs("card_title") * 1.3)))
+	_alert_label.add_theme_color_override("font_color", ALERT_COLOR)
 	_alert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_alert_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	_alert_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_alert_label.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_alert_label.offset_top = -180.0
+	_alert_label.modulate.a = 0.0
+	PUI.adopt(_alert_label)   # a CanvasLayer child does not inherit the root theme
 	_alert_layer.add_child(_alert_label)
+
+
+func _set_alert(text: String, tint: Color) -> void:
+	_alert_label.text = text
+	_alert_label.add_theme_color_override("font_color", tint)
 
 
 # Called by Globe.gd on collection — shows the effect name on screen.
@@ -156,8 +155,7 @@ func announce_collection(effect: Dictionary) -> void:
 	var name_str = effect.get("name", "Unknown Effect")
 	var val = float(effect.get("value", 0))
 	var sign_str = "+" if val >= 0 else ""
-	_alert_label.text = "%s (%s%d)" % [name_str, sign_str, int(val)]
-	_alert_shadow.text = _alert_label.text
+	_set_alert("%s (%s%d)" % [name_str, sign_str, int(val)], BLESSING_COLOR if val >= 0.0 else ALERT_COLOR)
 	_alert_timer = 0.0
 
 
@@ -190,13 +188,7 @@ func _process(delta: float) -> void:
 			_alert_timer = -1.0
 
 		if _alert_label != null:
-			_alert_label.add_theme_color_override(
-				"font_color", Color(ALERT_COLOR.r, ALERT_COLOR.g, ALERT_COLOR.b, alpha)
-			)
-		if _alert_shadow != null:
-			_alert_shadow.add_theme_color_override(
-				"font_color", Color(0.0, 0.0, 0.0, alpha * ALERT_SHADOW_COLOR.a)
-			)
+			_alert_label.modulate.a = alpha
 
 
 # ── Sequential activation ──────────────────────────────────
@@ -228,8 +220,7 @@ func _activate_next_globe() -> void:
 
 	chosen.activate()
 
-	_alert_label.text = ALERT_TEXT
-	_alert_shadow.text = ALERT_TEXT
+	_set_alert(ALERT_TEXT, ALERT_COLOR)
 	show_globe_alert()
 	_start_next_timer()
 
@@ -417,8 +408,7 @@ func spawn_at(pos: Vector3, parent: Node) -> void:
 	_all_globes.append(globe)
 
 	# Show the "Potent Curse Sensed" alert so the player is warned.
-	_alert_label.text  = ALERT_TEXT
-	_alert_shadow.text = ALERT_TEXT
+	_set_alert(ALERT_TEXT, ALERT_COLOR)
 	show_globe_alert()
 
 
@@ -427,6 +417,8 @@ func reset() -> void:
 	_activation_timer = -1.0
 	_alert_timer      = -1.0
 	_is_running       = false
+	if _alert_label != null:
+		_alert_label.modulate.a = 0.0
 
 
 # Activates the `count` dormant globes nearest to `origin`. Used by the

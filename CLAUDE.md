@@ -23,6 +23,16 @@ persistent key (never in the repo/logs/notes). Touch input feeds the same semant
 and controller (`scripts/touch/`); all touch/phone behaviour is gated by `TouchControls.is_touch_platform()`
 so Windows is unchanged. Details, controls table and build pipeline: **docs/ANDROID.md**.
 
+## OTA updates (same product, same version number)
+
+From the first APK that contains the OTA client (`scripts/ota/`), code/content-only changes can be delivered over the air
+without a new APK: a signed, cumulative patch pack for one installed native build, mounted at startup by the first autoload,
+verified (signature, SHA-256, exact base commit/engine/platform) and rolled back automatically on any failure. Rules in
+**docs/OTA.md** (what ships OTA vs needs an APK: `tools/ota/ota_rules.json`, `tools/ota/classify.py`; publication = push branch
+`ota/v<N>/<K>`; recovery = channel revocation). Never edit `scripts/ota/**`, `ota_trust.pem`, `ota_channel.json`, `project.godot`
+or the Android manifest settings expecting an OTA to carry it. The first OTA and any publication need the owner's authorization.
+The channel is a separate public repo that holds only signed update files; the source repo stays private.
+
 ## Studio splash (Hot Attic Games standing requirement — do not remove)
 
 Every Hot Attic Games application opens with the studio splash before its own title screen:

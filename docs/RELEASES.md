@@ -90,5 +90,8 @@ The first CI build of 8eb36c3 was superseded within minutes and never delivered,
 - No Android build exists yet, so there is no `versionCode`/package ID to record. When Android
   arrives it joins the same `vN` release; `versionCode` is recorded in the release's technical
   details only.
-- No OTA mechanism exists in this project.
+- Over-the-air updates exist from the first APK that contains the OTA client (see `docs/OTA.md`): an OTA is a signed
+  patch for one installed native build and is shown as "Purgatory Dungeon vN · update K". It is **never** a new `vN`,
+  never creates a GitHub Release and never changes Latest. Anything that cannot ship OTA (`tools/ota/classify.py`)
+  still ships as the next numbered APK/zip exactly as described above. v1-v5 have no OTA client.
 - The game has no About screen; the version is on the main menu and in the startup log.

@@ -24,6 +24,7 @@ func _ready() -> void:
 	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_bind_nodes()
+	_build_backdrop()
 	_connect_signals()
 	_reorder_buttons()
 
@@ -43,6 +44,21 @@ func _ready() -> void:
 	_add_version_label()
 	if TouchControls.is_touch_platform():
 		_fit_for_phone()
+
+
+# The dungeon picture stays the hero. A light veil + vignette sits over it (PUI), and a restrained dark gradient
+# on the left gives the button column a calm ground - no panel, no box.
+func _build_backdrop() -> void:
+	var at: int = 0
+	var picture := get_node_or_null("BackgroundImage")
+	if picture != null:
+		at = picture.get_index() + 1
+	var veil := PUI.background("veil")
+	add_child(veil)
+	move_child(veil, at)
+	var column := MenuKit.side_veil(0.5, 0.78)
+	add_child(column)
+	move_child(column, at + 1)
 
 
 # Phones: Quit has no place on Android (Home leaves the app) and the rest must fit a 720-high canvas
@@ -66,18 +82,19 @@ func _fit_for_phone() -> void:
 # engineering diagnostics in the log. See BuildInfo and docs/RELEASES.md.
 func _add_version_label() -> void:
 	print(BuildInfo.diagnostics())
-	var label := Label.new()
+	var label := PUI.label(BuildInfo.display_string(), "CaptionLabel")
 	label.name = "VersionLabel"
-	label.text = BuildInfo.display_string()
-	label.add_theme_font_size_override("font_size", 14)
-	label.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8, 0.8))
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	label.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	label.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	label.offset_right = -16.0
-	label.offset_bottom = -10.0
+	label.offset_right = -PUI.S5
+	label.offset_bottom = -PUI.S3
 	add_child(label)
+	# A downloaded OTA update shows "restart to apply" without leaving the menu.
+	var ota: Node = get_node_or_null("/root/OtaUpdater")
+	if ota != null and ota.has_signal("status_changed"):
+		ota.status_changed.connect(func() -> void: label.text = BuildInfo.display_string())
 
 
 # Enforces the desired button order in whatever VBoxContainer (or other
@@ -115,7 +132,7 @@ func _reorder_buttons() -> void:
 	# Keep the game title (and its spacer) above the buttons: moving the buttons to the front would
 	# otherwise push the title under them.
 	var btn_index : int = 0
-	for head_name in ["TitleLabel", "Spacer"]:
+	for head_name in ["TitleBlock", "TitleLabel", "Spacer"]:
 		var head := container.get_node_or_null(head_name)
 		if head != null:
 			container.move_child(head, btn_index)
@@ -159,21 +176,90 @@ func _on_new_character_pressed() -> void:
 		# ALL 10 SLOTS FULL - Trigger the popup instead of a silent redirect
 		_show_full_slots_warning()
 
+var _slots_popup: Control = null
+
+# "No Empty Slots": an in-scene popup built from the same parts as the profile screen's popups (scrim + iron panel,
+# display-face title, brass rule, one primary action) instead of the engine's AcceptDialog window, which draws its
+# title bar outside the panel and cannot be made to match.
 func _show_full_slots_warning() -> void:
-	# Create a built-in Godot popup dialog dynamically
-	var dialog = AcceptDialog.new()
-	dialog.title = "No Empty Slots"
-	dialog.dialog_text = "All 10 save slots are full!\n\nPlease delete a soul to make room for a new character."
-	
-	# Add it to the scene and show it
-	add_child(dialog)
-	dialog.popup_centered()
-	
-	# When the user clicks "OK", clean up the dialog and transition to the Profile Screen
-	dialog.confirmed.connect(func():
-		dialog.queue_free()
+	if _slots_popup != null:
+		return
+	var layer := Control.new()
+	layer.name = "NoEmptySlotsPopup"
+	layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.mouse_filter = Control.MOUSE_FILTER_STOP   # nothing behind the popup can be clicked
+
+	var scrim := ColorRect.new()
+	scrim.color = PUI.SCRIM
+	scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(scrim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(520, 0)
+	center.add_child(panel)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", PUI.S3)
+	panel.add_child(box)
+
+	var title := PUI.label("No Empty Slots", "CardTitle")
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+	box.add_child(PUI.divider())
+	var body := Label.new()
+	body.text = "All 10 save slots are full!\n\nPlease delete a soul to make room for a new character."
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(body)
+
+	var open_btn := PUI.button("Open Profiles", "primary")
+	open_btn.name = "OpenProfilesButton"
+	box.add_child(open_btn)
+	var close_btn := PUI.button("Close", "nav")
+	close_btn.name = "ClosePopupButton"
+	box.add_child(close_btn)
+
+	add_child(layer)
+	_slots_popup = layer
+	_set_menu_focus(false)
+	if has_node("/root/AudioManager"):
+		AudioManager.wire_click_sounds(layer)
+	open_btn.grab_focus()
+
+	# "Open Profiles": clean up and go to the Profile Screen (as the old dialog's OK did).
+	open_btn.pressed.connect(func():
+		_close_slots_popup()
 		_try_load_scene(profile_scene)
 	)
+	close_btn.pressed.connect(_close_slots_popup)
+
+
+func _close_slots_popup() -> void:
+	if _slots_popup != null:
+		_slots_popup.queue_free()
+		_slots_popup = null
+	_set_menu_focus(true)
+	if new_char_btn:
+		new_char_btn.grab_focus()
+
+
+# While the popup is open the menu buttons behind it cannot take focus (gamepad / keyboard stay inside the popup).
+func _set_menu_focus(enabled: bool) -> void:
+	for b in [new_char_btn, load_char_btn, codex_btn, options_btn, alchemist_btn, quit_btn]:
+		if b != null:
+			b.focus_mode = Control.FOCUS_ALL if enabled else Control.FOCUS_NONE
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if _slots_popup != null and event.is_action_pressed("ui_cancel"):
+		_close_slots_popup()
+		get_viewport().set_input_as_handled()
 
 func _try_load_scene(path: String) -> void:
 	if ResourceLoader.exists(path):

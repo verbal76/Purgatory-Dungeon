@@ -73,4 +73,6 @@ if [[ "${GITHUB_REF:-}" == refs/tags/v* || "${GITHUB_REF:-}" == refs/heads/relea
   FLAGS+=(--release --require-logo --sha "${SOURCE_SHA:-}")
 fi
 [[ -n "${ANDROID_CERT_SHA256:-}" ]] && FLAGS+=(--expect-cert "$ANDROID_CERT_SHA256")
+# The OTA client downloads updates, so a build that contains it must declare INTERNET (docs/OTA.md).
+[[ -f scripts/ota/ota_core.gd ]] && FLAGS+=(--require-permission android.permission.INTERNET)
 python3 tools/verify_apk.py "$OUT" --version "$VERSION" "${FLAGS[@]}"

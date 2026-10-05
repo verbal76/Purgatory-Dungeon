@@ -36,9 +36,8 @@ static func install(tree: SceneTree) -> Node:
 
 
 func _ready() -> void:
-	var t := Theme.new()
-	t.default_font_size = DEFAULT_FONT
-	get_tree().root.theme = t
+	# The shared look (fonts, sizes, materials) comes from the UiTheme autoload / PUI; this node only
+	# enforces phone minimums on top of it.
 	get_tree().node_added.connect(_on_node_added)
 	# Nodes that entered before this node did (the scene that is already loading).
 	_scan(get_tree().root)

@@ -24,7 +24,7 @@ extends CanvasLayer
 #    MENU_SCENE          — scene to load when the player presses menu
 #
 #  SURGICAL CHANGES:
-#    - Shop label: removed "✕ / " prefix — now reads "Press A to visit..."
+#    - Shop label: removed "✕ / " prefix — now reads "Press <glyph> to visit..."
 #    - Added _restart_label: "Press X to start a new run".
 #    - KEY_X moved from shop handler to quick-restart handler.
 #    - JOY_BUTTON_X added so controller X/Square button also triggers restart.
@@ -62,6 +62,7 @@ var _label           : Label     = null
 var _prompt_label    : Label     = null
 var _shop_label      : Label     = null
 var _restart_label   : Label     = null
+var _prompts         : VBoxContainer = null
 var _touch_row       : HBoxContainer = null
 var _timer           : float     = 0.0
 var _phase           : int       = 0
@@ -108,78 +109,74 @@ func _ready() -> void:
 
 	# ── Black overlay ──────────────────────────────────────────
 	_overlay       = ColorRect.new()
-	_overlay.color = Color(0.0, 0.0, 0.0, 0.0)
+	_overlay.color = Color(PUI.VOID, 0.0)
 	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_overlay)
 
 	# ── "YOU DIED" label ───────────────────────────────────────
-	_label      = Label.new()
-	_label.text = "YOU DIED"
-	_label.add_theme_font_size_override("font_size", 72)
-	_label.add_theme_color_override("font_color", Color(0.85, 0.1, 0.1, 0.0))
+	# Display face (Cinzel Black, the GameTitle role) in blood-bright; fade and heartbeat animate the
+	# label's modulate alpha (no theme overrides per frame).
+	_label      = PUI.label("YOU DIED", "GameTitle")
+	_label.add_theme_font_size_override("font_size", int(round(PUI.fs("game_title") * 1.5)))
+	_label.add_theme_color_override("font_color", PUI.BLOOD_BRIGHT)
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 	_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_label.offset_bottom = -float(PUI.S7 + PUI.S4)   # title sits a little above centre
+	_label.mouse_filter  = Control.MOUSE_FILTER_IGNORE
+	_label.modulate.a    = 0.0
+	PUI.adopt(_label)   # a CanvasLayer child does not inherit the root theme
 	add_child(_label)
 
-	# ── Menu prompt ────────────────────────────────────────────
-	_prompt_label      = Label.new()
-	_prompt_label.text = "Press ☰ to view character stats"
-	_prompt_label.add_theme_font_size_override("font_size", 22)
-	_prompt_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7, 0.0))
-	_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_prompt_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_prompt_label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_prompt_label.offset_top = 100.0
-	add_child(_prompt_label)
+	# ── Key prompts (desktop / controller): quiet hierarchy, glyphs from InputManager ─────────
+	_prompts = VBoxContainer.new()
+	_prompts.name = "KeyPrompts"
+	_prompts.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_prompts.anchor_top = 0.5
+	_prompts.offset_top = float(PUI.S7 + PUI.S2)   # first line starts a clear gap below the title
+	_prompts.alignment  = BoxContainer.ALIGNMENT_BEGIN
+	_prompts.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_prompts.add_theme_constant_override("separation", PUI.S2)
+	_prompts.modulate.a = 0.0
+	PUI.adopt(_prompts)
+	add_child(_prompts)
 
-	# ── Alchemist shortcut — A/Cross only ──────────────────────
-	_shop_label = Label.new()
-	_shop_label.text = "Press A to visit the Alchemist's Lab"
-	_shop_label.add_theme_font_size_override("font_size", 20)
-	_shop_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, 0.0))
-	_shop_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_shop_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_shop_label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_shop_label.offset_top = 155.0
-	add_child(_shop_label)
-
-	# ── Quick restart — keyboard X or controller X/Square ──────
-	_restart_label = Label.new()
-	_restart_label.text = "Press X to start a new run"
-	_restart_label.add_theme_font_size_override("font_size", 20)
-	_restart_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, 0.0))
-	_restart_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_restart_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_restart_label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_restart_label.offset_top = 210.0
-	add_child(_restart_label)
+	_prompt_label = _prompt_line("Press %s to view character stats" % InputManager.glyph("ui_menu"), "MetaLabel")
+	_shop_label = _prompt_line("Press %s to visit the Alchemist's Lab" % InputManager.glyph("ui_accept"), "SecondaryLabel")
+	_restart_label = _prompt_line("Press %s to start a new run" % InputManager.glyph("restart"), "SecondaryLabel")
 
 	if TouchControls.is_touch_platform():
 		_build_touch_buttons()
 
 
+func _prompt_line(text: String, variation: String) -> Label:
+	var l := PUI.label(text, variation)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_prompts.add_child(l)
+	return l
+
+
 # Phones have no keys: the three exits are buttons that appear with the key prompts (which they replace).
 func _build_touch_buttons() -> void:
 	get_tree().call_group(TouchControls.GROUP, "set_enabled", false)
-	_prompt_label.hide()
-	_shop_label.hide()
-	_restart_label.hide()
+	_prompts.hide()
 	_touch_row = HBoxContainer.new()
 	_touch_row.name = "TouchExits"
 	_touch_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	_touch_row.add_theme_constant_override("separation", 24)
+	_touch_row.add_theme_constant_override("separation", PUI.S5)
 	_touch_row.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	_touch_row.offset_top = -170.0
 	_touch_row.offset_bottom = -64.0
 	_touch_row.modulate.a = 0.0
+	PUI.adopt(_touch_row)
 	add_child(_touch_row)
-	for spec in [["Main Menu", "menu"], ["Alchemist's Lab", "shop"], ["New Run", "restart"]]:
-		var b := Button.new()
+	# Same button family as every menu; starting over is the one primary action.
+	for spec in [["Main Menu", "menu", "secondary"], ["Alchemist's Lab", "shop", "secondary"], ["New Run", "restart", "primary"]]:
+		var b := PUI.button(spec[0], spec[2])
 		b.name = "Exit_" + spec[1]
-		b.text = spec[0]
 		b.custom_minimum_size = Vector2(300, 88)
-		b.add_theme_font_size_override("font_size", 28)
 		b.pressed.connect(_on_touch_exit.bind(spec[1]))
 		_touch_row.add_child(b)
 
@@ -201,7 +198,7 @@ func _process(delta: float) -> void:
 	if _phase == 0:
 		var pct : float = clampf(_timer / FADE_DURATION, 0.0, 1.0)
 		_overlay.color.a = pct
-		_label.add_theme_color_override("font_color", Color(0.85, 0.1, 0.1, pct))
+		_label.modulate.a = pct
 
 		if _timer >= FADE_DURATION:
 			_phase        = 1
@@ -211,18 +208,14 @@ func _process(delta: float) -> void:
 	elif _phase == 1:
 		var pulse_raw : float = (sin(_timer * PULSE_SPEED * TAU) + 1.0) * 0.5
 		var alpha     : float = lerp(PULSE_MIN_ALPHA, PULSE_MAX_ALPHA, pulse_raw)
-		_label.add_theme_color_override("font_color", Color(0.85, 0.1, 0.1, alpha))
+		_label.modulate.a = alpha
 
 		_prompt_timer += delta
 		if _prompt_timer >= PROMPT_FADE_DELAY:
 			var prompt_pct : float = clampf(
 				(_prompt_timer - PROMPT_FADE_DELAY) / PROMPT_FADE_TIME, 0.0, 1.0
 			)
-			_prompt_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7, prompt_pct))
-			if _shop_label    != null:
-				_shop_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, prompt_pct))
-			if _restart_label != null:
-				_restart_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, prompt_pct))
+			_prompts.modulate.a = prompt_pct
 			if _touch_row != null:
 				_touch_row.modulate.a = prompt_pct
 

@@ -49,9 +49,9 @@ static func short_commit() -> String:
 static func display_string() -> String:
 	var v := public_version()
 	if is_release_build():
-		return "%s v%d" % [PRODUCT_NAME, v]
+		return "%s v%d%s" % [PRODUCT_NAME, v, OtaIdentity.footer_suffix()]
 	var tail := " · " + short_commit() if commit() != "" else ""
-	return "%s · development build after v%d%s" % [PRODUCT_NAME, v, tail]
+	return "%s · development build after v%d%s%s" % [PRODUCT_NAME, v, tail, OtaIdentity.footer_suffix()]
 
 
 ## Multi-line engineering diagnostics (printed at startup; shown by tooling/logs).
@@ -65,4 +65,5 @@ static func diagnostics() -> String:
 	lines.append("Built (UTC): %s" % str(info.get("built_utc", "n/a")))
 	lines.append("Engine: Godot %s" % Engine.get_version_info().get("string", "?"))
 	lines.append("Platform: %s" % OS.get_name())
+	lines.append_array(OtaIdentity.diagnostic_lines())
 	return "\n".join(lines)

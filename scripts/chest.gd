@@ -141,12 +141,14 @@ func _ready() -> void:
 	var wrap := Control.new()
 	wrap.set_anchors_preset(Control.PRESET_FULL_RECT)
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	PUI.adopt(wrap)   # a CanvasLayer child does not inherit the root theme
 	_prompt_layer.add_child(wrap)
 
-	_prompt_label = Label.new()
-	_prompt_label.add_theme_font_size_override("font_size", 22)
-	_prompt_label.add_theme_color_override("font_color", Color(1.0, 0.95, 0.85))
-	_prompt_label.add_theme_constant_override("outline_size", 4)
+	# Outline text over the world (HudValue role): no plate, the dungeon stays visible.
+	_prompt_label = PUI.label("", "HudValue")
+	_prompt_label.add_theme_constant_override("outline_size", 5)
+	_prompt_label.add_theme_font_size_override("font_size", int(round(PUI.fs("hud_value") * 1.25)))   # small caps read smaller   # stays when the locked sentence swaps the variation
+	_prompt_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_prompt_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 	_prompt_label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
@@ -209,9 +211,14 @@ func _refresh_prompt() -> void:
 		return
 	var color_title : String = color.capitalize()
 	if has_node("/root/PlayerWallet") and PlayerWallet.get_key_count(color) > 0:
+		_prompt_label.theme_type_variation = &"HudValue"      # a short action prompt: Cinzel
 		_prompt_label.text = "[%s] Use %s Key" % [_use_glyph(), color_title]
+		_prompt_label.add_theme_color_override("font_color", PUI.BONE_BRIGHT)
 	else:
-		_prompt_label.text = "Locked — come back with a %s Key" % color_title
+		_prompt_label.theme_type_variation = &"WarningLabel"  # a sentence: Source Sans
+		_prompt_label.remove_theme_color_override("font_color")
+		_prompt_label.text = "Locked \u2014 come back with a %s Key" % color_title
+		_prompt_label.add_theme_color_override("font_color", PUI.BONE_DIM)
 
 
 func _use_glyph() -> String:

@@ -1,0 +1,71 @@
+{
+  "format": 1,
+  "notes": [
+    "Single source of truth for OTA path rules (docs/OTA.md). Mirrored by scripts/ota/ota_const.gd; a test keeps the 'protected' section identical.",
+    "Matching is case-sensitive on a root-relative path with '/' separators (no 'res://', no leading './'): exact = whole path, prefixes = begins with, suffixes = ends with.",
+    "Category per changed source path (tools/ota/classify.py): not_shipped first, then protected (APK required), then guarded, otherwise safe (default).",
+    "A path inside a payload pack is checked against 'protected' and 'guarded' using its raw name AND its source name (pack_aliases: 'x.gd.remap' and 'x.gdc' both map to 'x.gd').",
+    "Native-code suffixes are protected anywhere in a pack, a deliberate superset of 'addons/**/*.gdextension|*.so|*.dll|*.dylib'."
+  ],
+  "max_payload_bytes": 536870912,
+  "protected": {
+    "exact": [
+      ".godot/extension_list.cfg",
+      "VERSION",
+      "build_info.json",
+      "export_presets.cfg",
+      "godot/extension_list.cfg",
+      "ota_channel.json",
+      "ota_trust.pem",
+      "project.binary",
+      "project.godot"
+    ],
+    "prefixes": [
+      "android/",
+      "scripts/ota/"
+    ],
+    "suffixes": [
+      ".dll",
+      ".dylib",
+      ".gdextension",
+      ".so"
+    ]
+  },
+  "guarded": {
+    "exact": [
+      "scripts/SettingsManager.gd",
+      "scripts/save_manager.gd",
+      "scripts/storage_paths.gd"
+    ],
+    "prefixes": [],
+    "suffixes": []
+  },
+  "not_shipped": {
+    "exact": [
+      ".editorconfig",
+      ".gitattributes",
+      ".gitignore"
+    ],
+    "prefixes": [
+      ".claude/",
+      ".github/",
+      "archive/",
+      "docs/",
+      "production/",
+      "tests/",
+      "tools/"
+    ],
+    "suffixes": [
+      ".md"
+    ]
+  },
+  "pack_aliases": {
+    "strip_suffixes": [
+      ".remap"
+    ],
+    "map_suffixes": {
+      ".gdc": ".gd",
+      ".gde": ".gd"
+    }
+  }
+}
