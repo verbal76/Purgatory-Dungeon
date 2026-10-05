@@ -838,6 +838,7 @@ func release_all() -> void:
 
 # ── Drawing ───────────────────────────────────────────────────────────────────
 
+const STICK_RING_FRAC := 0.10   # stick bezel thickness (fraction of the stick radius)
 const STICK_IDLE_ALPHA := 0.62   # resting joystick: faint but always findable (the opacity setting scales it further)
 
 
@@ -851,17 +852,29 @@ func _draw_stick() -> void:
 		_draw_one_stick(_look_base if live else look_default, _look_vec, LOOK_STICK_RADIUS * ui_scale, live)
 
 
+## Same anatomy as the buttons, fainter: a recessed well inside a thin aged-brass bezel with a hairline and an
+## inner shadow line; the thumb is a bone disc set in its own small bezel.
 func _draw_one_stick(base: Vector2, vec: Vector2, radius: float, active: bool) -> void:
 	var a: float = 1.0 if active else STICK_IDLE_ALPHA
 	var tint := Color(1, 1, 1, a)
-	_stick_draw.draw_texture_rect(TouchButton.stick_base_texture(), Rect2(base - Vector2(radius, radius), Vector2(radius, radius) * 2.0), false, tint)
-	_stick_draw.draw_arc(base, radius - 1.5, 0.0, TAU, 56, Color(PUI.EDGE.lightened(0.2), a), 3.0, true)
-	_stick_draw.draw_arc(base, radius - 4.0, PI * 1.08, PI * 1.62, 20, Color(PUI.EDGE_BRASS.r, PUI.EDGE_BRASS.g, PUI.EDGE_BRASS.b, 0.55 * a), 1.5, true)
+	var rw: float = maxf(radius * STICK_RING_FRAC, 3.0)
+	var ring: Color = PUI.EMBER_DEEP if active else PUI.EDGE.lerp(PUI.EDGE_BRASS, 0.45)
+	var d: CanvasItem = _stick_draw
+	d.draw_texture_rect(TouchButton.stick_base_texture(), Rect2(base - Vector2(radius, radius), Vector2(radius, radius) * 2.0), false, tint)
+	d.draw_arc(base, radius - rw * 0.5, 0.0, TAU, 56, Color(ring.r, ring.g, ring.b, a), rw, true)
+	d.draw_arc(base, radius - rw * 0.5, PI * 1.05, PI * 1.60, 20, Color(ring.lightened(0.3), 0.8 * a), rw * 0.3, true)
+	d.draw_arc(base, radius - rw - 1.0, 0.0, TAU, 56, Color(PUI.EDGE_BRASS.lightened(0.25), 0.7 * a), 1.5, true)
+	d.draw_arc(base, radius - rw - 5.0, PI * 0.85, PI * 1.95, 24, Color(0, 0, 0, 0.45 * a), 6.0, true)
+	# thumb: contact shadow, small bezel, bone face
 	var kr: float = radius * 0.42
 	var knob: Vector2 = base + vec.limit_length(1.0) * radius
-	_stick_draw.draw_texture_rect(TouchButton.stick_knob_texture(), Rect2(knob - Vector2(kr, kr), Vector2(kr, kr) * 2.0), false, tint)
-	var ring: Color = PUI.EMBER if active else PUI.EDGE_BRASS
-	_stick_draw.draw_arc(knob, kr - 1.5, 0.0, TAU, 40, Color(ring.r, ring.g, ring.b, a), 3.0, true)
+	var kw: float = maxf(kr * 0.20, 2.5)
+	d.draw_circle(knob + Vector2(0.0, kr * 0.12), kr * 1.06, Color(0, 0, 0, 0.35 * a))
+	d.draw_arc(knob, kr - kw * 0.5, 0.0, TAU, 40, Color(ring.r, ring.g, ring.b, a), kw, true)
+	var ir: float = kr - kw
+	d.draw_texture_rect(TouchButton.stick_knob_texture(), Rect2(knob - Vector2(ir, ir), Vector2(ir, ir) * 2.0), false, tint)
+	var hl: Color = PUI.EMBER_BRIGHT if active else PUI.EDGE_BRASS.lightened(0.25)
+	d.draw_arc(knob, ir, 0.0, TAU, 40, Color(hl.r, hl.g, hl.b, 0.8 * a), 1.5, true)
 
 
 ## Drag ring of a finger that went down on ATTACK and is aiming: a faint ember ring around the touch-down
