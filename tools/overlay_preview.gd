@@ -68,7 +68,7 @@ func _setup() -> void:
 			s2._first_button.grab_focus()
 		"chest", "chest_locked":
 			SaveManager.current_profile = {"keys": {"bronze": 1 if _which == "chest" else 0, "silver": 0, "gold": 0}}
-			var c := Node3D.new()
+			var c := StaticBody3D.new()
 			c.set_script(load("res://scripts/chest.gd"))
 			add_child(c)
 			c._player_in_range = true

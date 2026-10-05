@@ -130,4 +130,5 @@ Contrast (measured, WCAG): bone on iron 11.5–14:1, dim bone 5.9–7.2:1, ember
 
 1. Pick the role (title/section/body/…) and the component (button kind, panel kind) — do not invent colours or sizes.
 2. Use a theme variation or the `PUI` helpers. If something needs a new look, add it to `pui.gd` and this document.
-3. Check it in `tools/ui_showcase.tscn` and with `tools/ui_shot.gd` at phone shape and desktop shape.
+3. UI built in code under a `CanvasLayer` does **not** inherit the root theme (Godot stops the lookup at the layer): give the top-level Control `PUI.adopt(control)`; children inherit it. (Direct children of a scene's root Control are fine.)
+4. Check it in `tools/ui_showcase.tscn` and with `tools/ui_shot.gd` at phone shape and desktop shape.

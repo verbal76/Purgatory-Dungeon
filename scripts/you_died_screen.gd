@@ -123,7 +123,7 @@ func _ready() -> void:
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 	_label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_label.offset_bottom = -float(PUI.S7 + PUI.S5)   # title sits a little above centre
+	_label.offset_bottom = -float(PUI.S7 + PUI.S4)   # title sits a little above centre
 	_label.mouse_filter  = Control.MOUSE_FILTER_IGNORE
 	_label.modulate.a    = 0.0
 	PUI.adopt(_label)   # a CanvasLayer child does not inherit the root theme
@@ -133,8 +133,9 @@ func _ready() -> void:
 	_prompts = VBoxContainer.new()
 	_prompts.name = "KeyPrompts"
 	_prompts.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_prompts.offset_top = float(PUI.S7 + PUI.S5)   # first line starts just below the centred title
-	_prompts.alignment  = BoxContainer.ALIGNMENT_CENTER
+	_prompts.anchor_top = 0.5
+	_prompts.offset_top = float(PUI.S7 + PUI.S2)   # first line starts a clear gap below the title
+	_prompts.alignment  = BoxContainer.ALIGNMENT_BEGIN
 	_prompts.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_prompts.add_theme_constant_override("separation", PUI.S2)
 	_prompts.modulate.a = 0.0

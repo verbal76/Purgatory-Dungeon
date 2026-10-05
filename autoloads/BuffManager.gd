@@ -51,8 +51,8 @@ const PERK_CYCLE_VISUAL_HOLD_TIME : float = 0.7
 # Look comes from the shared design system (PUI): ScreenTitle / CardTitle / body / WarningLabel roles on an
 # iron card whose edge carries the rarity (PUI.rarity_card). Only the geometry lives here.
 
-const CARD_WIDTH         : float = 480.0
-const CARD_HEIGHT        : float = 280.0
+const CARD_WIDTH         : float = 560.0
+const CARD_HEIGHT        : float = 320.0
 const TRADEOFF_PREFIX    : String = "Tradeoff: "
 
 # ── Card animation ─────────────────────────────────────────
@@ -455,6 +455,7 @@ func _build_slot_card(x: float, y: float) -> void:
 
 	# Name
 	var name_lbl := PUI.label(buff.get("name", "???"), "CardTitle")
+	name_lbl.add_theme_font_size_override("font_size", int(round(PUI.fs("card_title") * 1.3)))
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(name_lbl)
