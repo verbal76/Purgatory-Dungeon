@@ -30,6 +30,10 @@ var gameplay_settings : Dictionary = {
 	"SpeedSlider"   : 100.0,
 	"DamageSlider"  : 100.0,
 	"EnemySpeed"    : 100.0,
+	# Touch layer (phones): percent values, see scripts/touch/touch_controls.gd.
+	"TouchOpacity"  : 70.0,
+	"TouchScale"    : 100.0,
+	"TouchLookSens" : 100.0,
 }
 
 # Computed in _ready() — points to Documents/PurgetoryDungeon/settings.json.
@@ -218,6 +222,10 @@ func deserialize_event(data: Dictionary) -> InputEvent:
 
 func apply_window_mode(mode: int) -> void:
 	gameplay_settings["WindowMode"] = mode
+	# Phones are always full-screen: window modes, sizes and positions do not exist there.
+	if OS.has_feature("mobile") or TouchControls.is_touch_platform():
+		save_settings()
+		return
 	var screen_id  := DisplayServer.window_get_current_screen()
 	var native_res := DisplayServer.screen_get_size(screen_id)
 	match mode:

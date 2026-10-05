@@ -637,7 +637,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if get_tree().paused:
 		return
 
-	if event is InputEventMouseMotion:
+	# See brute_player.gd: ignore the emulated mouse motion a finger produces (touch look is fed separately).
+	if event is InputEventMouseMotion and (event as InputEventMouseMotion).device != InputEvent.DEVICE_ID_EMULATION:
 		_yaw -= (event as InputEventMouseMotion).relative.x * mouse_sensitivity
 
 	if event.is_action_pressed("attack") and not _is_attacking and not _is_blocking and not _is_sliding and not _is_dead and not _rapid_attack_active:

@@ -89,6 +89,9 @@ func _ready() -> void:
 	# THE FIX: Directly capture the newly spawned player so we never grab a ghost
 	var active_player = _spawn_selected_character()
 
+	# Phones: the touch layer feeds the same input actions as keyboard / gamepad (no-op on desktop).
+	TouchControls.install(self)
+
 	if dungeon_generation_function == null:
 		push_error("DungeonGenerationFunction node not found in main scene.")
 		return
