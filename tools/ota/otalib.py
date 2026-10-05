@@ -185,6 +185,7 @@ def write_atomic(path: str, data: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
+        os.chmod(tmp, 0o644)          # everything written here is public channel content (never a private key)
         os.replace(tmp, path)
     except BaseException:
         try:

@@ -162,6 +162,7 @@ def build_bundle(*, platform, native_version, base_commit, engine, seq, source_c
         if not otalib.verify_signature(pub, mpath, sig):
             raise OtaError("internal error: the fresh signature does not verify")
         os.unlink(pub)
+        os.chmod(stage, 0o755)
         os.makedirs(os.path.dirname(final), exist_ok=True)
         os.rename(stage, final)
     except BaseException:

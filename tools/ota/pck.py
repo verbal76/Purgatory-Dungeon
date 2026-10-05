@@ -26,6 +26,7 @@ Paths carry no "res://" prefix in 4.6 packs; one is stripped if present.
 import argparse
 import hashlib
 import json
+import signal
 import struct
 import sys
 
@@ -276,4 +277,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    if hasattr(signal, "SIGPIPE"):
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)      # `pck.py list ... | head` must not traceback
     sys.exit(main())
