@@ -58,6 +58,7 @@ func _ready() -> void:
 	SaveManager.current_profile["keys"]["gold"] = 1
 	SettingsManager.update_setting(TouchControls.KEY_SCALE, 130.0)
 	var want_currency: int = SaveManager.current_profile["meta_currency"]
+	var want_name: String = SaveManager.current_profile.get("character_name", "")   # slot 0 may predate this test
 
 	var saves_before := SaveManager.save_count
 	life.on_background()
@@ -77,7 +78,7 @@ func _ready() -> void:
 	_check(int(SaveManager.current_profile["perks"].get("potency", -1)) == 2, "bought perk survives a reclaimed process")
 	_check(int(SaveManager.current_profile["keys"].get("gold", -1)) == 1, "keys survive a reclaimed process")
 	_check(is_equal_approx(float(SettingsManager.gameplay_settings.get(TouchControls.KEY_SCALE, 0.0)), 130.0), "touch settings survive a reclaimed process")
-	_check(SaveManager.current_profile.get("character_name", "") == "Lifecycle", "character identity survives")
+	_check(want_name != "" and SaveManager.current_profile.get("character_name", "") == want_name, "character identity survives (%s)" % want_name)
 
 	# Repeated notifications (PAUSED + FOCUS_OUT both fire on a real phone) must not stack effects.
 	life.on_background()
