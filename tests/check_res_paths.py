@@ -19,7 +19,7 @@ for f in files:
 load_re = re.compile(r'"res://([^"]+\.[A-Za-z0-9]+)"')
 ext_re = re.compile(r'^\[ext_resource [^\]]*\bpath="res://([^"]+)"', re.M)
 # Generated at build time by CI and handled when absent (see scripts/build_info.gd).
-OPTIONAL_GENERATED = {"build_info.json"}
+OPTIONAL_GENERATED = {"build_info.json", "ota_trust.pem"}
 problems = []
 
 
