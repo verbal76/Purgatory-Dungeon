@@ -13,6 +13,13 @@
 #
 #  Each large room can only lock once per run.
 #  Wired up by Purgatory_Dungeon_main_game_file._boot_room_lock_manager().
+#
+#  ARMING: a brand-new run cannot be swarmed. The encounter system is dormant until the player's
+#  FIRST daily buff selection (BuffManager.buff_chosen). Entering a large room while dormant does
+#  nothing and does not use the room up, so it can still become a swarm room on a later entry once
+#  armed. Arming is never retroactive: a room the player is standing in when the first buff is
+#  picked does not lock; only entries made after that moment count. (With the buff roulette
+#  switched off there is no first selection, so the system arms on the day it would have fired.)
 # ============================================================
 extends Node3D
 
@@ -43,7 +50,10 @@ class RoomLock:
 	var room_aabb : AABB   = AABB()  # Room bounds — used to detect live enemies inside
 
 
+signal armed
+
 # ── Runtime references ─────────────────────────────────────────────────────────
+var _armed       : bool      = false
 var _player      : Node3D    = null
 var _dungeon_gen : Node      = null
 var _enemy_mgr   : Node3D    = null
@@ -61,7 +71,44 @@ func boot(player: Node3D, dungeon_gen: Node, enemy_mgr: Node3D) -> void:
 	_player      = player
 	_dungeon_gen = dungeon_gen
 	_enemy_mgr   = enemy_mgr
+	_connect_arming()
 	_setup_room_triggers()
+
+
+# ══════════════════════════════════════════════════════════════
+#  ARMING (no swarm before the player's first buff selection)
+# ══════════════════════════════════════════════════════════════
+
+func is_armed() -> bool:
+	return _armed
+
+
+## Starts allowing swarm encounters from the NEXT qualifying room entry on. Idempotent.
+func arm() -> void:
+	if _armed:
+		return
+	_armed = true
+	armed.emit()
+
+
+func _connect_arming() -> void:
+	if has_node("/root/BuffManager") and not BuffManager.buff_chosen.is_connected(_on_first_buff_chosen):
+		BuffManager.buff_chosen.connect(_on_first_buff_chosen)
+	# Buff roulette off (debug toggle): nothing will ever be "chosen", so arm on the day the first
+	# pick would have happened instead of leaving the rooms dormant for the whole run.
+	if has_node("/root/GlobalRunData") and GlobalRunData.debug_no_buffs and has_node("/root/GameClock"):
+		if not GameClock.day_changed.is_connected(_on_day_changed_no_buffs):
+			GameClock.day_changed.connect(_on_day_changed_no_buffs)
+
+
+func _on_first_buff_chosen(_buff: Dictionary) -> void:
+	arm()
+
+
+func _on_day_changed_no_buffs(day: int) -> void:
+	var first_pick_day : int = GameClock.buff_every_n_days if GameClock.buff_every_n_days > 0 else 2
+	if day >= first_pick_day:
+		arm()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -121,6 +168,10 @@ func _on_trigger_body_entered(body: Node3D, trigger: Area3D) -> void:
 	if not is_instance_valid(mod):
 		return
 	if _cleared.has(mod):
+		return
+	# Dormant (before the first buff selection): walking in changes nothing - the room is not used up
+	# and the trigger stays, so a later entry after arming can still swarm it.
+	if not _armed:
 		return
 
 	_cleared[mod] = true              # Prevent any second fire

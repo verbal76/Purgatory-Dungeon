@@ -48,6 +48,10 @@ done
 for seed in 11 5 2024; do
 	CHEST_SEED="$seed" run "res://tests/test_chests.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_chests.tscn
 done
+# A new run cannot be swarmed by a red-barrier room before the first daily buff selection.
+for seed in 11 5 2024; do
+	LOCK_SEED="$seed" run "res://tests/test_room_lock_arming.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_room_lock_arming.tscn
+done
 for cls in barbarian mage; do
 	PHYS_CLASS="$cls" run "res://tests/test_physics_queries.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_physics_queries.tscn
 done
