@@ -544,9 +544,11 @@ func _refresh_button_status() -> void:
 	if has_node("/root/SaveManager") and not SaveManager.current_profile.is_empty():
 		potions = int(SaveManager.current_profile.get("meta_currency", 0))
 	var badge: String = str(potions)
-	if not is_equal_approx(b.cooldown, cd) or b.badge != badge:
+	var out_of_potions: bool = potions <= 0 and player != null   # the flask is drawn in the disabled look (input unchanged)
+	if not is_equal_approx(b.cooldown, cd) or b.badge != badge or b.unavailable != out_of_potions:
 		b.cooldown = cd
 		b.badge = badge
+		b.unavailable = out_of_potions
 		b.queue_redraw()
 
 
