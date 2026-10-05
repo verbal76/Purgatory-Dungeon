@@ -24,6 +24,7 @@ config/windows_native_icon="res://Music & background images/VPP_logo_from_source
 
 [autoload]
 
+UiTheme="*res://scripts/ui/ui_theme.gd"
 GlobalRunData="*res://scripts/global_run_data.gd"
 SaveManager="*res://scripts/save_manager.gd"
 AudioManager="*res://scripts/audio_manager.gd"
