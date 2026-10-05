@@ -468,10 +468,17 @@ static func _theme_labels(t: Theme) -> void:
 	t.set_font_size("normal_font_size", "ParchmentRich", fs("body"))
 	# divider
 	t.set_type_variation("BrassDivider", "HSeparator")
-	t.set_stylebox("separator", "BrassDivider", flat(EDGE_BRASS, Color(0, 0, 0, 0), 0, 0))
-	t.set_constant("separation", "BrassDivider", 2)
-	t.set_stylebox("separator", "HSeparator", flat(EDGE, Color(0, 0, 0, 0), 0, 0))
-	t.set_constant("separation", "HSeparator", 2)
+	# StyleBoxLine: a flat box with no content size would collapse the separator to 0 px.
+	var brass_line := StyleBoxLine.new()
+	brass_line.color = EDGE_BRASS
+	brass_line.thickness = 2
+	t.set_stylebox("separator", "BrassDivider", brass_line)
+	t.set_constant("separation", "BrassDivider", 6)
+	var iron_line := StyleBoxLine.new()
+	iron_line.color = EDGE
+	iron_line.thickness = 2
+	t.set_stylebox("separator", "HSeparator", iron_line)
+	t.set_constant("separation", "HSeparator", 6)
 
 
 static func _button_styles(t: Theme, type_name: String, fill: Color, edge: Color, fill_hover: Color, edge_hover: Color,

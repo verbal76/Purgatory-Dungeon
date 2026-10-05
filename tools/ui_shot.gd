@@ -2,7 +2,8 @@
 # with --rendering-driver opengl3; there is no GPU in CI). Not part of the game.
 #   PURGATORY_FORCE_TOUCH=1 xvfb-run -a -s "-screen 0 1496x672x24" godot --rendering-driver opengl3 \
 #     --path . --script tools/ui_shot.gd -- res://scenes/MainMenu.tscn /tmp/menu.png [frames]
-# Env: SHOT_CALL="method@frame" (or "NodeName.method@frame") calls a method at that frame;
+# Env: SHOT_NOSCALE=1 skips the phone content scaling (use for desktop-shaped shots);
+#      SHOT_CALL="method@frame" (or "NodeName.method@frame") calls a method at that frame;
 #      SHOT_PRESS="action@frame,..." presses an input action (tap) at those frames;
 #      SHOT_CLASS=barbarian|mage sets the run class; SHOT_EXTRA="f1,f2" saves more shots at those
 #      frames as <out>_<frame>.png (the first shot is at [frames]).
@@ -39,9 +40,10 @@ func _initialize() -> void:
 		var gd = root.get_node_or_null("GlobalRunData")
 		if gd != null:
 			gd.character_class = OS.get_environment("SHOT_CLASS")
-	root.content_scale_size = Vector2i(1280, 720)
-	root.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
-	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+	if OS.get_environment("SHOT_NOSCALE") != "1":   # SHOT_NOSCALE=1: the Windows game has no content scaling
+		root.content_scale_size = Vector2i(1280, 720)
+		root.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+		root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
 	var packed := load(_scene_path) as PackedScene
 	var inst := packed.instantiate()
 	root.add_child(inst)
