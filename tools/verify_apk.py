@@ -83,7 +83,7 @@ def main():
                 problems.append(f'versionName is "{name}", expected "{a.version}"')
             notes.append(f"package {pkg} versionCode {code} versionName {name}")
         t = re.search(r"targetSdkVersion:'(\d+)'", out)
-        mn = re.search(r"\bsdkVersion:'(\d+)'", out)
+        mn = re.search(r"(?<!target)[sS]dkVersion:'(\d+)'", out)
         if not t or int(t.group(1)) < a.target_sdk:
             problems.append(f"targetSdkVersion is {t.group(1) if t else '?'}, expected >= {a.target_sdk}")
         else:
@@ -113,14 +113,23 @@ def main():
                 problems.append(f"{n} is not 16 KB aligned (PT_LOAD p_align {[hex(x) for x in al]})")
         if sos:
             notes.append(f"{len(sos)} native libraries, all PT_LOAD segments 16 KB aligned" if not [p for p in problems if "16 KB" in p] else "16 KB check failed")
-        pck_members = [i for i in z.infolist() if i.filename.endswith(".pck") or "main.pck" in i.filename]
+        # The game data is the Godot PCK stored as an APK asset (its name differs between template
+        # versions), so identify it by content: an asset that starts with the "GDPC" magic.
+        pck_members = []
+        big_assets = []
+        for i in z.infolist():
+            if not i.filename.startswith("assets/") or i.file_size < 1_000_000:
+                continue
+            with z.open(i) as fh:
+                magic = fh.read(4)
+            big_assets.append((i.filename, i.file_size, magic))
+            if magic == b"GDPC":
+                pck_members.append(i)
         if not pck_members:
-            # Godot 4 gradle exports store the pack as an uncompressed asset; find the biggest asset.
-            assets = sorted((i for i in z.infolist() if i.filename.startswith("assets/")), key=lambda i: -i.file_size)
-            pck_members = assets[:1]
-        if not pck_members:
-            problems.append("no game data (PCK) found in the APK")
+            problems.append("no game data (PCK) found in the APK; large assets: " + ", ".join(
+                f"{n} ({sz} bytes, magic {mg!r})" for n, sz, mg in big_assets[:8]))
         else:
+            notes.append(f"game data: {pck_members[0].filename} ({pck_members[0].file_size} bytes)")
             tmp = tempfile.mkdtemp()
             z.extract(pck_members[0], tmp)
             pck = os.path.join(tmp, pck_members[0].filename)
@@ -140,15 +149,22 @@ def main():
         if r.returncode != 0:
             problems.append("apksigner verify failed: " + out[:300])
         else:
-            cert = re.search(r"Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]+)", out)
-            notes.append("signature verified; certificate SHA-256 " + (cert.group(1) if cert else "?"))
+            cert = re.search(r"certificate SHA-256 digest:\s*([0-9a-fA-F:]+)", out)
+            if not cert:
+                kt = subprocess.run(["keytool", "-printcert", "-jarfile", a.apk], capture_output=True, text=True)
+                cert = re.search(r"SHA256:\s*([0-9A-Fa-f:]+)", kt.stdout)
+                if not cert:
+                    problems.append("could not read the signing certificate; apksigner said: " + out[:400].replace("\n", " | "))
+            if cert:
+                cert_hex = cert.group(1).replace(":", "").lower()
+                notes.append("signature verified; certificate SHA-256 " + cert_hex)
             dn = re.search(r"Signer #1 certificate DN: ([^\n]*)", out)
             if dn:
                 notes.append("signer " + dn.group(1))
                 if "Android Debug" in dn.group(1):
                     problems.append("the APK is signed with the generic Android debug certificate")
-            if a.expect_cert and cert and cert.group(1).lower() != a.expect_cert.lower():
-                problems.append(f"signing certificate {cert.group(1)} != expected {a.expect_cert}")
+            if a.expect_cert and cert and cert_hex != a.expect_cert.lower():
+                problems.append(f"signing certificate {cert_hex} != expected {a.expect_cert}")
     else:
         problems.append("apksigner not found")
 
