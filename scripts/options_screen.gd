@@ -80,6 +80,9 @@ var _resolution_list : Array[Vector2i] = []
 func _ready() -> void:
 	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	# Controls directly under a CanvasLayer (the pause overlay) do not inherit the root window's theme.
+	if get_parent() is CanvasLayer:
+		theme = PUI.theme()
 	for child in get_children():
 		remove_child(child)
 		child.queue_free()

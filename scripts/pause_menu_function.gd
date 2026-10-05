@@ -32,6 +32,12 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	add_to_group("pause_menu")   # the Android lifecycle handler opens it when the app is backgrounded
 
+	# The menu hangs off a CanvasLayer, which does not pass the root window's theme down: apply the shared one.
+	if pause_menu != null:
+		pause_menu.theme = PUI.theme()
+	if pause_shade != null:
+		pause_shade.theme = PUI.theme()
+
 	_hook_controls()
 	_build_display_mode_options()
 	_build_resolution_options()
@@ -89,7 +95,8 @@ func _apply_panel_style() -> void:
 	for row_name in ["MasterVolumeRow", "MusicVolumeRow", "SfxVolumeRow", "DisplayModeRow", "ResolutionRow"]:
 		var row := find_child(row_name, true, false) as Control
 		if row != null:
-			row.custom_minimum_size.y = SettingsRows.ROW_H
+			# slider rows are a touch shorter than option rows so the desktop panel fits a 1280x720 window
+			row.custom_minimum_size.y = SettingsRows.SLIDER_H + PUI.S1 if row_name.contains("Volume") else SettingsRows.ROW_H
 			for child in row.get_children():
 				if child is Label:
 					(child as Label).custom_minimum_size.x = SettingsRows.LABEL_W - 50.0
@@ -105,7 +112,7 @@ func _inject_title_separator() -> void:
 	var vbox := find_child("PauseVBox", true, false) as VBoxContainer
 	if vbox == null or vbox.find_child("TitleSep", false, false) != null:
 		return
-	var sep := PUI.divider()
+	var sep := SettingsRows.brass_line()
 	sep.name = "TitleSep"
 	vbox.add_child(sep)
 	vbox.move_child(sep, 1)   # Right after the title

@@ -37,7 +37,7 @@ static func section(parent: Control, text: String, note: String = "", space_abov
 		n.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		n.size_flags_vertical = Control.SIZE_SHRINK_END
 		head.add_child(n)
-	box.add_child(PUI.divider())
+	box.add_child(brass_line())
 	parent.add_child(box)
 
 
@@ -84,3 +84,13 @@ static func hint(parent: Control, text: String) -> Label:
 	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	parent.add_child(lbl)
 	return lbl
+
+
+## A 2 px brass line (the BrassDivider look). Drawn as a rect: the theme's HSeparator renders nothing in 4.6
+## with a border-less StyleBoxFlat, so the shared screens use this until PUI.divider() is fixed.
+static func brass_line() -> ColorRect:
+	var line := ColorRect.new()
+	line.color = PUI.EDGE_BRASS
+	line.custom_minimum_size.y = 2.0
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return line

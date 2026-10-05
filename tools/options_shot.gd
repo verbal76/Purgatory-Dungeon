@@ -4,6 +4,20 @@
 extends Control
 
 func _ready() -> void:
+	# ui_shot.gd scales every scene to a 1280x720 canvas; the real desktop game does not stretch, so undo
+	# that on the desktop shape to review true desktop pixel sizes.
+	if not TouchControls.is_touch_platform():
+		get_window().content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
+	if OS.get_environment("OPTIONS_PAUSE") == "1":
+		var bgp := ColorRect.new()
+		bgp.color = Color(0.25, 0.2, 0.15)
+		bgp.set_anchors_preset(Control.PRESET_FULL_RECT)
+		add_child(bgp)
+		var pz: Node = (load("res://scenes/pause_menu_function.tscn") as PackedScene).instantiate()
+		add_child(pz)
+		await get_tree().process_frame
+		pz.call("open_menu")
+		return
 	var embedded := OS.get_environment("OPTIONS_EMBEDDED") == "1"
 	var options: Control
 	if embedded:
