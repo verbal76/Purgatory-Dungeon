@@ -11,7 +11,7 @@ through the whole life cycle in separate processes, exactly as a phone would see
                  remote revocation (kill switch) -> rollback, replayed channel index, --no-ota escape hatch
   save protection: the save folder is byte-identical before and after every scenario.
 
-usage: tests/ota_e2e.py <godot-binary> [--platform windows|android] [--keep]
+usage: tests/ota_e2e.py <godot-binary> [--platform windows|android] [--keep] [--reuse <kept work dir>]
 Needs: git, python3, openssl, the Godot 4.6 binary (+ export templates for the platform preset) and ~15 GB free disk.
 Takes several minutes (two project imports + about twenty headless launches). Nothing is published or pushed.
 """
@@ -114,7 +114,24 @@ class Device:
         return res
 
 
+def reuse(args):
+    """--reuse <kept work dir from an earlier --keep run>: skip the (slow) build and re-run the device scenarios."""
+    work = os.path.abspath(args.reuse)
+    tmp = next((os.path.join(work, d) for d in sorted(os.listdir(work)) if d.startswith("build-ota.")), "")
+    bundle = os.path.join(work, "bundle")
+    ctx = {"work": work, "godot": args.godot, "platform": args.platform, "bundle": bundle,
+           "base_pck": os.path.join(tmp, "base.pck"), "key": os.path.join(tmp, "keys", "ota-signing.key"),
+           "saves": os.path.join(work, "saves"), "tmp": tmp}
+    shutil.rmtree(ctx["saves"], ignore_errors=True)
+    ch = json.load(open(os.path.join(bundle, "channel.json")))
+    ctx["entry"] = ch["updates"][0]
+    ctx["generation"] = ch["generation"]
+    return ctx
+
+
 def build(args):
+    if args.reuse:
+        return reuse(args)
     work = tempfile.mkdtemp(prefix="ota-e2e-")
     bundle = os.path.join(work, "bundle")
     print("== building a real update with tools/ota/build_ota.sh --self-test (%s) in %s" % (args.platform, work))
@@ -169,6 +186,7 @@ def main():
     ap.add_argument("godot")
     ap.add_argument("--platform", default="windows", choices=["windows", "android"])
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--reuse", default="", help="work dir kept by an earlier --keep run (skips the build)")
     args = ap.parse_args()
     args.godot = os.path.abspath(args.godot) if os.path.exists(args.godot) else shutil.which(args.godot) or args.godot
     ctx = build(args)

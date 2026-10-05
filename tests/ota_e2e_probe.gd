@@ -9,6 +9,9 @@ extends SceneTree
 func _initialize() -> void:
 	var args: PackedStringArray = OS.get_cmdline_user_args()
 	var mode: String = args[0] if args.size() > 0 else "plain"
+	# Let the tree finish starting: HTTPRequest only works for nodes that are inside a running tree.
+	await process_frame
+	await process_frame
 	if mode == "check":
 		var up: Node = root.get_node_or_null("OtaUpdater")
 		if up != null:
