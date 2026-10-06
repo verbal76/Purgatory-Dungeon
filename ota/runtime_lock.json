@@ -10,14 +10,14 @@
     "scripts/boot/ota_updater.gd",
     "tools/android/build_apk.sh"
   ],
-  "fingerprint": "d85e0cc3eedbe5b6c68736ab24ff76519791d391c859d394e4ca9fb6acb6fd0e",
+  "fingerprint": "233a171d13044b244e6231a3df1e4d2a4267c6832d4c161ef644ee399f35b63a",
   "godot_version": "4.6",
   "hashes": {
     "export_presets.cfg": "265440f91deadaeddd09499adc006246a6643a5b9c29b66f67207f3b51dcd02b",
     "project.godot": "218b3afc2287ab719b577a667512842c57e2899f7fef488998802222d16474be",
     "scripts/boot/boot.gd": "b2d3fb7b939172111efd09fb047517fce671ff929e1bae477eb836fe6b497fc1",
     "scripts/boot/diagnostics_overlay.gd": "4bb8c1be1511581a17c40afdf30ad023349168a61479bb8b15d31ac7784ab7e3",
-    "scripts/boot/ota_config.gd": "dcd7614d98fb901fbee35bbe53f7284e2e9393677c6f32e2064a1c7bfed5332e",
+    "scripts/boot/ota_config.gd": "a3705a77cafe74156cec4cf7be6d927c2e4c9529c675813eb884ab63c9fd9afe",
     "scripts/boot/ota_core.gd": "22406ff5a16c3025195c2619050cb5f3d4771c42e9a374a27cc34bec67cb2a49",
     "scripts/boot/ota_protected.gd": "79c1747c8b09e78cfbd859e17d9f9f31b30e57443fc8dfd546207cd547dc362b",
     "scripts/boot/ota_updater.gd": "2cba6f8c89e9cfc672f2f7009cbc508af147faabfcdcf1494bf2e9e1be1ed1f3",

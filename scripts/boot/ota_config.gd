@@ -18,11 +18,11 @@ const RUNTIME_REVISION := 1
 ## (the "ota_channel" field written at APK build time). Channels are manifest pointers, not
 ## packages: a later "stable" channel is a second pointer, not a second code path.
 const CHANNEL := "dev"
-## !!! PLACEHOLDER !!! Where OTA releases are downloaded from (docs/OTA.md sections 6 and 14).
-## The owner has NOT decided the release host (the source repository is private and devices
-## download anonymously). Changing this value is a NATIVE change (new APK, runtime revision
-## bump). It must match OTA_RELEASE_REPO in CI.
-const REPO := "verbal76/Purgatory-Dungeon"
+## The PUBLIC transport repository that OTA releases are downloaded from (docs/OTA.md sections 6 and 14). Devices
+## download anonymously, so it is public and holds signed update files only (never source, keys or secrets); the
+## source repository stays private. Changing this value is a NATIVE change (new APK, runtime revision bump). It must
+## match OTA_RELEASE_REPO in CI, which refuses to publish otherwise.
+const REPO := "verbal76/Purgatory-Dungeon-OTA"
 ## Custom export feature that turns the OTA client on. Only the Android preset sets it.
 const FEATURE := "ota"
 ## The only platform OTA packages are built for.
