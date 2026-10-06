@@ -31,3 +31,5 @@ Thumbs.db
 
 # Written by CI before export (public OTA trust anchor); never committed
 /ota_trust.pem
+__pycache__/
+*.pyc
