@@ -847,11 +847,13 @@ def pointer_lag(c):
     c.publish(o2, pointer=False)
     c.point_to(o2)
     c.site.lag_pointer(1)
+    mark = len(c.site.log)   # the server log spans every scenario: only look at what this check requested
     c.game(d, c.pointer)
-    lagged = [r for r in c.site.log if r.get("lagged")]
+    fresh = c.site.log[mark:]
+    lagged = [r for r in fresh if r.get("lagged")]
     check(len(lagged) == 1, "the first check was served the stale pointer (%d lagged)" % len(lagged))
     check(not d.state.staged(), "a stale pointer stages nothing (state: %s)" % d.state.raw())
-    check(len(c.site.requests(o2.asset)) == 0, "nothing of OTA 2 was downloaded while the pointer lagged")
+    check(not [r for r in fresh if o2.asset in r["path"] and r.get("hop") != "redirect"], "nothing of OTA 2 was downloaded while the pointer lagged")
     c.game(d, c.pointer)
     check(o2.ota_id in d.state.staged(), "the next check sees the new pointer and stages OTA 2 (state: %s)" % d.state.raw())
     r = c.probe(d, "stay", 9, pointer=c.dead)
