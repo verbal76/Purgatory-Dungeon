@@ -23,13 +23,17 @@ func _ready() -> void:
 	# Dead-end weight / seed per case. "recover": at weight 15 this seed's first layout closes in
 	# early and the second reaches the target. "exhaust": dead ends dominate so no attempt can.
 	var weight := -1
+	var fill := -1.0   # <0: the generator's own minimum_fill_fraction
 	var seed_value := 5
 	match which:
 		"recover":
 			weight = 15
 			seed_value = 6
 		"exhaust":
+			# No layout may ever count as full enough (fill > 1): exhaustion no longer depends on one seed's luck
+			# (a layout change elsewhere, e.g. torch meshes no longer inflating module bounds, once let attempt 5 pass at 106 rooms).
 			weight = 400
+			fill = 2.0
 			seed_value = 5
 	var cfg: Node = (load(MAIN_SCENE) as PackedScene).instantiate()   # only for its exported settings
 	var root := Node3D.new()
@@ -48,6 +52,8 @@ func _ready() -> void:
 	gen.exclude_keywords = cfg.exclude_keywords.duplicate()
 	gen.exploration_padding = cfg.exploration_padding
 	gen.enemy_spawn_chance = cfg.enemy_spawn_chance
+	if fill > 0.0:
+		gen.minimum_fill_fraction = fill
 	gen.setup_generation(root, cfg.starter_module, cfg.branch_modules, cfg.room_connector_module, cfg.end_cap_module)
 	seed(seed_value)
 	var result: Dictionary = gen.generate_dungeon()
