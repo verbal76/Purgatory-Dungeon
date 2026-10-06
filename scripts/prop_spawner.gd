@@ -243,7 +243,12 @@ func _spawn_furniture_group_staged(gen: Node, mod: Node3D) -> int:
 		floor_y,
 		centre.z + randf_range(-j, j)
 	)
-	var total : int = _place_prop(table_pos, TABLE_MODEL)
+	# The group is placed from the room's bounding box (a table at the centre, stools on a ring), so in a room that is
+	# not a plain rectangle a piece can land inside a wall: each piece is checked like the wall furniture is.
+	var total : int = 0
+	if gen.has_method("is_position_clear") and not gen.is_position_clear(table_pos + Vector3(0.0, 0.6, 0.0), 0.1):
+		return 0
+	total = _place_prop(table_pos, TABLE_MODEL)
 	if total == 0:
 		return 0   # no table (kept clear of the spawn point): the stools would circle nothing
 	if _budget_spent():
@@ -259,6 +264,8 @@ func _spawn_furniture_group_staged(gen: Node, mod: Node3D) -> int:
 			floor_y,
 			table_pos.z + sin(angle) * r
 		)
+		if gen.has_method("is_position_clear") and not gen.is_position_clear(stool_pos + Vector3(0.0, 0.6, 0.0), 0.1):
+			continue
 		total += _place_prop(stool_pos, STOOL_MODEL)
 		if _budget_spent():
 			await get_tree().process_frame
