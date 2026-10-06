@@ -18,11 +18,11 @@ const RUNTIME_REVISION := 1
 ## (the "ota_channel" field written at APK build time). Channels are manifest pointers, not
 ## packages: a later "stable" channel is a second pointer, not a second code path.
 const CHANNEL := "dev"
-## The PUBLIC transport repository that OTA releases are downloaded from (docs/OTA.md sections 6 and 14). Devices
-## download anonymously, so it is public and holds signed update files only (never source, keys or secrets); the
-## source repository stays private. Changing this value is a NATIVE change (new APK, runtime revision bump). It must
-## match OTA_RELEASE_REPO in CI, which refuses to publish otherwise.
-const REPO := "verbal76/Purgatory-Dungeon-OTA"
+## The repository whose GitHub Releases carry OTA files (docs/OTA.md section 6): this PUBLIC source repository's own
+## Releases, published by CI with the automatic github.token and read anonymously by devices. It must equal
+## GITHUB_REPOSITORY in CI, which refuses to publish otherwise. Changing it is a NATIVE change (new APK, runtime
+## revision bump).
+const REPO := "verbal76/Purgatory-Dungeon"
 ## Custom export feature that turns the OTA client on. Only the Android preset sets it.
 const FEATURE := "ota"
 ## The only platform OTA packages are built for.
@@ -64,8 +64,14 @@ static func release_url(tag: String, asset: String) -> String:
 	return "https://github.com/%s/releases/download/%s/%s" % [REPO, tag, asset]
 
 
+## The mutable release that carries one channel's pointer: "ota-channel-<channel>".
 static func channel_tag(channel: String = CHANNEL) -> String:
 	return "ota-channel-%s" % channel
+
+
+## The immutable release of one OTA: "ota-<channel>-<seq:06d>" (its ota_id is "<channel>-<seq:06d>").
+static func ota_tag(channel: String, seq: int) -> String:
+	return "ota-%s-%06d" % [channel, seq]
 
 
 static func pointer_url(channel: String = CHANNEL) -> String:

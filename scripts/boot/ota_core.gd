@@ -58,6 +58,11 @@ var save_root := ""
 var device_save_schema := 0
 ## Save schema of the game that is running now. Boot reads it from the mounted game; recorded by mark_healthy().
 var running_save_schema := 0
+## The download base the update client is talking to (set by OtaUpdater for every check): ".../releases/download/" for
+## GitHub Releases, else the pointer's own directory. When non-empty, a manifest's pck_url must live inside it (and be
+## an OTA release asset). Empty (boot-time re-validation, unit tests of other rules) = not enforced: stored manifests
+## were anchored when they were staged and are signed.
+var url_base := ""
 ## Desktop-only local test hook (http://127.0.0.1 pointer). Never set on a device.
 var allow_local_http := false
 var state: Dictionary = {}
@@ -372,6 +377,8 @@ func validate_manifest(m: Dictionary) -> String:
 	if not (url is String) or not ((url as String).begins_with("https://") \
 			or (allow_local_http and (url as String).begins_with("http://127.0.0.1:"))):
 		return "invalid manifest: package URL must be HTTPS"
+	if url_base != "" and not url_in_base(str(url), url_base):
+		return "invalid manifest: package URL is outside the release download base %s" % url_base
 	if not _is_safe_id(m["ota_id"]):
 		return "invalid manifest: ota_id"
 	if not _is_whole(m["seq"]) or int(m["seq"]) < 1:
@@ -398,6 +405,40 @@ func validate_manifest(m: Dictionary) -> String:
 	if fwhy != "":
 		return fwhy
 	return save_compat(m)
+
+
+const RELEASES_MARK := "/releases/download/"
+
+
+## The only place a pointer may send the client: ".../releases/download/" for a GitHub Releases pointer
+## (".../releases/download/ota-channel-dev/latest.json?t=1" -> ".../releases/download/"); a pointer without that
+## segment (desktop test layouts) is anchored to its own directory.
+static func base_of(pointer_url: String) -> String:
+	var u: String = pointer_url.get_slice("?", 0).get_slice("#", 0)
+	var i: int = u.find(RELEASES_MARK)
+	if i >= 0:
+		return u.substr(0, i + RELEASES_MARK.length())
+	return u.substr(0, u.rfind("/") + 1)
+
+
+## True when `url` lies inside `base` (which ends in "/"): same scheme, host, port and path by plain prefix, and the
+## rest is a plain relative path (no "..", "\\", "%", "@", "?" or "#"). Another repository, host or a prefix trick
+## ("ota/dev-evil/", "github.io.evil.com") never matches. Under a ".../releases/download/" base the rest must also be
+## "<ota release tag>/<asset>": the tag begins "ota-" and is not a channel pointer release ("ota-channel-...").
+static func url_in_base(url: String, base: String) -> bool:
+	if base == "" or not base.ends_with("/") or not url.begins_with(base):
+		return false
+	var rest: String = url.substr(base.length())
+	if rest.is_empty():
+		return false
+	for bad in ["..", "\\", "%", "@", "?", "#"]:
+		if rest.contains(bad):
+			return false
+	if base.ends_with(RELEASES_MARK):
+		var parts: PackedStringArray = rest.split("/")
+		if parts.size() != 2 or parts[1].is_empty() or not parts[0].begins_with("ota-") or parts[0].begins_with("ota-channel-"):
+			return false
+	return true
 
 
 ## files[] must be a list of {path, op} that never touches the native boundary.
