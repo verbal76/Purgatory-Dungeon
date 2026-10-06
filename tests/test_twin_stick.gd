@@ -44,9 +44,12 @@ func _drag(index: int, pos: Vector2, rel: Vector2) -> void:
 	_flush()
 
 
+## Waits n physics ticks AND n rendered frames (the engine may run several ticks inside one long frame, or several
+## frames inside one tick; the aim is integrated per rendered frame).
 func _frames(n: int) -> void:
 	for i in n:
 		await get_tree().physics_frame
+		await get_tree().process_frame
 	_flush()
 
 
@@ -359,7 +362,7 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 	_drag(1, atk.center + Vector2(90, 0), Vector2(90, 0))
 	await _frames(4)
 	_check(Input.is_action_pressed("move_right") and Input.is_action_pressed("attack"), "move stick + attack drag work together (%s)" % [_down_actions()])
-	_check(not _real_motion().is_empty() and _real_motion().all(func(m): return m[0] > 0.0), "the attack drag turns right while the move finger is down (%d events)" % _real_motion().size())
+	_check(not _real_motion().is_empty() and _real_motion().all(func(m): return m[0] > 0.0), "the attack drag turns right while the move finger is down (%d events) cmd %s sm %s idx %d owners %s smooth %s" % [_real_motion().size(), tc._look_cmd, tc._aim_smoothed, tc._atk_index, tc._owners, tc.aim_smoothing])
 	_check(tc._owners[0]["kind"] == TouchControls.Owner.STICK and tc._owners[1]["kind"] == TouchControls.Owner.BUTTON and tc._owners[1]["button"] == "attack", "each finger has exactly one owner")
 	# no cross-talk: moving the move finger does not change the aim command and vice versa
 	var cmd_before: Vector2 = tc._look_cmd
@@ -476,26 +479,33 @@ func _aim_tests(tc: TouchControls, view: Vector2) -> void:
 	_drag(0, l0 + Vector2(settle + radius * TouchControls.AIM_ENGAGE * 0.9, 0), Vector2.ZERO)
 	await _frames(4)
 	_check(_real_motion().is_empty(), "below the engage threshold no look motion is sent (%d)" % _real_motion().size())
-	# monotonic: deflection -> total px over 6 physics frames
+	# monotonic: deflection -> turn rate (px per wall-clock second) over a 0.3 s window
 	var totals: Array = []
 	var last_events: int = 0
+	var last_frames: int = 0
 	for f in [0.3, 0.5, 0.75, 1.0]:
 		_touch(0, l0, false)
 		_touch(0, l0, true)
 		_drag(0, l0 + Vector2(settle + radius * f, 0), Vector2.ZERO)
 		_motion.clear()
-		await _frames(6)
+		var rendered: Array = [0]
+		var on_frame := func() -> void: rendered[0] += 1
+		get_tree().process_frame.connect(on_frame)
+		var t_a: int = Time.get_ticks_usec()
+		await get_tree().create_timer(0.3).timeout
+		var el: float = float(Time.get_ticks_usec() - t_a) / 1e6
+		get_tree().process_frame.disconnect(on_frame)
 		var sum: float = 0.0
 		for m in _real_motion():
 			sum += float(m[0])
-		totals.append(sum)
+		totals.append(sum / el)
 		last_events = _real_motion().size()
+		last_frames = rendered[0]
 	_check(totals[0] > 0.0 and totals[0] < totals[1] and totals[1] < totals[2] and totals[2] < totals[3], "real look motion grows with deflection (%s)" % [totals])
-	# full deflection: ~ LOOK_MAX_YAW_RATE rad/s -> px per second, at most one event per physics frame
+	# full deflection: ~ LOOK_MAX_YAW_RATE rad/s in px per second, at most one event per RENDERED frame
 	var expect_per_s: float = TouchControls.LOOK_MAX_YAW_RATE / TouchControls.LOOK_RAD_PER_MOUSE_PX * tc.look_gain
-	var secs: float = 6.0 / float(Engine.physics_ticks_per_second)
-	_check(absf(totals[3] - expect_per_s * secs) < expect_per_s * secs * 0.35, "full deflection turns at the documented rate (%.0f px vs ~%.0f)" % [totals[3], expect_per_s * secs])
-	_check(last_events <= 7, "no more than one look event per physics frame (%d in 6 frames)" % last_events)
+	_check(absf(totals[3] - expect_per_s) < expect_per_s * 0.30, "full deflection turns at the documented rate (%.0f px/s vs ~%.0f)" % [totals[3], expect_per_s])
+	_check(last_events <= last_frames + 1, "no more than one look event per rendered frame (%d events in %d frames)" % [last_events, last_frames])
 	# release stops
 	_touch(0, l0, false)
 	_motion.clear()
@@ -1093,12 +1103,30 @@ func _real_player_test(cls: String) -> void:
 	var l0: Vector2 = (tc.buttons["attack"] as TouchButton).center
 	var radius: float = TouchControls.AIM_DRAG_RADIUS * tc.ui_scale
 	var yaw0: float = player.rotation.y
+	# the turn is shown on the frame the motion arrives, not at the next 30 Hz physics tick
+	var y_pre: float = player.rotation.y
+	var mm := InputEventMouseMotion.new()
+	mm.device = 0
+	mm.relative = Vector2(40, 0)
+	Input.parse_input_event(mm)
+	_flush()
+	_check(absf(angle_difference(y_pre, player.rotation.y) + 40.0 * 0.0025) < 0.002, "[%s] a look event turns the camera at once, with no wait for the physics tick (%.4f rad)" % [cls, angle_difference(y_pre, player.rotation.y)])
+	if cls == "barbarian":
+		# the view stays locked while blocking, exactly as the tick always did (the yaw still accumulates)
+		player.set("_is_blocking", true)
+		var y_blk: float = player.rotation.y
+		Input.parse_input_event(mm)
+		_flush()
+		_check(is_equal_approx(player.rotation.y, y_blk), "[barbarian] the view stays locked while blocking")
+		player.set("_is_blocking", false)
+	await _frames(3)   # the next physics tick applies the yaw that accumulated while blocking
+	yaw0 = player.rotation.y
 	# empty right-side screen does nothing to the real player
 	var e0: Vector2 = Vector2(1602.0 * 0.55, 720.0 * 0.35)
 	_touch(5, e0, true)
 	_drag(5, e0 + Vector2(300, 0), Vector2(300, 0))
 	await _frames(12)
-	_check(absf(player.rotation.y - yaw0) < 0.0001 and not Input.is_action_pressed("attack"), "[%s] dragging on empty right-side screen does not turn the player or attack" % cls)
+	_check(absf(player.rotation.y - yaw0) < 0.0001 and not Input.is_action_pressed("attack"), "[%s] dragging on empty right-side screen does not turn the player or attack (dy %.5f attack %s)" % [cls, player.rotation.y - yaw0, Input.is_action_pressed("attack")])
 	_touch(5, e0, false)
 	# ATTACK drag, right
 	_touch(0, l0, true)
