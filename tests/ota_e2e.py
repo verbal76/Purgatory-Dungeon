@@ -692,6 +692,7 @@ def rejected(c, name, setup, expect_bad=False, hang=False):
 
 @scenario
 def fault_transport(c):
+    """Transport faults: truncated body, wrong bytes, hangs, 404s, server errors."""
     o = c.otas[1]
     rejected(c, "truncated-body", lambda ota: (c.publish(ota), c.site.fault(ota.asset, "truncate")))
     rejected(c, "wrong-bytes", lambda ota: (c.publish(ota), c.site.fault(ota.asset, "wrong_bytes")), expect_bad=True)
@@ -706,6 +707,7 @@ def fault_transport(c):
 
 @scenario
 def fault_pointer(c):
+    """Pointer faults: other channel, malformed document, stale pointer (no downgrade)."""
     o1, o2 = c.otas[1], c.otas[2]
 
     def other_channel(ota):
@@ -732,6 +734,7 @@ def fault_pointer(c):
 
 @scenario
 def fault_manifest(c):
+    """Manifest faults: malformed, bad/foreign signature, wrong runtime/fingerprint/channel/base, protected path, size/hash lies."""
     def with_forged(edit=None, raw=None, key=None):
         def setup(ota):
             c.site.publish(ota.tag, ota.assets())
