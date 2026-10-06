@@ -14,12 +14,36 @@ name: CI
 #     contains this workflow), wait for the `promote` job, then delete that helper branch.
 #     (A branch push is used because workflow_dispatch only works for workflows on the default
 #     branch, and the agent environment cannot push tags.)
+# ACTIONS BUDGET POLICY (CLAUDE.md "GitHub Actions budget"): GitHub-hosted minutes are scarce. Validate locally first
+# (tests/run_tests.sh, tools/ota_runtime.py --check, classify, the local e2e). This workflow therefore:
+#   * runs on pull requests only when they are READY FOR REVIEW (never for drafts), never for docs-only changes, and
+#     cancels the superseded run when a newer commit arrives;
+#   * runs tests only (no Windows export, no APK) on ordinary pushes/PRs;
+#   * builds the Windows package and the Android APK only for a release (tag v<N> / branch release/v<N>) or when asked
+#     explicitly through workflow_dispatch (build_windows / build_android);
+#   * never rebuilds for promote/ branches (they publish an existing artifact).
 on:
   push:
-    branches: [main, 'promote/**', 'release/v[0-9]*', 'android-port']
+    branches: [main, 'promote/**', 'release/v[0-9]*']
     tags: ['v[0-9]*']
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['docs/**', '**/*.md', 'LICENSE', '.gitignore', '.editorconfig', '.gitattributes']
   workflow_dispatch:
+    inputs:
+      build_windows:
+        description: Also export and verify the Windows package (not needed for ordinary validation)
+        type: boolean
+        default: false
+      build_android:
+        description: Also build, sign and qualify the Android APK (only when a phone-testable artifact is needed)
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # A newer commit makes an older run on a PR / main irrelevant; a release or promote run must never be cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
 
 env:
   GODOT_VERSION: "4.6"
@@ -33,9 +57,8 @@ permissions:
 
 jobs:
   validate-and-export:
-    # A promote tag publishes an existing artifact; it must not rebuild anything. Pushes to the
-    # android-port working branch build only the Android job (the full Windows run happens on the PR).
-    if: ${{ !startsWith(github.ref, 'refs/heads/promote/') && github.ref != 'refs/heads/android-port' }}
+    # A promote branch publishes an existing artifact; it must not rebuild anything. Draft pull requests never run.
+    if: ${{ !startsWith(github.ref, 'refs/heads/promote/') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -95,13 +118,27 @@ jobs:
           REQUIRE_STUDIO_LOGO: ${{ (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')) && '1' || '' }}
         run: tests/run_tests.sh "$GODOT"
 
+      - name: Decide whether to build the Windows package (release, or requested by workflow_dispatch)
+        id: winbuild
+        env:
+          WANT: ${{ inputs.build_windows }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* || "$WANT" == "true" ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Windows package not built (policy: only for releases or an explicit request)."
+          fi
+
       - name: Write build_info.json (shipped inside the game)
+        if: steps.winbuild.outputs.build == 'true'
         run: |
           rel=""
           if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="--release"; fi
           python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" $rel
 
       - name: Export Windows build
+        if: steps.winbuild.outputs.build == 'true'
         run: |
           mkdir -p build/windows
           "$GODOT" --headless --path . --export-release "Windows Desktop" build/windows/PurgatoryDungeon.exe
@@ -109,6 +146,7 @@ jobs:
           test -s build/windows/PurgatoryDungeon.pck
 
       - name: Verify exported package
+        if: steps.winbuild.outputs.build == 'true'
         run: |
           flags=""
           if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then
@@ -117,6 +155,7 @@ jobs:
           python3 tools/verify_package.py build/windows --version "$(cat VERSION)" $flags --godot "$GODOT"
 
       - name: Write build info
+        if: steps.winbuild.outputs.build == 'true'
         run: |
           cd build/windows
           {
@@ -132,6 +171,7 @@ jobs:
           } | tee BUILD_INFO.txt
 
       - name: Upload Windows build
+        if: steps.winbuild.outputs.build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: PurgatoryDungeon-windows-${{ env.SOURCE_SHA }}
@@ -145,7 +185,8 @@ jobs:
   # Android APK: built, signed with the stable app key and qualified (identity, API 36 target, 16 KB
   # alignment, signature, game content) by the same scripts anyone can run (tools/android/).
   android:
-    if: ${{ !startsWith(github.ref, 'refs/heads/promote/') }}
+    # Built only for a release or when explicitly requested (it costs ~10 minutes of runner time and signs an APK).
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v') || (github.event_name == 'workflow_dispatch' && inputs.build_android) }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     concurrency:
