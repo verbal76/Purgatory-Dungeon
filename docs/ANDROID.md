@@ -77,11 +77,17 @@ sensitivity apply to both.
   `MIN_PRESS_MS` stretching unchanged) and also measures an aim drag from its touch-down point; it keeps aiming
   wherever it wanders (even far outside the button) until it is lifted, and the drag never releases or re-presses
   attack. Releasing ATTACK ends the drag at once. Left-thumb movement and the aim drag work together.
-- **Input path**: the look command is turned into one `InputEventMouseMotion` (device 0) per **physics
-  frame** by `TouchControls._physics_process` - the same mouse-look path the Classic swipe uses - so
-  `brute_player.gd` / `mage_player.gd` are untouched (they turn by `relative.x * 0.0025` rad). The
-  rate is physical (rad/s), so frame time does not matter (step capped at `LOOK_MAX_STEP` against hitches).
-  The players have no pitch today and ignore `relative.y`; it is sent at `LOOK_PITCH_RATIO` for when they get one.
+- **Input path and frame pacing**: the look command is turned into one `InputEventMouseMotion` (device 0) per
+  **rendered frame** by `TouchControls._process` (`_aim_frame`) with the REAL frame delta (px = rate x dt, dt capped at
+  `LOOK_MAX_STEP` = 0.25 s so a pause or resume cannot jump the camera) and delivered the same frame
+  (`Input.flush_buffered_events()`). It is the same mouse-look path the Classic swipe uses. The players show the turn when
+  it arrives: `brute_player.gd` / `mage_player.gd` call `_apply_yaw_now()` in their mouse-motion branch (the view is still
+  locked while blocking / dead, exactly as the tick always did) instead of waiting for the next 30 Hz physics tick.
+  Why: the aim used to be applied from the physics tick and shown at the next tick, so at 20-40 fps rendered frames saw
+  0, 1 or several back-to-back ticks: the camera stood still, then caught up (measured in the real engine loop with
+  `tools/aim_pacing_probe.gd`, modelled in `tests/test_aim_pacing.gd`). Now the same finger turns the same angle per
+  second at any frame rate. Rates are physical (rad/s). The players have no pitch today and ignore `relative.y`; it is
+  sent at `LOOK_PITCH_RATIO` for when they get one.
 - **Response** (`look_response`, then the filter): d = offset / radius, measured from the touch-down point after the
   first `AIM_SETTLE_PX` (6 px) of finger travel is ignored (the press itself wobbles the thumb; distance, not time, so a
   fast deliberate drag is not delayed). Turning **engages** at d >= `AIM_ENGAGE` (0.20, about 18 px) and stays engaged
@@ -208,7 +214,7 @@ calls; the same line goes to `adb logcat` every 30 s. Real-device numbers are st
 
 ## Testing
 `tests/run_tests.sh` includes `test_touch_controls` (the Classic scheme, run with `PURGATORY_FORCE_TOUCH=1`),
-`test_twin_stick` (default/persisted scheme, layout at five canvas shapes with and without cutouts, mm minimums,
+`test_aim_pacing` (frame-time independence of the aim across steady and spiky pacing, bounded bursts, zeroing on release/cancel/background, pause/resume), `test_twin_stick` (default/persisted scheme, layout at five canvas shapes with and without cutouts, mm minimums,
 ownership of simultaneous fingers, look response and frame-rate independence, attack drag, lifecycle,
 Options selector, onboarding, plus the real Barbarian and Mage turned by the ATTACK drag, empty right-side screen inert),
 `test_mobile_ui`, `test_app_lifecycle` and `test_input_desktop` (proves keyboard/controller bindings
