@@ -25,6 +25,13 @@ func _re(pattern: String, text: String) -> bool:
 	return r.search(text) != null
 
 
+## JSON numbers arrive as floats: 6.0 must read back as "6".
+func _s(v: Variant) -> String:
+	if v is float and v == floorf(v):
+		return str(int(v))
+	return str(v)
+
+
 func _read_json(path: String) -> Variant:
 	if not FileAccess.file_exists(path):
 		return null
@@ -67,7 +74,7 @@ func _run() -> String:
 	var sources := {"runtime_id": "runtime_id", "runtime_fingerprint": "runtime_fingerprint", "base_sha": "commit",
 			"channel": "ota_channel", "native_version": "public_version"}
 	for key in sources:
-		var from_bi: String = str(bi.get(sources[key], ""))
+		var from_bi: String = _s(bi.get(sources[key], ""))
 		var from_arg: String = str(a.get(key, ""))
 		if from_bi != "" and from_arg != "" and from_bi != from_arg:
 			return ("%s=%s contradicts the baseline's build_info.json (%s)" % [key, from_arg, from_bi])

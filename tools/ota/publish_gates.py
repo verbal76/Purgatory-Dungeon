@@ -115,6 +115,8 @@ def pointer_forward(current_seq, new_seq: int) -> bool:
 
 def parse_pointer(data: bytes) -> dict:
     d = otalib.load_json_bytes(data, "latest.json")
+    if not isinstance(d, dict):
+        raise OtaError("latest.json is not a JSON object")
     for k, t in (("channel", str), ("ota_id", str), ("seq", int), ("runtime_id", str), ("manifest_url", str),
                  ("signature_url", str), ("published_at", str)):
         if not isinstance(d.get(k), t) or isinstance(d.get(k), bool):

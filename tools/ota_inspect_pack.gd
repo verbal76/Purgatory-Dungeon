@@ -26,6 +26,13 @@ func _init() -> void:
 	quit(0 if fails.is_empty() else 1)
 
 
+## JSON numbers arrive as floats: 7.0 must read back as "7".
+func _s(v: Variant) -> String:
+	if v is float and v == floorf(v):
+		return str(int(v))
+	return str(v)
+
+
 func _args() -> Dictionary:
 	var a := {}
 	for arg in OS.get_cmdline_user_args():
@@ -169,13 +176,13 @@ func _run() -> Array[String]:
 	var fingerprint: String = a.get("runtime_fingerprint", str(bi.get("runtime_fingerprint", "")))
 	var base_sha: String = a.get("base_sha", str(bi.get("commit", "")))
 	var channel: String = a.get("channel", str(bi.get("ota_channel", consts.get("CHANNEL", ""))))
-	var native_version: String = a.get("native_version", str(bi.get("public_version", "")))
+	var native_version: String = a.get("native_version", _s(bi.get("public_version", "")))
 	if a.get("self_identity", "") == "1":
 		runtime_id = str(claimed.get("runtime_id", ""))
 		fingerprint = str(claimed.get("runtime_fingerprint", ""))
 		base_sha = str(claimed.get("base_source_sha", ""))
 		channel = str(claimed.get("channel", ""))
-		native_version = str(claimed.get("native_version", ""))
+		native_version = _s(claimed.get("native_version", ""))
 	for pair in [["runtime_id", runtime_id], ["runtime_fingerprint", fingerprint], ["base_sha", base_sha], ["channel", channel]]:
 		if pair[1] == "":
 			fails.append("device identity unknown (%s): pass build_info=<shipped baseline build_info.json> or self_identity=1" % pair[0])

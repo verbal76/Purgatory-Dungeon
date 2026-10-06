@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""Tests for the OTA build tooling in tools/ota/ (docs/OTA.md). Standard library + the openssl CLI only.
+"""Tests for the v7 OTA tooling (docs/OTA.md sections 3-6, 11, 12). Standard library + the openssl CLI (+ Godot 4.6 where noted).
 
   python3 tests/test_ota_tools.py [-v] [TestClass[.test_name]]
 
-Covers: path rules and classify.py (against a temporary git repository), the independent PCK reader (against the
-real Godot 4.6 sample packs in tools/ota/fixtures, plus a pack writer proven byte-identical to Godot's output),
-make_bundle / channel / verify_bundle round trips with tamper cases, native_check, keys.sh (local OTA_KEY_DIR mode,
-races, secret handling) and static checks of .github/workflows/ota.yml.
-Tests that need the Godot 4.6 binary ($GODOT or /opt/godot/...) print a NOTICE and skip when it is absent
-(or when OTA_TOOLS_NO_GODOT=1 is set, to run only the fast tests).
+Covers: ota/boundary.json and path classification; the runtime fingerprint gate (tools/ota_runtime.py) on fixture trees;
+tools/ota/classify.py against temporary git repositories; the independent PCK reader (real Godot 4.6 fixtures in
+tools/ota/fixtures) and payload_check.py; native_check.py; the manifest maker and the inspector (tools/ota_make_manifest.gd,
+tools/ota_inspect_pack.gd) with tamper cases, run against the REAL scripts/boot client when the tree has one and against the
+stand-in of tests/ota_standin otherwise; the publisher's decisions (tools/ota/publish_gates.py) as pure logic and against a
+local HTTP server; release_tool build-info / verify_package identity rules; keys.sh; the fault server of tests/ota_e2e.py;
+tools/ota_build_payload.sh on a tiny repository; and static checks of ci.yml / ota-publish.yml / ota-tests.yml.
+Tests that need the Godot 4.6 binary ($GODOT or /opt/godot/...) print a NOTICE and skip when it is absent (or when
+OTA_TOOLS_NO_GODOT=1 is set, to run only the fast tests).
 """
 import base64
 import concurrent.futures
 import hashlib
+import http.server
 import json
 import os
 import re
@@ -21,25 +25,36 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import warnings
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OTA = os.path.join(ROOT, "tools", "ota")
+TOOLS = os.path.join(ROOT, "tools")
+TESTS = os.path.join(ROOT, "tests")
 FIX = os.path.join(OTA, "fixtures")
-sys.path.insert(0, OTA)
+for p in (OTA, TOOLS, TESTS):
+    sys.path.insert(0, p)
 sys.dont_write_bytecode = True
 warnings.simplefilter("ignore", ResourceWarning)
 
 import otalib  # noqa: E402
 import pck as pcklib  # noqa: E402
+import payload_check  # noqa: E402
+import publish_gates as gates  # noqa: E402
+import tool_project  # noqa: E402
+import classify as classify_mod  # noqa: E402
+import ota_runtime  # noqa: E402
+import ota_e2e  # noqa: E402
+import verify_package as vp  # noqa: E402
 
 BASE40 = "1" * 40
 SRC40 = "2" * 40
 OTHER40 = "3" * 40
-ENGINE = "4.6.stable.official.89cea1439"
-T0 = "2026-10-05T19:00:00Z"
+FP64 = "ab" * 32
+NOTICES = []
 
 
 def notice(msg):
@@ -61,14 +76,14 @@ def godot_bin():
     return None
 
 
-def run(args, cwd=None, env=None, input_text=None):
+def run(args, cwd=None, env=None, input_text=None, timeout=900):
     e = dict(os.environ)
     e.update(env or {})
-    return subprocess.run(args, cwd=cwd, env=e, capture_output=True, text=True, input=input_text)
+    return subprocess.run(args, cwd=cwd, env=e, capture_output=True, text=True, input=input_text, timeout=timeout)
 
 
-def tool(name, *args, cwd=None, env=None):
-    return run([sys.executable, os.path.join(OTA, name)] + [str(a) for a in args], cwd=cwd, env=env)
+def tool(name, *args, cwd=None, env=None, base=OTA):
+    return run([sys.executable, os.path.join(base, name)] + [str(a) for a in args], cwd=cwd, env=env)
 
 
 def out(p):
@@ -134,6 +149,10 @@ def pck_of(path, files):
     return write(path, make_pck([(p, d, pcklib.FILE_REMOVAL if d is None else 0) for p, d in sorted(files.items())]))
 
 
+GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+
 class TmpCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="ota-test-")
@@ -142,163 +161,455 @@ class TmpCase(unittest.TestCase):
     def p(self, *parts):
         return os.path.join(self.tmp, *parts)
 
+    def git(self, repo, *args):
+        r = run(["git", "-C", repo] + list(args), env=GIT_ENV)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
 
-# ------------------------------------------------------------------------------------------------ rules
+    def commit(self, repo, msg="c"):
+        self.git(repo, "add", "-A")
+        self.git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", msg)
+        return self.git(repo, "rev-parse", "HEAD")
 
-class TestRules(unittest.TestCase):
+
+# ------------------------------------------------------------------------------------------------ boundary
+
+class TestBoundary(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.rules = otalib.load_rules()
+        cls.rules = otalib.load_boundary()
 
     def cat(self, path):
         return otalib.classify_source(self.rules, path)[0]
 
-    def test_shape_and_stability(self):
+    def test_shape_and_spec_content(self):
         r = self.rules
-        for sect in ("protected", "guarded", "not_shipped"):
-            for key in ("exact", "prefixes", "suffixes"):
-                lst = r[sect][key]
-                self.assertEqual(lst, sorted(set(lst)), f"{sect}.{key} must be sorted and unique (stable for the client check)")
-        self.assertEqual(r["max_payload_bytes"], 512 * 1024 * 1024)
-        for p in r["protected"]["prefixes"] + r["not_shipped"]["prefixes"]:
-            self.assertTrue(p.endswith("/"), p)
+        self.assertEqual(r["max_payload_bytes"], 536870912)
+        self.assertEqual(r["warn_payload_bytes"], 95 * 1024 * 1024, "the 95 MiB git-host guard")
+        self.assertEqual(r["native_inputs"], ["project.godot", "export_presets.cfg", "scripts/boot/*.gd", "tools/android/build_apk.sh"])
+        self.assertEqual(r["engine_version_source"]["file"], ".github/workflows/ci.yml")
+        self.assertEqual(r["runtime_revision_source"], {"file": "scripts/boot/ota_config.gd", "constant": "RUNTIME_REVISION"})
+        pp = r["payload_protected"]
+        for need in ("project.godot", "project.binary", "export_presets.cfg", "build_info.json", "VERSION", "godot/extension_list.cfg"):
+            self.assertIn(need, pp["exact"], need)
+        for need in ("scripts/boot/", "android/"):
+            self.assertIn(need, pp["prefixes"], need)
+        for need in (".gdextension", ".so", ".dll", ".dylib"):
+            self.assertIn(need, pp["suffixes"], need)
+        self.assertEqual(set(r["guarded"]["exact"]), {"scripts/SettingsManager.gd", "scripts/save_manager.gd", "scripts/storage_paths.gd"})
+        for key in ("tests/", "tools/", "docs/", ".github/"):
+            self.assertIn(key, r["not_shipped"]["prefixes"], key)
 
-    def test_documented_categories(self):
-        apk = ["project.godot", "project.binary", "export_presets.cfg", "android/build/gradle.properties",
-               "addons/x/bin/libx.so", "addons/x/x.gdextension", "addons/x/x.dll", "addons/x/x.dylib",
-               "scripts/ota/ota_client.gd", "ota_trust.pem", "ota_channel.json", "build_info.json", "VERSION"]
-        for p in apk:
+    def test_classification_matrix(self):
+        native = ("project.godot", "export_presets.cfg", "scripts/boot/ota_core.gd", "scripts/boot/ota_config.gd", "scripts/boot/diagnostics.gd",
+                  "tools/android/build_apk.sh")
+        for p in native:
+            c, why = otalib.classify_source(self.rules, p)
+            self.assertEqual(c, "apk_required", p)
+            self.assertIn("runtime fingerprint would change", why, p)
+        for p in ("scripts/boot/ota_core.gd.uid", "scripts/boot/sub/x.gd", "android/build/x.gradle", "VERSION", "build_info.json",
+                  "ota/boundary.json", "ota/runtime_lock.json", "addons/x/y.gdextension", "addons/x/libx.so", "bin/x.dll", "bin/y.dylib",
+                  ".godot/extension_list.cfg", "godot/extension_list.cfg", "project.binary"):
             self.assertEqual(self.cat(p), "apk_required", p)
-        for p in ("scripts/save_manager.gd", "scripts/storage_paths.gd", "scripts/SettingsManager.gd"):
+        for p in ("scripts/save_manager.gd", "scripts/SettingsManager.gd", "scripts/storage_paths.gd"):
             self.assertEqual(self.cat(p), "guarded", p)
-        for p in ("tools/ota/classify.py", "tests/test_ota_tools.py", "docs/OTA.md", "README.md", "CLAUDE.md",
-                  "archive/old.gd", "production/x.png", ".github/workflows/ota.yml", "scripts/ota/README.md"):
+        for p in ("docs/OTA.md", "tests/test_x.gd", "tools/ota/classify.py", "tools/release_tool.py", ".github/workflows/ota-publish.yml",
+                  "README.md", ".gitignore", "archive/old.gd", "production/x.png", ".claude/settings.json"):
             self.assertEqual(self.cat(p), "not_shipped", p)
-        for p in ("scripts/enemy_manager.gd", "data/buffs.json", "scenes/MainMenu.tscn", "addons/AllSkyFree/x.tres",
-                  "autoloads/GameClock.gd", "Music & background images/a.ogg", "scripts/otaish.gd", "characters/brute/b.tscn"):
+        for p in ("scripts/enemy_manager.gd", "data/ota_probe.json", "scenes/MainMenu.tscn", "Music & background images/a.ogg",
+                  "autoloads/GameClock.gd", "scripts/boot_extra.gd", "scripts/otaish.gd", "scripts/ota/a.gd", "characters/brute/b.tscn",
+                  "scripts/save_schema.gd", "scripts/build_info.gd"):
             self.assertEqual(self.cat(p), "safe", p)
 
     def test_pack_paths(self):
         v = lambda p: otalib.pack_violation(self.rules, p)[0]  # noqa: E731
-        for p in ("project.binary", "scripts/ota/a.gdc", "scripts/ota/a.gd.remap", "ota_trust.pem", "build_info.json",
-                  "res://project.binary", "addons/q/q.so", "android/x"):
+        for p in ("project.binary", "scripts/boot/ota_core.gdc", "scripts/boot/ota_core.gd.remap", "res://scripts/boot/x.gde",
+                  "godot/extension_list.cfg", "x/y.so", "build_info.json", "VERSION", "project.godot", "android/x"):
             self.assertEqual(v(p), "protected", p)
-        for p in ("scripts/save_manager.gdc", "scripts/save_manager.gd.remap", "scripts/storage_paths.gdc"):
-            self.assertEqual(v(p), "guarded", p)
-        for p in ("../x", "/abs", "user://x", "a//b", "a/./b", "a\\b", "C:/x", ""):
+        for p in ("../x", "/abs", "user://x", "a//b", "a/./b", "a\\b", "", "C:/x"):
             self.assertEqual(v(p), "escape", p)
-        for p in ("data/new.json", ".godot/imported/x.ctex", "scripts/enemy_manager.gdc", "scenes/MainMenu.tscn.remap"):
+        for p in ("scripts/save_manager.gdc", "scripts/save_manager.gd.remap", "scripts/SettingsManager.gd"):
+            self.assertEqual(v(p), "guarded", p)
+        for p in ("scripts/enemy_manager.gdc", "data/x.json", "godot/imported/a.ctex", "scripts/boot_extra.gdc"):
             self.assertEqual(v(p), "", p)
+
+    def test_glob_semantics(self):
+        rx = otalib.glob_regex("scripts/boot/*.gd")
+        self.assertTrue(rx.match("scripts/boot/a.gd"))
+        self.assertFalse(rx.match("scripts/boot/sub/a.gd"), "'*' never crosses '/'")
+        self.assertFalse(rx.match("scripts/boot/a.gdc"))
+        self.assertTrue(otalib.glob_regex("addons/**/x.so").match("addons/a/b/x.so"))
+        self.assertTrue(otalib.glob_regex("a?.gd").match("ab.gd"))
+        self.assertFalse(otalib.glob_regex("a.gd").match("axgd"), "regex metacharacters are escaped")
+
+    def test_refuses_a_malformed_boundary(self):
+        good = rb(otalib.BOUNDARY_PATH)
+        otalib.parse_boundary(good)
+        d = json.loads(good)
+        for label, edit in (("format", lambda x: x.update(format=2)), ("native", lambda x: x.update(native_inputs=[])),
+                            ("section", lambda x: x.pop("payload_protected")), ("list", lambda x: x["guarded"].update(exact="a")),
+                            ("max", lambda x: x.pop("max_payload_bytes")), ("engine", lambda x: x.pop("engine_version_source")),
+                            ("regex", lambda x: x["engine_version_source"].update(regex="(")),
+                            ("revision", lambda x: x["runtime_revision_source"].update(constant="lower"))):
+            e = json.loads(json.dumps(d))
+            edit(e)
+            with self.assertRaises(otalib.OtaError, msg=label):
+                otalib.parse_boundary(json.dumps(e).encode())
+        with self.assertRaises(otalib.OtaError):
+            otalib.parse_boundary(b"{not json")
+
+
+# ------------------------------------------------------------------------------------------------ runtime gate
+
+CI_YML = 'env:\n  GODOT_VERSION: "4.6"\n  GODOT_RELEASE: "4.6-stable"\n'
+CONFIG_GD = ('extends RefCounted\nconst RUNTIME_REVISION := 1\nconst CHANNEL := "dev"\nconst REPO := "o/r"\n'
+             'const PUBLIC_KEY_PEM := """\n"""\n')
+
+
+def make_runtime_tree(root, config=CONFIG_GD, ci=CI_YML):
+    shutil.copytree(os.path.join(ROOT, "ota"), os.path.join(root, "ota"), ignore=shutil.ignore_patterns("runtime_lock.json"))
+    write(os.path.join(root, ".github", "workflows", "ci.yml"), ci)
+    write(os.path.join(root, "project.godot"), "config_version=5\n")
+    write(os.path.join(root, "export_presets.cfg"), "[preset.0]\nname=\"Android\"\n")
+    write(os.path.join(root, "tools", "android", "build_apk.sh"), "#!/bin/bash\necho build\n")
+    write(os.path.join(root, "scripts", "boot", "ota_config.gd"), config)
+    write(os.path.join(root, "scripts", "boot", "ota_core.gd"), "extends RefCounted\n")
+    write(os.path.join(root, "scripts", "game.gd"), "extends Node\n")
+    write(os.path.join(root, "data", "x.json"), "{}\n")
+    write(os.path.join(root, "VERSION"), "7\n")
+
+
+class TestRuntime(TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.t = self.p("tree")
+        make_runtime_tree(self.t)
+
+    def rt(self, *args, root=None):
+        return tool("ota_runtime.py", "--root", root or self.t, *args, base=TOOLS)
+
+    def ident(self, root=None):
+        r = self.rt("--print", "--json", root=root)
+        self.assertEqual(r.returncode, 0, out(r))
+        return json.loads(r.stdout)
+
+    def lock(self):
+        r = self.rt("--relock")
+        self.assertEqual(r.returncode, 0, out(r))
+
+    def test_relock_then_check_passes(self):
+        self.lock()
+        r = self.rt("--check")
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertIn("OTA-compatible", r.stdout)
+        lock = jload(self.p("tree", "ota", "runtime_lock.json"))
+        self.assertEqual(lock["runtime_revision"], 1)
+        self.assertEqual(lock["godot_version"], "4.6")
+        self.assertEqual(lock["files"], ["export_presets.cfg", "project.godot", "scripts/boot/ota_config.gd", "scripts/boot/ota_core.gd",
+                                         "tools/android/build_apk.sh"])
+        self.assertEqual(lock["fingerprint"], self.ident()["runtime_fingerprint"])
+        self.assertRegex(lock["fingerprint"], r"^[0-9a-f]{64}$")
+        self.assertEqual(set(lock["hashes"]), set(lock["files"]))
+
+    def test_identity_format(self):
+        i = self.ident()
+        self.assertEqual(i["runtime_id"], "android-godot-4.6.0-r1")
+        self.assertEqual((i["engine"], i["godot_version"], i["runtime_revision"], i["ota_channel"]), ("4.6.0", "4.6", 1, "dev"))
+        self.assertEqual(json.loads(self.rt("--print", "--json", "--platform", "windows").stdout)["runtime_id"], "windows-godot-4.6.0-r1")
+        r = self.rt("--print")
+        self.assertIn("runtime_id=android-godot-4.6.0-r1", r.stdout)
+        self.assertEqual(self.rt("--engine").stdout.strip(), "4.6")
+        write(os.path.join(self.t, ".github", "workflows", "ci.yml"), 'env:\n  GODOT_RELEASE: "4.7.2-stable"\n')
+        self.assertEqual(self.ident()["runtime_id"], "android-godot-4.7.2-r1")
+
+    def test_native_input_change_fails(self):
+        self.lock()
+        for rel, add in (("project.godot", "[x]\n"), ("export_presets.cfg", "a=1\n"), ("scripts/boot/ota_core.gd", "# c\n"),
+                         ("tools/android/build_apk.sh", "echo x\n")):
+            path = os.path.join(self.t, *rel.split("/"))
+            old = rb(path)
+            write(path, old + add.encode())
+            r = self.rt("--check")
+            self.assertEqual(r.returncode, 1, rel + out(r))
+            self.assertIn("native input changed: " + rel, r.stdout)
+            self.assertIn("--bump", r.stdout)
+            write(path, old)
+            self.assertEqual(self.rt("--check").returncode, 0, "restoring the file restores the gate")
+
+    def test_engine_change_fails(self):
+        self.lock()
+        write(os.path.join(self.t, ".github", "workflows", "ci.yml"), CI_YML.replace("4.6-stable", "4.7-stable"))
+        r = self.rt("--check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("engine version is 4.7", r.stdout)
+
+    def test_added_or_removed_native_input_fails(self):
+        self.lock()
+        write(os.path.join(self.t, "scripts", "boot", "extra.gd"), "extends Node\n")
+        r = self.rt("--check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("added since the lock: scripts/boot/extra.gd", r.stdout)
+        os.remove(os.path.join(self.t, "scripts", "boot", "extra.gd"))
+        os.remove(os.path.join(self.t, "scripts", "boot", "ota_core.gd"))
+        r = self.rt("--check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("removed since the lock: scripts/boot/ota_core.gd", r.stdout)
+
+    def test_content_only_change_keeps_the_fingerprint(self):
+        before = self.ident()["runtime_fingerprint"]
+        self.lock()
+        write(os.path.join(self.t, "scripts", "game.gd"), "extends Node\nfunc x(): pass\n")
+        write(os.path.join(self.t, "data", "new.json"), '{"a":1}\n')
+        write(os.path.join(self.t, "scripts", "new_feature.gd"), "extends Node\n")
+        write(os.path.join(self.t, "docs", "OTA.md"), "text\n")
+        write(os.path.join(self.t, "scripts", "boot_notes.gd"), "extends Node\n")   # not under scripts/boot/
+        self.assertEqual(self.ident()["runtime_fingerprint"], before)
+        r = self.rt("--check")
+        self.assertEqual(r.returncode, 0, out(r))
+
+    def test_revision_is_normalised_out_of_its_own_file(self):
+        fp = self.ident()["runtime_fingerprint"]
+        cfg = os.path.join(self.t, "scripts", "boot", "ota_config.gd")
+        write(cfg, rt(cfg).replace("RUNTIME_REVISION := 1", "RUNTIME_REVISION := 41"))
+        i = self.ident()
+        self.assertEqual((i["runtime_revision"], i["runtime_id"], i["runtime_fingerprint"]), (41, "android-godot-4.6.0-r41", fp),
+                         "only the revision changed: same fingerprint, new runtime id")
+        # but changing anything else in that file does change it
+        write(cfg, rt(cfg).replace('CHANNEL := "dev"', 'CHANNEL := "stable"'))
+        self.assertNotEqual(self.ident()["runtime_fingerprint"], fp)
+
+    def test_editing_the_revision_without_bump_is_caught(self):
+        self.lock()
+        cfg = os.path.join(self.t, "scripts", "boot", "ota_config.gd")
+        write(cfg, rt(cfg).replace("RUNTIME_REVISION := 1", "RUNTIME_REVISION := 2"))
+        r = self.rt("--check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("says r2 but ota/runtime_lock.json says r1", r.stdout)
+
+    def test_bump_relocks_and_changes_only_the_revision(self):
+        self.lock()
+        fp = self.ident()["runtime_fingerprint"]
+        r = self.rt("--bump")
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertIn("r2", r.stdout)
+        self.assertIn("RUNTIME_REVISION := 2", rt(os.path.join(self.t, "scripts", "boot", "ota_config.gd")))
+        self.assertEqual(jload(os.path.join(self.t, "ota", "runtime_lock.json"))["runtime_revision"], 2)
+        self.assertEqual(self.rt("--check").returncode, 0)
+        i = self.ident()
+        self.assertEqual((i["runtime_id"], i["runtime_fingerprint"]), ("android-godot-4.6.0-r2", fp))
+        # a native change plus a bump is the intended path: the gate is green again
+        write(os.path.join(self.t, "project.godot"), "config_version=5\n[x]\n")
+        self.assertEqual(self.rt("--check").returncode, 1)
+        self.assertEqual(self.rt("--bump").returncode, 0)
+        self.assertEqual(self.rt("--check").returncode, 0)
+        self.assertIn("RUNTIME_REVISION := 3", rt(os.path.join(self.t, "scripts", "boot", "ota_config.gd")))
+
+    def test_line_endings_are_normalised(self):
+        self.lock()
+        p = os.path.join(self.t, "scripts", "boot", "ota_core.gd")
+        write(p, rb(p).replace(b"\n", b"\r\n"))
+        self.assertEqual(self.rt("--check").returncode, 0, "a CRLF checkout of the same text is the same runtime")
+
+    def test_revision_constant_forms(self):
+        for text, rev in (("const RUNTIME_REVISION := 7\n", 7), ("const RUNTIME_REVISION: int = 8\n", 8), ("const RUNTIME_REVISION = 9\n", 9)):
+            write(os.path.join(self.t, "scripts", "boot", "ota_config.gd"), CONFIG_GD.replace("const RUNTIME_REVISION := 1\n", text))
+            self.assertEqual(self.ident()["runtime_revision"], rev, text)
+        cfg = os.path.join(self.t, "scripts", "boot", "ota_config.gd")
+        for label, body in (("duplicate", CONFIG_GD + "const RUNTIME_REVISION := 2\n"), ("missing", CONFIG_GD.replace("const RUNTIME_REVISION := 1\n", "")),
+                            ("zero", CONFIG_GD.replace(":= 1", ":= 0")), ("text", CONFIG_GD.replace(":= 1", ':= "x"'))):
+            write(cfg, body)
+            r = self.rt("--print", "--json")
+            self.assertEqual(r.returncode, 2, label)
+            self.assertIn("RUNTIME_REVISION", r.stderr, label)
+
+    def test_channel_constant(self):
+        cfg = os.path.join(self.t, "scripts", "boot", "ota_config.gd")
+        write(cfg, CONFIG_GD.replace('"dev"', '"Bad Channel"'))
+        r = self.rt("--print", "--json")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("not a valid channel", r.stderr)
+
+    def test_missing_pieces_fail_with_a_hint(self):
+        r = self.rt("--check")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--relock", r.stderr)
+        os.remove(os.path.join(self.t, "scripts", "boot", "ota_config.gd"))
+        r = self.rt("--print")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("ota_config.gd", r.stderr)
+
+    def test_provisional_lock_is_refused(self):
+        os.remove(os.path.join(self.t, "scripts", "boot", "ota_config.gd"))
+        os.remove(os.path.join(self.t, "scripts", "boot", "ota_core.gd"))
+        r = self.rt("--relock")
+        self.assertEqual(r.returncode, 2, "a plain relock needs every native input")
+        r = self.rt("--relock", "--provisional", "--revision", "1")
+        self.assertEqual(r.returncode, 0, out(r))
+        lock = jload(os.path.join(self.t, "ota", "runtime_lock.json"))
+        self.assertTrue(lock["provisional"])
+        self.assertEqual(lock["missing"], ["scripts/boot/*.gd"])
+        r = self.rt("--check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("provisional", r.stdout)
+        write(os.path.join(self.t, "scripts", "boot", "ota_config.gd"), CONFIG_GD)
+        write(os.path.join(self.t, "scripts", "boot", "ota_core.gd"), "extends RefCounted\n")
+        self.assertEqual(self.rt("--relock").returncode, 0)
+        self.assertEqual(self.rt("--check").returncode, 0)
+        self.assertNotIn("provisional", jload(os.path.join(self.t, "ota", "runtime_lock.json")))
+
+    def test_deterministic(self):
+        a = self.ident()["runtime_fingerprint"]
+        t2 = self.p("tree2")
+        make_runtime_tree(t2)
+        self.assertEqual(self.ident(t2)["runtime_fingerprint"], a, "the fingerprint depends on content only, not on the checkout path")
+
+    def test_committed_lock_matches_the_tree(self):
+        """The repository's own lock: provisional until the native layer exists, then --check must pass."""
+        cfg = os.path.join(ROOT, "scripts", "boot", "ota_config.gd")
+        lock = jload(os.path.join(ROOT, "ota", "runtime_lock.json"))
+        if not os.path.isfile(cfg):
+            notice("scripts/boot/ota_config.gd does not exist yet (native layer not merged): the committed lock is provisional")
+            self.assertTrue(lock.get("provisional"), "without the native layer the committed lock must say it is provisional")
+            self.assertEqual(tool("ota_runtime.py", "--check", base=TOOLS).returncode, 1, "a provisional lock never passes the gate")
+            return
+        r = tool("ota_runtime.py", "--check", base=TOOLS)
+        self.assertEqual(r.returncode, 0, "ota/runtime_lock.json is stale: run `python3 tools/ota_runtime.py --relock` (pre-release) or --bump\n" + out(r))
+        self.assertNotIn("provisional", lock)
 
 
 # ------------------------------------------------------------------------------------------------ classify
 
 class TestClassify(TmpCase):
-    def sh(self, *args):
-        env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-        r = run(["git", "-C", self.repo] + list(args), env=env)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        return r.stdout.strip()
-
-    def commit(self, msg="c"):
-        self.sh("add", "-A")
-        self.sh("-c", "commit.gpgsign=false", "commit", "-q", "-m", msg)
-        return self.sh("rev-parse", "HEAD")
+    FILES = {"project.godot": "a", "export_presets.cfg": "p", "VERSION": "7\n", "scripts/enemy.gd": "1", "scripts/boot/ota_core.gd": "c",
+             "scripts/boot/ota_config.gd": "k", "tools/android/build_apk.sh": "b", "scripts/save_manager.gd": "s", "docs/a.md": "d",
+             "data/x.json": "{}", "android/build.gradle": "g", ".github/workflows/ci.yml": CI_YML, "tests/t.gd": "t", "README.md": "r"}
 
     def setUp(self):
         super().setUp()
         self.repo = self.p("repo")
-        os.makedirs(self.repo)
-        self.sh("init", "-q")
-        for f, c in (("project.godot", "a"), ("VERSION", "5\n"), ("scripts/enemy.gd", "1"), ("scripts/ota/c.gd", "1"),
-                     ("scripts/save_manager.gd", "1"), ("data/buffs.json", "{}"), ("docs/a.md", "x"), ("README.md", "x"),
-                     ("scripts/old_name.gd", "old content that is long enough to be detected as a rename " * 5)):
+        for f, c in self.FILES.items():
             write(os.path.join(self.repo, f), c)
-        self.base = self.commit("base")
+        shutil.copytree(os.path.join(ROOT, "ota"), os.path.join(self.repo, "ota"), ignore=shutil.ignore_patterns("runtime_lock.json"))
+        self.git(self.repo, "init", "-q")
+        self.base = self.commit(self.repo, "base")
 
     def classify(self, *args):
-        return tool("classify.py", *args, cwd=self.repo)
+        return tool("classify.py", self.base, "HEAD", "--repo", self.repo, *args)
+
+    def paths(self):
+        j = json.loads(self.classify("--json").stdout)
+        return {e["path"]: e for e in j["entries"]}, j
+
+    def change(self, path, content="changed"):
+        write(os.path.join(self.repo, path), content)
+        self.commit(self.repo, "change " + path)
 
     def test_safe_change(self):
-        write(os.path.join(self.repo, "scripts/enemy.gd"), "2")
-        write(os.path.join(self.repo, "data/new.json"), "{}")
-        self.commit()
-        r = self.classify(self.base, "HEAD")
+        self.change("scripts/enemy.gd")
+        self.change("data/new.json", "{}")
+        r = self.classify()
         self.assertEqual(r.returncode, 0, out(r))
         self.assertIn("RESULT: OTA-safe", r.stdout)
-        self.assertIn("scripts/enemy.gd", r.stdout)
 
     def test_nothing_shipped(self):
-        write(os.path.join(self.repo, "docs/a.md"), "changed")
-        write(os.path.join(self.repo, "tests/t.gd"), "x")
-        write(os.path.join(self.repo, "tools/t.py"), "x")
-        self.commit()
-        r = self.classify(self.base)
+        self.change("docs/a.md")
+        self.change("tests/t.gd")
+        self.change(".github/workflows/other.yml", "x: 1\n")
+        self.change("README.md")
+        r = self.classify()
         self.assertEqual(r.returncode, 0, out(r))
         self.assertIn("nothing that ships changed", r.stdout)
 
-    def test_apk_required_lists_paths_and_rules(self):
-        write(os.path.join(self.repo, "project.godot"), "b")
-        write(os.path.join(self.repo, "scripts/enemy.gd"), "2")
-        self.commit()
-        r = self.classify(self.base)
-        self.assertEqual(r.returncode, 10, out(r))
-        self.assertIn("project.godot", r.stdout)
-        self.assertIn("exact project.godot", r.stdout)
-        self.assertIn("APK REQUIRED", r.stdout)
+    def test_every_native_input_is_apk_required_with_the_reason(self):
+        for path in ("project.godot", "export_presets.cfg", "scripts/boot/ota_core.gd", "scripts/boot/ota_config.gd", "scripts/boot/new_file.gd",
+                     "tools/android/build_apk.sh"):
+            with self.subTest(path=path):
+                self.git(self.repo, "reset", "-q", "--hard", self.base)
+                self.change(path, "different")
+                r = self.classify()
+                self.assertEqual(r.returncode, 10, out(r))
+                self.assertIn("runtime fingerprint would change", r.stdout)
+                self.assertIn(path, r.stdout)
+                self.assertIn("APK REQUIRED", r.stdout)
 
-    def test_apk_beats_guarded_and_accept_does_not_override(self):
-        write(os.path.join(self.repo, "VERSION"), "6\n")
-        write(os.path.join(self.repo, "scripts/save_manager.gd"), "2")
-        self.commit()
-        self.assertEqual(self.classify(self.base).returncode, 10)
-        self.assertEqual(self.classify(self.base, "HEAD", "--accept-guarded", "reason").returncode, 10)
+    def test_engine_version_bump_is_apk_required(self):
+        self.change(".github/workflows/ci.yml", CI_YML.replace("4.6-stable", "4.7-stable"))
+        r = self.classify()
+        self.assertEqual(r.returncode, 10, out(r))
+        self.assertIn("engine version 4.6 -> 4.7", r.stdout)
+        self.assertIn("runtime fingerprint would change", r.stdout)
+
+    def test_other_ci_edits_are_not_shipped(self):
+        self.change(".github/workflows/ci.yml", CI_YML + "# a comment\njobs: {}\n")
+        self.assertEqual(self.classify().returncode, 0)
+
+    def test_protected_and_boundary_edits(self):
+        for path in ("VERSION", "android/build.gradle", "ota/boundary.json", "ota/runtime_lock.json", "libx/y.gdextension"):
+            with self.subTest(path=path):
+                self.git(self.repo, "reset", "-q", "--hard", self.base)
+                self.change(path, "9\n")
+                r = self.classify()
+                self.assertEqual(r.returncode, 10, out(r))
+                self.assertIn(path, r.stdout)
+
+    def test_the_head_cannot_weaken_its_own_gate(self):
+        """The boundary of the BASE decides: a commit that deletes a protection and the protected file together is still refused."""
+        b = jload(os.path.join(self.repo, "ota", "boundary.json"))
+        b["native_inputs"] = ["export_presets.cfg"]
+        b["payload_protected"]["prefixes"] = ["android/"]
+        write(os.path.join(self.repo, "ota", "boundary.json"), json.dumps(b))
+        self.change("scripts/boot/ota_core.gd", "different")
+        r = self.classify()
+        self.assertEqual(r.returncode, 10, out(r))
+        self.assertIn("ota/boundary.json", r.stdout)
+        self.assertIn("scripts/boot/ota_core.gd", r.stdout)
+        self.assertIn("base", json.loads(self.classify("--json").stdout)["boundary"])
+
+    def test_base_without_a_boundary_uses_the_working_tree_file(self):
+        self.git(self.repo, "rm", "-q", "-r", "ota")
+        self.base = self.commit(self.repo, "no boundary at the base")
+        self.change("scripts/enemy.gd")
+        r = self.classify()
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertIn("working tree", json.loads(self.classify("--json").stdout)["boundary"])
 
     def test_guarded(self):
-        write(os.path.join(self.repo, "scripts/save_manager.gd"), "2")
-        self.commit()
-        r = self.classify(self.base)
+        self.change("scripts/save_manager.gd")
+        r = self.classify()
         self.assertEqual(r.returncode, 11, out(r))
-        self.assertIn("scripts/save_manager.gd", r.stdout)
-        r = self.classify(self.base, "HEAD", "--accept-guarded", "stays readable")
+        self.assertIn("--accept-guarded", r.stdout)
+        r = self.classify("--accept-guarded", "schema unchanged")
         self.assertEqual(r.returncode, 0, out(r))
-        self.assertIn("stays readable", r.stdout)
-        self.assertEqual(self.classify(self.base, "HEAD", "--accept-guarded", "  ").returncode, 11, "blank reason must not count")
+        self.assertIn("guarded paths accepted: schema unchanged", r.stdout)
+        self.change("project.godot")
+        r = self.classify("--accept-guarded", "x")
+        self.assertEqual(r.returncode, 10, "APK-required beats an accepted guard")
 
-    def test_delete_of_protected_file(self):
-        os.remove(os.path.join(self.repo, "scripts/ota/c.gd"))
-        self.commit()
-        r = self.classify(self.base)
+    def test_delete_and_rename(self):
+        os.remove(os.path.join(self.repo, "scripts", "boot", "ota_core.gd"))
+        self.commit(self.repo, "delete native")
+        r = self.classify()
         self.assertEqual(r.returncode, 10, out(r))
-        self.assertIn("scripts/ota/c.gd", r.stdout)
+        self.assertIn("D  scripts/boot/ota_core.gd", r.stdout)
+        self.git(self.repo, "reset", "-q", "--hard", self.base)
+        self.git(self.repo, "mv", "scripts/boot/ota_core.gd", "scripts/core_moved.gd")
+        self.commit(self.repo, "rename out of the native dir")
+        paths, j = self.paths()
+        self.assertEqual(j["exit_code"], 10)
+        self.assertEqual(paths["scripts/boot/ota_core.gd"]["category"], "apk_required", "the OLD name disappears from the native layer")
+        self.assertEqual(paths["scripts/core_moved.gd"]["category"], "safe")
+        self.git(self.repo, "reset", "-q", "--hard", self.base)
+        self.git(self.repo, "mv", "scripts/enemy.gd", "scripts/enemy2.gd")
+        os.remove(os.path.join(self.repo, "data", "x.json"))
+        self.commit(self.repo, "safe rename + delete")
+        self.assertEqual(self.classify().returncode, 0)
 
-    def test_rename_out_of_protected_dir_counts_both_sides(self):
-        self.sh("mv", "scripts/ota/c.gd", "scripts/c.gd")
-        self.commit()
-        r = self.classify(self.base, "--json")
-        self.assertEqual(r.returncode, 10, out(r))
-        data = json.loads(r.stdout)
-        paths = {e["path"]: e for e in data["entries"]}
-        self.assertEqual(paths["scripts/ota/c.gd"]["category"], "apk_required")
-        self.assertEqual(paths["scripts/c.gd"]["category"], "safe")
-        self.assertEqual(paths["scripts/c.gd"]["old_path"], "scripts/ota/c.gd")
-
-    def test_safe_rename_and_delete(self):
-        self.sh("mv", "scripts/old_name.gd", "scripts/new_name.gd")
-        os.remove(os.path.join(self.repo, "data/buffs.json"))
-        self.commit()
-        r = self.classify(self.base, "--json")
-        self.assertEqual(r.returncode, 0, out(r))
-        data = json.loads(r.stdout)
-        self.assertEqual(data["result"], "ota_safe")
-        self.assertEqual({e["path"] for e in data["entries"]}, {"scripts/old_name.gd", "scripts/new_name.gd", "data/buffs.json"})
-
-    def test_json_output_and_bad_ref(self):
-        r = self.classify(self.base, "--json")
-        data = json.loads(r.stdout)
-        self.assertEqual((data["exit_code"], data["result"], data["entries"]), (0, "nothing_shipped_changed", []))
-        r = self.classify("no-such-ref")
+    def test_json_output_and_errors(self):
+        self.change("scripts/enemy.gd")
+        paths, j = self.paths()
+        self.assertEqual((j["result"], j["exit_code"], j["counts"]["safe"]), ("ota_safe", 0, 1))
+        self.assertEqual(j["base_sha"], self.base)
+        r = tool("classify.py", "no-such-ref", "HEAD", "--repo", self.repo)
         self.assertEqual(r.returncode, 2)
         self.assertIn("cannot resolve", r.stderr)
 
@@ -329,12 +640,6 @@ class TestPck(TmpCase):
         self.assertIn("data/probe.json", base.by_path)
         self.assertNotIn("data/new.json", base.by_path)
 
-    def test_samples_outside_the_repo_are_the_same_files(self):
-        for name in ("sample_base.pck", "sample_patch.pck"):
-            ext = os.path.join("/tmp/claude-0", name)
-            if os.path.isfile(ext):
-                self.assertEqual(rb(ext), rb(self.fx(name)), name)
-
     def test_removal_sample(self):
         patch, base = pcklib.read_pck(self.fx("remove_patch.pck")), pcklib.read_pck(self.fx("remove_base.pck"))
         self.assertEqual(pcklib.ops(patch, base), [("data/new.json", "add"), ("data/probe.json", "remove")])
@@ -342,7 +647,6 @@ class TestPck(TmpCase):
         self.assertTrue(rm.removal)
         self.assertEqual((rm.size, rm.md5, rm.flags), (0, "0" * 32, 2))
         self.assertEqual(pcklib.verify_entries(patch), [])
-        # a removal of a path the base does not hold is a patch for another base
         other_base = pcklib.read_pck(pck_of(self.p("other_base.pck"), {"a": b"1"}))
         with self.assertRaises(pcklib.PckError):
             pcklib.ops(patch, other_base)
@@ -433,7 +737,7 @@ name="Windows Desktop"
 platform="Windows Desktop"
 runnable=true
 export_filter="all_resources"
-include_filter="build_info.json, ota_trust.pem"
+include_filter="build_info.json"
 exclude_filter=""
 export_path="out/x.exe"
 patch_delta_include_filters="*"
@@ -466,613 +770,92 @@ def export_pack(g, proj, name, patch=None, preset="Windows Desktop"):
         raise AssertionError("godot export failed:\n" + r.stdout[-800:] + r.stderr[-800:])
 
 
-# ------------------------------------------------------------------------------------------------ bundles
+# ------------------------------------------------------------------------------------------------ payload_check
 
-class BundleBase(TmpCase):
-    @classmethod
-    def setUpClass(cls):
-        cls._keys = tempfile.mkdtemp(prefix="ota-keys-")
-        cls.key = os.path.join(cls._keys, "a.pem")
-        cls.pub = genkey(cls.key)
-        cls.key_b = os.path.join(cls._keys, "b.pem")
-        cls.pub_b = genkey(cls.key_b)
+class TestPayloadCheck(TmpCase):
+    BASE = {"scripts/a.gdc": b"A1", "scripts/b.gdc": b"B1", "data/c.json": b"C1", "project.binary": b"PB", "scripts/boot/ota_core.gdc": b"CORE",
+            "scripts/save_manager.gdc": b"S1", "godot/imported/t.ctex": b"IMG"}
 
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls._keys, True)
+    def setUp(self):
+        super().setUp()
+        self.rules = otalib.load_boundary()
+        self.base = pck_of(self.p("base.pck"), self.BASE)
 
-    BASE_FILES = {"scripts/a.gdc": b"A1", "scripts/b.gdc": b"B1", "data/c.json": b"C1", "project.binary": b"PB",
-                  "ota_trust.pem": b"T", "scripts/save_manager.gdc": b"S1"}
+    def check(self, files, accept="", rules=None):
+        patch = pck_of(self.p("patch.pck"), files)
+        return payload_check.check(patch, self.base, rules or self.rules, accept)
 
-    def packs(self, patch_files=None, name=""):
-        base = pck_of(self.p(name + "base.pck"), self.BASE_FILES)
-        patch = pck_of(self.p(name + "patch.pck"), patch_files if patch_files is not None else
-                       {"scripts/a.gdc": b"A2", "data/d.json": b"D1", "scripts/b.gdc": None})
-        return base, patch
-
-    def bundle_args(self, patch, base, out_dir, seq=1, key=None, **over):
-        a = {"platform": "windows", "native_version": 5, "base_commit": BASE40, "engine": ENGINE, "seq": seq,
-             "source_commit": SRC40, "payload": patch, "base_pck": base, "out": out_dir, "key": key or self.key,
-             "created_utc": T0}
-        a.update(over)
-        args = []
-        for k, v in a.items():
-            if v is not None:
-                args += ["--" + k.replace("_", "-"), str(v)]
-        return args
-
-    def make(self, patch, base, out_dir, **kw):
-        return tool("make_bundle.py", *self.bundle_args(patch, base, out_dir, **kw))
-
-    def build(self, out_dir=None, seq=1, patch_files=None, **kw):
-        out_dir = out_dir or self.p("chan")
-        base, patch = self.packs(patch_files, name=f"s{seq}-")
-        r = self.make(patch, base, out_dir, seq=seq, **kw)
-        self.assertEqual(r.returncode, 0, out(r))
-        self.base_pck = base
-        return r.stdout.strip()
-
-    def verify(self, path, *extra, pub=None):
-        return tool("verify_bundle.py", path, "--pubkey", pub or self.pub, *extra)
-
-    def good_expect(self):
-        return ["--native-version", "5", "--platform", "windows", "--base-commit", BASE40, "--engine", ENGINE]
-
-    def copy_bundle(self, src, name="tampered"):
-        dst = self.p(name)
-        shutil.copytree(src, dst)
-        return dst
-
-    def forge(self, dest, manifest_edit=None, files=None, base_files=None, key=None, patch_files=None):
-        """A bundle NOT produced by make_bundle: any manifest content, signed with a real key, so the verifier's own
-        checks (not the builder's refusals) are what is under test."""
-        base, patch = self.packs(patch_files)
-        os.makedirs(dest)
-        m = {"format": 1, "product": "purgatory-dungeon", "platform": "windows", "native_version": 5,
-             "base_commit": BASE40, "engine": ENGINE, "ota_api": 1, "payload_seq": 1,
-             "label": "Purgatory Dungeon v5 update 1", "source_commit": SRC40, "created_utc": T0,
-             "payload": {"file": "payload.pck", "size": os.path.getsize(patch), "sha256": otalib.sha256_file(patch)},
-             "files": files if files is not None else [{"path": "data/d.json", "op": "add"}, {"path": "scripts/a.gdc", "op": "replace"},
-                                                       {"path": "scripts/b.gdc", "op": "remove"}]}
-        if manifest_edit:
-            manifest_edit(m)
-        shutil.copyfile(patch, os.path.join(dest, "payload.pck"))
-        write(os.path.join(dest, "manifest.json"), otalib.canonical_json(m))
-        otalib.sign_to_file(key or self.key, os.path.join(dest, "manifest.json"), os.path.join(dest, "manifest.sig"))
-        return dest
-
-
-class TestBundleRoundTrip(BundleBase):
-    def test_round_trip_and_format(self):
-        d = self.build()
-        self.assertTrue(d.endswith("v5/windows/update-1"))
-        self.assertEqual(sorted(os.listdir(d)), ["manifest.json", "manifest.sig", "payload.pck"])
-        raw = rb(os.path.join(d, "manifest.json"))
-        m = json.loads(raw)
-        self.assertEqual(raw, (json.dumps(m, sort_keys=True, indent=2) + "\n").encode(), "deterministic JSON")
-        self.assertEqual(m["format"], 1)
-        self.assertEqual(m["product"], "purgatory-dungeon")
-        self.assertEqual((m["platform"], m["native_version"], m["base_commit"], m["engine"], m["ota_api"], m["payload_seq"]),
-                         ("windows", 5, BASE40, ENGINE, 1, 1))
-        self.assertEqual(m["label"], "Purgatory Dungeon v5 update 1")
-        self.assertEqual((m["source_commit"], m["created_utc"]), (SRC40, T0))
-        self.assertEqual(m["files"], [{"op": "add", "path": "data/d.json"}, {"op": "replace", "path": "scripts/a.gdc"},
-                                      {"op": "remove", "path": "scripts/b.gdc"}])
-        payload = os.path.join(d, "payload.pck")
-        self.assertEqual(m["payload"], {"file": "payload.pck", "size": os.path.getsize(payload), "sha256": otalib.sha256_file(payload)})
-        # the signature, checked with the openssl CLI directly (not through otalib)
-        sig = base64.b64decode(rb(os.path.join(d, "manifest.sig")), validate=True)
-        write(self.p("sig.bin"), sig)
-        r = run(["openssl", "dgst", "-sha256", "-verify", self.pub, "-signature", self.p("sig.bin"), os.path.join(d, "manifest.json")])
-        self.assertEqual(r.returncode, 0, out(r))
-        self.assertEqual(len(sig), 3072 // 8)
-        # and it is PKCS#1 v1.5 with SHA-256: the recovered block is exactly the DigestInfo of sha256(manifest.json)
-        r = subprocess.run(["openssl", "pkeyutl", "-verifyrecover", "-pubin", "-inkey", self.pub, "-in", self.p("sig.bin"),
-                            "-pkeyopt", "rsa_padding_mode:pkcs1"], capture_output=True)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout, bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(raw).digest())
-
-    def test_same_inputs_same_bytes(self):
-        a = self.build(self.p("o1"))
-        base, patch = self.packs(name="s1-")
-        self.assertEqual(self.make(patch, base, self.p("o2")).returncode, 0)
-        for f in ("manifest.json", "manifest.sig", "payload.pck"):
-            self.assertEqual(rb(os.path.join(a, f)), rb(self.p("o2", "v5", "windows", "update-1", f)), f)
-
-    def test_verify_update_and_channel(self):
-        d = self.build()
-        r = self.verify(d, *self.good_expect(), "--base-pck", self.base_pck, "--accept-guarded")
-        self.assertEqual(r.returncode, 0, out(r))
-        self.assertIn("BUNDLE OK", r.stdout)
-        self.assertIn("ops checked against the base pack", r.stdout)
-        chan = self.p("chan")
-        r = tool("channel.py", "merge", "--out", chan, "--key", self.key, "--generated-utc", T0)
-        self.assertEqual(r.returncode, 0, out(r))
-        ch = json.loads(rt(os.path.join(chan, "channel.json")))
-        self.assertEqual(ch["generation"], 1)
-        self.assertEqual(ch["updates"], [{"native_version": 5, "platform": "windows", "base_commit": BASE40, "seq": 1,
-                                          "manifest": "v5/windows/update-1/manifest.json",
-                                          "signature": "v5/windows/update-1/manifest.sig",
-                                          "payload": "v5/windows/update-1/payload.pck"}])
-        self.assertEqual(ch["revoked"], [])
-        raw = rb(os.path.join(chan, "channel.json"))
-        self.assertEqual(raw, (json.dumps(ch, sort_keys=True, indent=2) + "\n").encode())
-        r = self.verify(chan, *self.good_expect(), "--base-pck", f"windows={self.base_pck}")
-        self.assertEqual(r.returncode, 0, out(r))
-
-    def test_real_godot_samples_round_trip(self):
-        out_dir = self.p("real")
-        r = self.make(os.path.join(FIX, "sample_patch.pck"), os.path.join(FIX, "sample_base.pck"), out_dir)
-        self.assertEqual(r.returncode, 0, out(r))
-        m = jload(os.path.join(out_dir, "v5", "windows", "update-1", "manifest.json"))
-        self.assertEqual([(f["path"], f["op"]) for f in m["files"]],
-                         [("data/new.json", "add"), ("data/probe.json", "replace"), ("later.gdc", "replace")])
-        r = self.verify(r.stdout.strip(), *self.good_expect(), "--base-pck", os.path.join(FIX, "sample_base.pck"))
-        self.assertEqual(r.returncode, 0, out(r))
-        out2 = self.p("real2")
-        r = self.make(os.path.join(FIX, "remove_patch.pck"), os.path.join(FIX, "remove_base.pck"), out2)
-        self.assertEqual(r.returncode, 0, out(r))
-        m = jload(os.path.join(out2, "v5", "windows", "update-1", "manifest.json"))
-        self.assertEqual([(f["path"], f["op"]) for f in m["files"]], [("data/new.json", "add"), ("data/probe.json", "remove")])
-
-    def test_android_platform(self):
-        base, patch = self.packs()
-        r = self.make(patch, base, self.p("an"), platform="android")
-        self.assertEqual(r.returncode, 0, out(r))
-        self.assertTrue(r.stdout.strip().endswith("v5/android/update-1"))
-        self.assertEqual(self.verify(r.stdout.strip(), "--platform", "android").returncode, 0)
-        self.assertEqual(self.verify(r.stdout.strip(), "--platform", "windows").returncode, 1)
-
-
-class TestBundleRefusals(BundleBase):
     def refused(self, files, needle, **kw):
-        base, patch = self.packs(files)
-        out_dir = self.p("refuse-" + needle.replace(" ", "_")[:20])
-        r = self.make(patch, base, out_dir, **kw)
-        self.assertEqual(r.returncode, 1, out(r))
-        self.assertIn(needle, r.stderr)
-        self.assertFalse(os.path.exists(os.path.join(out_dir, "v5")), "nothing may be written when refusing")
-        return r
+        with self.assertRaises(otalib.OtaError) as cm:
+            self.check(files, **kw)
+        self.assertIn(needle, str(cm.exception))
 
-    def test_protected_paths_in_the_pack(self):
-        for path in ("project.binary", "scripts/ota/client.gdc", "scripts/ota/client.gd.remap", "ota_trust.pem",
-                     "build_info.json", "addons/x/lib.so", "addons/x/x.gdextension", "export_presets.cfg"):
-            self.refused({path: b"x"}, "protected path")
+    def test_ok_ops_and_report(self):
+        files, report = self.check({"scripts/a.gdc": b"A2", "data/d.json": b"D1", "scripts/b.gdc": None})
+        self.assertEqual(files, [{"path": "data/d.json", "op": "add"}, {"path": "scripts/a.gdc", "op": "replace"},
+                                 {"path": "scripts/b.gdc", "op": "remove"}])
+        self.assertEqual(report["ops"], {"add": 1, "replace": 1, "remove": 1})
+        self.assertEqual(report["file_count"], 3)
+        self.assertFalse(report["git_host_guard_exceeded"])
+        self.assertEqual(report["payload_sha256"], otalib.sha256_file(self.p("patch.pck")))
 
-    def test_removing_a_protected_path_is_refused_too(self):
-        self.refused({"project.binary": None}, "protected path")
+    def test_protected_paths_are_refused_including_removals(self):
+        for path in ("project.binary", "scripts/boot/ota_core.gdc", "scripts/boot/new.gdc", "build_info.json", "VERSION", "lib/x.so",
+                     "addons/x.gdextension", "android/x"):
+            self.refused({path: b"x", "scripts/a.gdc": b"A2"}, "cannot ship over the air")
+        self.refused({"project.binary": None}, "project.binary")
+        self.refused({"scripts/boot/ota_core.gdc": None}, "scripts/boot/ota_core.gdc")
 
     def test_escaping_paths(self):
-        for path in ("../evil.gdc", "/abs/x", "user://x", "a/../b"):
-            self.refused({path: b"x"}, "escape path")
+        for path in ("../evil", "/abs/x", "user://x", "a//b"):
+            self.refused({path: b"x"}, path)
 
     def test_guarded_needs_a_reason(self):
         self.refused({"scripts/save_manager.gdc": b"S2"}, "--accept-guarded")
-        base, patch = self.packs({"scripts/save_manager.gdc": b"S2"})
-        r = self.make(patch, base, self.p("g"), accept_guarded="save format unchanged")
-        self.assertEqual(r.returncode, 0, out(r))
-        bad = self.verify(r.stdout.strip())
-        self.assertEqual(bad.returncode, 1)
-        self.assertIn("guarded", bad.stdout)
-        self.assertEqual(self.verify(r.stdout.strip(), "--accept-guarded").returncode, 0)
+        files, report = self.check({"scripts/save_manager.gdc": b"S2"}, accept="format unchanged")
+        self.assertEqual(report["guarded_accepted"], "format unchanged")
 
-    def test_delta_and_empty_payloads(self):
-        r = self.make(os.path.join(FIX, "delta_patch.pck"), os.path.join(FIX, "delta_base.pck"), self.p("d"))
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("delta", r.stderr)
-        base, _ = self.packs()
-        empty = write(self.p("empty.pck"), make_pck([]))
-        r = self.make(empty, base, self.p("e"))
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("no files", r.stderr)
+    def test_empty_delta_and_missing_base_entries(self):
+        self.refused({}, "empty")
+        patch = write(self.p("delta.pck"), make_pck([("scripts/a.gdc", b"x", pcklib.FILE_DELTA)]))
+        with self.assertRaises(otalib.OtaError) as cm:
+            payload_check.check(patch, self.base, self.rules)
+        self.assertIn("DELTA", str(cm.exception))
+        self.refused({"nope.gdc": None}, "does not contain")
 
-    def test_removal_of_a_file_the_base_lacks(self):
-        self.refused({"data/never_existed.json": None}, "base pack does not contain")
-
-    def test_corrupt_payload_is_refused(self):
-        base, patch = self.packs()
+    def test_corrupt_pack(self):
+        patch = pck_of(self.p("patch.pck"), {"scripts/a.gdc": b"A2"})
         raw = bytearray(rb(patch))
-        raw[0x70] ^= 1
+        raw[0x70] ^= 0xFF
         write(patch, bytes(raw))
-        r = self.make(patch, base, self.p("c"))
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("inconsistent", r.stderr)
+        with self.assertRaises(otalib.OtaError) as cm:
+            payload_check.check(patch, self.base, self.rules)
+        self.assertIn("md5", str(cm.exception))
+        with self.assertRaises(otalib.OtaError):
+            payload_check.check(write(self.p("junk.pck"), b"nope"), self.base, self.rules)
 
-    def test_oversized_payload(self):
-        base, _ = self.packs()
-        big = self.p("big.pck")
-        with open(big, "wb") as f:
-            f.truncate(512 * 1024 * 1024 + 1)
-        r = self.make(big, base, self.p("o"))
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("limit", r.stderr)
-        self.assertFalse(os.path.exists(self.p("o", "v5")))
+    def test_size_limit_and_git_host_guard(self):
+        small = dict(self.rules, max_payload_bytes=1000, warn_payload_bytes=300)
+        _, report = self.check({"data/big.json": os.urandom(400)}, rules=small)
+        self.assertTrue(report["git_host_guard_exceeded"], "over the 95 MiB guard (here 300 B) is flagged but allowed")
+        self.refused({"data/big.json": os.urandom(2000)}, "byte limit", rules=small)
 
-    def test_bad_inputs(self):
-        base, patch = self.packs()
-        for over, needle in ((dict(base_commit="abc"), "base commit"), (dict(source_commit="G" * 40), "source commit"),
-                             (dict(platform="linux"), "platform"), (dict(seq=0), "seq"), (dict(native_version=0), "native version"),
-                             (dict(engine="x"), "engine"), (dict(created_utc="yesterday"), "created-utc"),
-                             (dict(engine="3.5.stable.official.abcdef"), "exported by Godot")):
-            r = self.make(patch, base, self.p("bad"), **over)
-            self.assertEqual(r.returncode, 1, over)
-            self.assertIn(needle, r.stderr, over)
-
-    def test_weak_or_wrong_keys(self):
-        base, patch = self.packs()
-        weak = self.p("weak.pem")
-        genkey(weak, 2048)
-        r = self.make(patch, base, self.p("w"), key=weak)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("RSA-2048", r.stderr)
-        ec = self.p("ec.pem")
-        subprocess.run(["openssl", "ecparam", "-genkey", "-name", "prime256v1", "-noout", "-out", ec], check=True, capture_output=True)
-        r = self.make(patch, base, self.p("w2"), key=ec)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("RSA", r.stderr)
-        r = self.make(patch, base, self.p("w3"), key=self.p("missing.pem"))
-        self.assertEqual(r.returncode, 1)
-
-    def test_duplicate_and_lower_seq(self):
-        chan = self.p("chan")
-        self.build(chan, seq=2)
-        base, patch = self.packs(name="s2-")
-        for seq in (2, 1):
-            r = self.make(patch, base, chan, seq=seq)
-            self.assertEqual(r.returncode, 1, f"seq {seq}")
-            self.assertIn("not higher", r.stderr)
-        r = self.make(patch, base, chan, seq=3)
+    def test_cli(self):
+        patch = pck_of(self.p("patch.pck"), {"scripts/a.gdc": b"A2"})
+        r = tool("payload_check.py", patch, "--base", self.base, "--files-out", self.p("files.json"), "--report-out", self.p("rep.json"))
         self.assertEqual(r.returncode, 0, out(r))
-        self.assertTrue(os.path.isdir(os.path.join(chan, "v5", "windows", "update-2")), "update-2 must survive untouched")
-
-    def test_seq_check_also_uses_channel_json(self):
-        chan = self.p("chan")
-        self.build(chan, seq=1)
-        self.assertEqual(tool("channel.py", "merge", "--out", chan, "--key", self.key).returncode, 0)
-        shutil.rmtree(os.path.join(chan, "v5", "windows", "update-1"))     # folder gone, index still lists it
-        base, patch = self.packs(name="s1-")
-        r = self.make(patch, base, chan, seq=1)
+        self.assertEqual(jload(self.p("files.json")), [{"op": "replace", "path": "scripts/a.gdc"}])
+        self.assertEqual(jload(self.p("rep.json"))["file_count"], 1)
+        bad = pck_of(self.p("bad.pck"), {"project.binary": b"x"})
+        r = tool("payload_check.py", bad, "--base", self.base, "--files-out", self.p("f2.json"))
         self.assertEqual(r.returncode, 1)
-        self.assertIn("not higher", r.stderr)
-
-    def test_other_base_commit_in_the_same_native_build(self):
-        chan = self.p("chan")
-        self.build(chan, seq=1)
-        base, patch = self.packs(name="s1-")
-        r = self.make(patch, base, chan, seq=2, base_commit=OTHER40)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("another base commit", r.stderr)
-
-
-class TestVerifyTampering(BundleBase):
-    def setUp(self):
-        super().setUp()
-        self.d = self.build()
-        self.expect = self.good_expect()
-
-    def assertRejected(self, path, needle, *extra, pub=None):
-        r = self.verify(path, *extra, pub=pub)
-        self.assertEqual(r.returncode, 1, out(r))
-        self.assertIn("BUNDLE REJECTED", r.stdout)
-        self.assertIn(needle, r.stdout, out(r))
-
-    def test_baseline_is_clean(self):
-        self.assertEqual(self.verify(self.d, *self.expect, "--base-pck", self.base_pck).returncode, 0)
-
-    def test_flipped_payload_byte(self):
-        t = self.copy_bundle(self.d)
-        pp = os.path.join(t, "payload.pck")
-        raw = bytearray(rb(pp))
-        raw[0x71] ^= 0x01
-        write(pp, bytes(raw))
-        self.assertRejected(t, "sha256 does not match")
-
-    def test_truncated_and_extended_payload(self):
-        for how in ("truncate", "extend"):
-            t = self.copy_bundle(self.d, how)
-            pp = os.path.join(t, "payload.pck")
-            raw = rb(pp)
-            write(pp, raw[:-10] if how == "truncate" else raw + b"\0" * 10)
-            self.assertRejected(t, "payload.size")
-
-    def test_flipped_manifest_byte(self):
-        t = self.copy_bundle(self.d)
-        mp = os.path.join(t, "manifest.json")
-        raw = rb(mp)
-        self.assertIn(b"1111", raw)
-        write(mp, raw.replace(b"1111", b"1112", 1))
-        self.assertRejected(t, "signature does NOT verify")
-
-    def test_flipped_signature_byte(self):
-        t = self.copy_bundle(self.d)
-        sp = os.path.join(t, "manifest.sig")
-        sig = bytearray(base64.b64decode(rb(sp)))
-        sig[10] ^= 1
-        write(sp, base64.b64encode(bytes(sig)))
-        self.assertRejected(t, "signature does NOT verify")
-        write(sp, b"not base64 !!")
-        self.assertRejected(t, "base64")
-
-    def test_missing_files(self):
-        for name in ("manifest.json", "manifest.sig", "payload.pck"):
-            t = self.copy_bundle(self.d, "m-" + name)
-            os.remove(os.path.join(t, name))
-            self.assertRejected(t, "missing")
-
-    def test_wrong_key(self):
-        self.assertRejected(self.d, "signature does NOT verify", pub=self.pub_b)
-        forged = self.forge(self.p("forged-b"), key=self.key_b)
-        self.assertRejected(forged, "signature does NOT verify")
-        self.assertEqual(self.verify(forged, pub=self.pub_b).returncode, 0, "the forgery is fine for its own key")
-
-    def test_compat_expectations(self):
-        for flag, val, needle in (("--base-commit", OTHER40, "base commit"), ("--platform", "android", "platform"),
-                                  ("--native-version", "6", "native version"), ("--engine", "4.7.stable.official.deadbeef", "engine"),
-                                  ("--ota-api", "2", "ota_api")):
-            self.assertRejected(self.d, needle, flag, val)
-
-    def test_protected_path_forged_into_a_signed_pack(self):
-        for path in ("project.binary", "scripts/ota/x.gdc", "ota_trust.pem"):
-            files = {"data/ok.json": b"1", path: b"evil"}
-            d = self.forge(self.p("forge-" + path.replace("/", "_")), patch_files=files,
-                           files=[{"path": "data/ok.json", "op": "add"}, {"path": path, "op": "replace" if path in self.BASE_FILES else "add"}])
-            self.assertRejected(d, "protected path")
-
-    def test_escaping_path_forged(self):
-        d = self.forge(self.p("forge-esc"), patch_files={"../x.gdc": b"1"}, files=[{"path": "../x.gdc", "op": "add"}])
-        self.assertRejected(d, "escape path")
-
-    def test_manifest_lists_protected_path_that_pack_lacks(self):
-        d = self.forge(self.p("forge-lie"), files=[{"path": "data/d.json", "op": "add"}, {"path": "scripts/a.gdc", "op": "replace"},
-                                                    {"path": "scripts/b.gdc", "op": "remove"}, {"path": "project.godot", "op": "replace"}])
-        self.assertRejected(d, "protected path")
-        self.assertRejected(d, "files[] and the pack directory differ")
-
-    def test_files_vs_pack_directory(self):
-        d = self.forge(self.p("forge-files"), files=[{"path": "data/d.json", "op": "add"}])
-        self.assertRejected(d, "files[] and the pack directory differ")
-
-    def test_wrong_ops(self):
-        d = self.forge(self.p("forge-ops"), files=[{"path": "data/d.json", "op": "replace"}, {"path": "scripts/a.gdc", "op": "add"},
-                                                   {"path": "scripts/b.gdc", "op": "remove"}])
-        self.assertEqual(self.verify(d).returncode, 0, "without a base pack add/replace cannot be judged")
-        self.assertRejected(d, "against the base pack it is 'add'", "--base-pck", self.base_pck)
-        d = self.forge(self.p("forge-rm"), files=[{"path": "data/d.json", "op": "add"}, {"path": "scripts/a.gdc", "op": "remove"},
-                                                  {"path": "scripts/b.gdc", "op": "remove"}])
-        self.assertRejected(d, "disagrees with the pack's removal flag")
-
-    def test_duplicate_paths_and_extra_keys(self):
-        d = self.forge(self.p("forge-dup"), files=[{"path": "data/d.json", "op": "add"}, {"path": "data/d.json", "op": "add"}])
-        self.assertRejected(d, "duplicate")
-        d = self.forge(self.p("forge-extra"), manifest_edit=lambda m: m.update({"surprise": 1}))
-        self.assertRejected(d, "manifest keys differ")
-        d = self.forge(self.p("forge-fmt"), manifest_edit=lambda m: m.update({"format": 2}))
-        self.assertRejected(d, "format must be 1")
-        d = self.forge(self.p("forge-label"), manifest_edit=lambda m: m.update({"label": "Purgatory Dungeon vNext"}))
-        self.assertRejected(d, "label")
-
-    def test_oversized_payload_is_rejected_without_hashing(self):
-        d = self.forge(self.p("forge-big"))
-        with open(os.path.join(d, "payload.pck"), "wb") as f:
-            f.truncate(512 * 1024 * 1024 + 1)
-
-        def grow(m):
-            m["payload"]["size"] = 512 * 1024 * 1024 + 1
-        shutil.rmtree(d)
-        d = self.forge(self.p("forge-big2"), manifest_edit=grow)
-        with open(os.path.join(d, "payload.pck"), "wb") as f:
-            f.truncate(512 * 1024 * 1024 + 1)
-        self.assertRejected(d, "over the")
-
-    def test_folder_must_match_manifest(self):
-        wrong = self.p("v5", "windows", "update-9")
-        shutil.copytree(self.d, wrong)
-        self.assertRejected(wrong, "does not match the manifest")
-
-    def test_trust_key_must_be_rsa(self):
-        ec = self.p("ec.pem")
-        subprocess.run(["openssl", "ecparam", "-genkey", "-name", "prime256v1", "-noout", "-out", ec], check=True, capture_output=True)
-        ecpub = self.p("ecpub.pem")
-        subprocess.run(["openssl", "pkey", "-in", ec, "-pubout", "-out", ecpub], check=True, capture_output=True)
-        r = self.verify(self.d, pub=ecpub)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("RSA", out(r))
-
-    def test_not_a_bundle(self):
-        r = self.verify(self.tmp)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("neither an update folder", r.stdout)
-
-
-class TestChannel(BundleBase):
-    def merge(self, chan, key=None, *extra):
-        return tool("channel.py", "merge", "--out", chan, "--key", key or self.key, *extra)
-
-    def gen(self, chan):
-        return jload(os.path.join(chan, "channel.json"))["generation"]
-
-    def test_generation_is_monotonic_and_idempotent(self):
-        chan = self.p("chan")
-        self.build(chan, seq=1)
-        self.assertEqual(self.merge(chan).returncode, 0)
-        self.assertEqual(self.gen(chan), 1)
-        r = self.merge(chan)
-        self.assertIn("unchanged", r.stdout)
-        self.assertEqual(self.gen(chan), 1, "no change, no new generation")
-        self.build(chan, seq=2)
-        self.assertEqual(self.merge(chan).returncode, 0)
-        self.assertEqual(self.gen(chan), 2)
-        ch = jload(os.path.join(chan, "channel.json"))
-        self.assertEqual([u["seq"] for u in ch["updates"]], [1, 2])
-        self.assertEqual(self.verify(chan, *self.good_expect()).returncode, 0)
-
-    def test_revoke(self):
-        chan = self.p("chan")
-        self.build(chan, seq=1)
-        self.build(chan, seq=2)
-        self.merge(chan)
-        args = ("revoke", "--out", chan, "--key", self.key, "--native-version", "5", "--platform", "windows", "--base-commit", BASE40)
-        r = tool("channel.py", *args, "--seq", "2", "--generated-utc", T0)
-        self.assertEqual(r.returncode, 0, out(r))
-        ch = jload(os.path.join(chan, "channel.json"))
-        self.assertEqual(ch["generation"], 2)
-        self.assertEqual(ch["revoked"], [{"native_version": 5, "platform": "windows", "base_commit": BASE40, "seq": 2}])
-        self.assertEqual(len(ch["updates"]), 2, "the update stays listed")
-        self.assertEqual(self.verify(chan).returncode, 0)
-        self.assertIn("already revoked", tool("channel.py", *args, "--seq", "2").stdout)
-        self.assertEqual(self.gen(chan), 2)
-        r = tool("channel.py", *args, "--seq", "7")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("not listed", r.stderr)
-        # a later merge keeps the revocation and bumps the generation
-        self.build(chan, seq=3)
-        self.merge(chan)
-        ch = jload(os.path.join(chan, "channel.json"))
-        self.assertEqual((ch["generation"], len(ch["revoked"])), (3, 1))
-
-    def test_signature_matches_exact_bytes(self):
-        chan = self.p("chan")
-        self.build(chan)
-        self.merge(chan)
-        sig = base64.b64decode(rb(os.path.join(chan, "channel.json.sig")))
-        write(self.p("s.bin"), sig)
-        r = run(["openssl", "dgst", "-sha256", "-verify", self.pub, "-signature", self.p("s.bin"), os.path.join(chan, "channel.json")])
-        self.assertEqual(r.returncode, 0, out(r))
-
-    def test_other_key_cannot_continue_the_channel(self):
-        chan = self.p("chan")
-        self.build(chan, seq=1)
-        self.merge(chan)
-        self.build(chan, seq=2)
-        r = self.merge(chan, key=self.key_b)
-        self.assertEqual(r.returncode, 1)
-        self.assertRegex(r.stderr, "does not verify against this key|signature does not verify")
-
-    def test_merge_refuses_lost_updates_and_foreign_bundles(self):
-        chan = self.p("chan")
-        self.build(chan, seq=1)
-        self.build(chan, seq=2)
-        self.merge(chan)
-        shutil.rmtree(os.path.join(chan, "v5", "windows", "update-1"))
-        r = self.merge(chan)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("missing", r.stderr)
-        self.assertEqual(self.merge(chan, None, "--drop-missing").returncode, 0)
-        self.assertEqual([u["seq"] for u in jload(os.path.join(chan, "channel.json"))["updates"]], [2])
-        # a bundle signed by another key never enters the index
-        other = self.p("other")
-        base, patch = self.packs(name="o-")
-        self.assertEqual(self.make(patch, base, other, key=self.key_b).returncode, 0)
-        r = self.merge(other)
-        self.assertEqual(r.returncode, 1)
-        self.assertEqual(self.merge(other, self.key_b).returncode, 0)
-
-    def test_merge_detects_modified_payload(self):
-        chan = self.p("chan")
-        d = self.build(chan)
-        write(os.path.join(d, "payload.pck"), b"x" + rb(os.path.join(d, "payload.pck"))[1:])
-        r = self.merge(chan)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("size/sha256", r.stderr)
-
-    def test_add_copies_platform_bundles(self):
-        a, b, chan = self.p("a"), self.p("b"), self.p("chan")
-        base, patch = self.packs()
-        self.make(patch, base, a)
-        self.make(patch, base, b, platform="android")
-        r = self.merge(chan, None, "--add", a, "--add", b)
-        self.assertEqual(r.returncode, 0, out(r))
-        ch = jload(os.path.join(chan, "channel.json"))
-        self.assertEqual(sorted(u["platform"] for u in ch["updates"]), ["android", "windows"])
-        self.assertEqual(self.merge(chan, None, "--add", a).returncode, 0, "re-adding identical folders is fine")
-        write(os.path.join(a, "v5", "windows", "update-1", "payload.pck"), b"changed")
-        self.assertEqual(self.merge(chan, None, "--add", a).returncode, 1, "update folders are immutable")
-
-    def test_replayed_lower_generation(self):
-        chan = self.p("chan")
-        self.build(chan, seq=1)
-        self.merge(chan)
-        old = self.p("channel-gen1.json")
-        shutil.copyfile(os.path.join(chan, "channel.json"), old)
-        old_sig = self.p("channel-gen1.json.sig")
-        shutil.copyfile(os.path.join(chan, "channel.json.sig"), old_sig)
-        self.build(chan, seq=2)
-        self.merge(chan)
-        self.assertEqual(self.gen(chan), 2)
-        self.assertEqual(self.verify(chan, "--min-generation", "2").returncode, 0)
-        self.assertEqual(self.verify(chan, "--previous-channel", old).returncode, 0, "newer than what the client saw")
-        # the attacker serves the old (validly signed) index again, next to the new folders
-        replay = self.p("replay")
-        shutil.copytree(chan, replay)
-        shutil.copyfile(old, os.path.join(replay, "channel.json"))
-        shutil.copyfile(old_sig, os.path.join(replay, "channel.json.sig"))
-        r = self.verify(replay, "--min-generation", "2")
-        self.assertIn("lower than the required minimum 2", r.stdout)
-        self.assertEqual(r.returncode, 1)
-        r = self.verify(replay, "--previous-channel", os.path.join(chan, "channel.json"))
-        self.assertIn("replay", r.stdout)
-        self.assertEqual(r.returncode, 1)
-        # same generation but different content
-        forged = self.p("same-gen")
-        shutil.copytree(chan, forged)
-        ch = jload(os.path.join(forged, "channel.json"))
-        ch["generated_utc"] = "2030-01-01T00:00:00Z"
-        write(os.path.join(forged, "channel.json"), otalib.canonical_json(ch))
-        otalib.sign_to_file(self.key, os.path.join(forged, "channel.json"), os.path.join(forged, "channel.json.sig"))
-        r = self.verify(forged, "--previous-channel", os.path.join(chan, "channel.json"))
-        self.assertIn("equals the previous one but the content differs", r.stdout)
-
-    def forge_channel(self, chan, edit):
-        dest = self.p("fc")
-        shutil.copytree(chan, dest)
-        ch = jload(os.path.join(dest, "channel.json"))
-        edit(ch)
-        write(os.path.join(dest, "channel.json"), otalib.canonical_json(ch))
-        otalib.sign_to_file(self.key, os.path.join(dest, "channel.json"), os.path.join(dest, "channel.json.sig"))
-        return dest
-
-    def test_channel_consistency_failures(self):
-        chan = self.p("chan")
-        self.build(chan, seq=1)
-        self.merge(chan)
-        cases = (
-            (lambda c: c["updates"].append(dict(c["updates"][0])), "twice"),
-            (lambda c: c["updates"][0].update({"payload": "v5/windows/update-1/other.pck"}), "payload path"),
-            (lambda c: c["updates"][0].update({"base_commit": OTHER40}), "disagrees with its manifest"),
-            (lambda c: c["updates"].__setitem__(0, {**c["updates"][0], "seq": 4, "manifest": "v5/windows/update-4/manifest.json",
-                                                    "signature": "v5/windows/update-4/manifest.sig", "payload": "v5/windows/update-4/payload.pck"}),
-             "folder does not exist"),
-            (lambda c: c["updates"].clear(), "not listed in channel.json"),
-            (lambda c: c.update({"generation": 0}), "generation must be a positive integer"),
-            (lambda c: c.update({"extra": 1}), "keys differ"),
-            (lambda c: c["revoked"].append({"seq": 1}), "revoked entry malformed"),
-        )
-        for edit, needle in cases:
-            d = self.forge_channel(chan, edit)
-            r = self.verify(d)
-            self.assertEqual(r.returncode, 1, needle)
-            self.assertIn(needle, r.stdout)
-            shutil.rmtree(d)
-
-    def test_unsigned_or_tampered_channel(self):
-        chan = self.p("chan")
-        self.build(chan)
-        self.merge(chan)
-        t = self.copy_bundle(chan, "t1")
-        raw = rb(os.path.join(t, "channel.json"))
-        write(os.path.join(t, "channel.json"), raw.replace(b'"generation": 1', b'"generation": 9'))
-        r = self.verify(t)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("channel.json: signature does NOT verify", r.stdout)
-        os.remove(os.path.join(t, "channel.json.sig"))
-        self.assertIn("channel.json.sig is missing", self.verify(t).stdout)
-        r = self.verify(chan, pub=self.pub_b)
-        self.assertEqual(r.returncode, 1)
+        self.assertIn("REFUSED", r.stderr)
+        self.assertFalse(os.path.exists(self.p("f2.json")), "no files.json for a refused payload")
 
 
 # ------------------------------------------------------------------------------------------------ native check
 
-class TestNativeCheck(BundleBase):
+class TestNativeCheck(TmpCase):
     FILES = {"scripts/a.gdc": b"A1", ".godot/imported/t.ctex": b"IMG", "build_info.json": b"{}", "data/c.json": b"C1"}
 
     def check(self, *args):
@@ -1141,6 +924,718 @@ class TestNativeCheck(BundleBase):
             z.writestr("classes.dex", b"dex")
         r = self.check("compare", "--platform", "android", "--base-pck", base, "--native", self.p("empty.apk"))
         self.assertEqual(r.returncode, 1)
+
+
+# ------------------------------------------------------------------------------------------------ manifest maker + inspector (Godot)
+
+class TestManifestTools(unittest.TestCase):
+    """tools/ota_make_manifest.gd and tools/ota_inspect_pack.gd in a tiny project that holds the client's own scripts: the REAL
+    scripts/boot when the tree has them, the tests/ota_standin stand-in otherwise (printed as a NOTICE)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.godot = godot_bin()
+        if not cls.godot:
+            notice("Godot 4.6 not found ($GODOT): skipping the manifest maker / inspector tests")
+            raise unittest.SkipTest("no godot")
+        cls.real_core = os.path.isfile(os.path.join(ROOT, "scripts", "boot", "ota_core.gd"))
+        if not cls.real_core:
+            notice("scripts/boot/ota_core.gd does not exist yet: the manifest tools run against the tests/ota_standin stand-in client")
+        cls.tmp = tempfile.mkdtemp(prefix="ota-manifest-")
+        cls.proj = os.path.join(cls.tmp, "proj")
+        tool_project.assemble(cls.proj, ROOT, standin=True)
+        write(os.path.join(cls.proj, "print_rt.gd"),
+              'extends SceneTree\nfunc _init():\n\tvar cfg: Script = load("res://scripts/boot/ota_config.gd")\n'
+              '\tprint("RUNTIME_ID=", cfg.runtime_id("android"))\n\tprint("CHANNEL=", cfg.get_script_constant_map().get("CHANNEL", ""))\n\tquit()\n')
+        tool_project.import_project(cls.godot, cls.proj)
+        r = subprocess.run([cls.godot, "--headless", "--path", cls.proj, "-s", "res://print_rt.gd"], capture_output=True, text=True, timeout=120)
+        m = re.search(r"^RUNTIME_ID=(.+)$", r.stdout, re.M)
+        assert m, "cannot read the runtime id from ota_config.gd: " + r.stdout + r.stderr
+        cls.rid = m.group(1).strip()
+        cls.channel = re.search(r"^CHANNEL=(.*)$", r.stdout, re.M).group(1).strip() or "dev"
+        cls.version = int(rt(os.path.join(ROOT, "VERSION")).strip())
+        cls.key = os.path.join(cls.tmp, "a.pem")
+        cls.pub = genkey(cls.key)
+        cls.key_b = os.path.join(cls.tmp, "b.pem")
+        cls.pub_b = genkey(cls.key_b)
+        cls.bi = write(os.path.join(cls.tmp, "build_info.json"), json.dumps({
+            "product": "Purgatory Dungeon", "public_version": cls.version, "release": True, "commit": BASE40, "ci_run": "1",
+            "built_utc": "2026-10-05T00:00:00Z", "runtime_id": cls.rid, "runtime_fingerprint": FP64, "ota_channel": cls.channel}))
+        base = {"scripts/a.gdc": b"A1", "scripts/b.gdc": b"B1", "data/c.json": b"C1", "project.binary": b"PB", "scripts/boot/ota_core.gdc": b"CORE"}
+        cls.base_pck = pck_of(os.path.join(cls.tmp, "base.pck"), base)
+        cls.patch = pck_of(os.path.join(cls.tmp, "patch.pck"), {"scripts/a.gdc": b"A2" * 50, "data/d.json": b"D1", "scripts/b.gdc": None})
+        files, _ = payload_check.check(cls.patch, cls.base_pck, otalib.load_boundary())
+        cls.files = write(os.path.join(cls.tmp, "files.json"), otalib.canonical_json(files))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(getattr(cls, "tmp", ""), True)
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="case-", dir=self.tmp)
+
+    def w(self, name):
+        return os.path.join(self.work, name)
+
+    def gd(self, script, **args):
+        cmd = [self.godot, "--headless", "--path", self.proj, "-s", "res://tools/" + script, "--"] + [f"{k}={v}" for k, v in args.items()]
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+    def mm(self, **over):
+        a = {"pck": self.patch, "out": self.w("manifest.json"), "seq": 3, "sha": SRC40, "files": self.files, "build_info": self.bi,
+             "url": "https://github.com/o/r/releases/download/ota-dev-000003/purgatory-dev-000003.pck", "platform": "android",
+             "created_at": "2026-10-06T00:00:00Z", "run_id": "11", "run_number": "12", "run_attempt": "1", "run_url": "https://example.test/run/11"}
+        a.update({k: v for k, v in over.items() if v is not None})
+        for k in [k for k, v in over.items() if v is None]:
+            a.pop(k, None)
+        return self.gd("ota_make_manifest.gd", **a)
+
+    def sign(self, manifest=None, sig=None, key=None):
+        manifest, sig = manifest or self.w("manifest.json"), sig or self.w("manifest.json.sig")
+        otalib.sign_to_file(key or self.key, manifest, sig)
+        return sig
+
+    def inspect(self, manifest=None, sig=None, pck=None, **over):
+        a = {"manifest": manifest or self.w("manifest.json"), "sig": sig or self.w("manifest.json.sig"), "pck": pck or self.patch,
+             "build_info": self.bi, "files": self.files, "pubkey": self.pub, "platform": "android", "expect_source_sha": SRC40}
+        a.update({k: v for k, v in over.items() if v is not None})
+        for k in [k for k, v in over.items() if v is None]:
+            a.pop(k, None)
+        return self.gd("ota_inspect_pack.gd", **a)
+
+    def good(self):
+        r = self.mm()
+        self.assertIn("MANIFEST OK", r.stdout, out(r))
+        self.sign()
+        return jload(self.w("manifest.json"))
+
+    def forge(self, edit, key=None):
+        """A manifest changed in one way and signed by a real key, so the inspector's own checks are what is under test."""
+        m = self.good()
+        edit(m)
+        write(self.w("manifest.json"), otalib.canonical_json(m))
+        self.sign(key=key)
+
+    def failed(self, r, pattern):
+        self.assertIn("INSPECT FAILED", r.stdout, out(r))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertRegex(r.stdout, pattern, out(r))
+
+    # --- the maker
+    def test_manifest_content(self):
+        m = self.good()
+        self.assertEqual(m["schema"], 1)
+        self.assertEqual((m["channel"], m["ota_id"], m["seq"]), (self.channel, f"{self.channel}-000003", 3))
+        self.assertEqual((m["source_sha"], m["base_source_sha"]), (SRC40, BASE40))
+        self.assertEqual((m["runtime_id"], m["runtime_fingerprint"]), (self.rid, FP64))
+        self.assertEqual(m["game_version"], f"{self.version}.3.0")
+        self.assertEqual((m["native_version"], m["platform"], m["payload_kind"]), (self.version, "android", "patch"))
+        self.assertEqual(m["pck_size"], os.path.getsize(self.patch))
+        self.assertEqual(m["pck_sha256"], otalib.sha256_file(self.patch))
+        self.assertIsInstance(m["minimum_bootstrap_version"], int)
+        self.assertIsInstance(m["save_schema"], int)
+        self.assertIsInstance(m["min_save_schema"], int)
+        self.assertEqual(m["created_at"], "2026-10-06T00:00:00Z")
+        self.assertEqual(m["build_run"], {"id": "11", "number": "12", "attempt": "1", "url": "https://example.test/run/11"})
+        self.assertEqual(m["files"], [{"op": "add", "path": "data/d.json"}, {"op": "replace", "path": "scripts/a.gdc"}, {"op": "remove", "path": "scripts/b.gdc"}])
+        self.assertEqual(set(m), {"schema", "channel", "ota_id", "seq", "source_sha", "runtime_id", "runtime_fingerprint", "minimum_bootstrap_version",
+                                  "game_version", "save_schema", "min_save_schema", "pck_url", "pck_sha256", "pck_size", "created_at", "build_run",
+                                  "payload_kind", "base_source_sha", "platform", "native_version", "files"}, "exactly the fields of docs/OTA.md section 5")
+
+    def test_manifest_is_deterministic_and_sorted(self):
+        self.mm()
+        a = rb(self.w("manifest.json"))
+        shutil.copyfile(self.w("manifest.json"), self.w("first.json"))
+        os.remove(self.w("manifest.json"))
+        self.mm()
+        self.assertEqual(rb(self.w("manifest.json")), a, "same inputs and created_at -> same bytes")
+        self.assertTrue(a.endswith(b"}\n"))
+        keys = re.findall(r'^  "([a-z_0-9]+)":', a.decode(), re.M)
+        self.assertEqual(keys, sorted(keys), "top-level keys are sorted")
+        unsorted = write(self.w("unsorted.json"), json.dumps([{"path": "z.gdc", "op": "add"}, {"path": "a.gdc", "op": "replace"}]))
+        self.assertIn("MANIFEST OK", self.mm(files=unsorted, out=self.w("m2.json")).stdout)
+        self.assertEqual([f["path"] for f in jload(self.w("m2.json"))["files"]], ["a.gdc", "z.gdc"])
+
+    def test_identity_from_arguments_instead_of_build_info(self):
+        r = self.mm(build_info=None, runtime_id=self.rid, runtime_fingerprint=FP64, base_sha=BASE40, native_version=self.version, channel=self.channel)
+        self.assertIn("MANIFEST OK", r.stdout, out(r))
+
+    def test_maker_refusals(self):
+        cases = [
+            ("contradicts", dict(runtime_id="android-godot-4.6.0-r99")),
+            ("contradicts", dict(runtime_fingerprint="0" * 64)),
+            ("contradicts", dict(channel="stable")),
+            ("contradicts", dict(base_sha=OTHER40)),
+            ("40-hex", dict(sha="xyz")),
+            ("files=", dict(files=self.w("missing.json"))),
+            ("https", dict(url="http://example.com/x.pck")),
+            ("positive integer", dict(seq=0)),
+            ("not found", dict(pck=self.w("missing.pck"))),
+            ("unknown: pass build_info", dict(build_info=None)),
+            ("missing argument", dict(out="")),
+        ]
+        for needle, over in cases:
+            with self.subTest(over=over):
+                r = self.mm(**over)
+                self.assertIn("MANIFEST FAIL", r.stdout, out(r))
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn(needle, r.stdout)
+        for label, content in (("empty", "[]"), ("unknown op", '[{"path":"a","op":"rename"}]'), ("duplicate", '[{"path":"a","op":"add"},{"path":"a","op":"add"}]'),
+                               ("not an array", '{"a":1}'), ("no op", '[{"path":"a"}]')):
+            r = self.mm(files=write(self.w("f.json"), content), out=self.w("m3.json"))
+            self.assertIn("MANIFEST FAIL", r.stdout, label)
+        bad_bi = write(self.w("bi.json"), json.dumps(dict(jload(self.bi), runtime_id="android-godot-4.6.0-r99")))
+        r = self.mm(build_info=bad_bi)
+        self.assertIn("MANIFEST FAIL", r.stdout)
+        self.assertIn("differs from the one this tree computes", r.stdout, "the baseline must agree with ota_config.gd")
+
+    # --- the inspector
+    def test_round_trip_is_accepted(self):
+        self.good()
+        r = self.inspect()
+        self.assertIn("INSPECT OK", r.stdout, out(r))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn(f"ota_id={self.channel}-000003", r.stdout)
+
+    def test_self_identity_mode(self):
+        self.good()
+        r = self.inspect(build_info=None, self_identity="1")
+        self.assertIn("INSPECT OK", r.stdout, out(r))
+        r = self.inspect(build_info=None)
+        self.failed(r, r"device identity unknown")
+
+    def test_bad_signatures(self):
+        self.good()
+        raw = bytearray(base64.b64decode(rb(self.w("manifest.json.sig"))))
+        raw[7] ^= 0xFF
+        write(self.w("flipped.sig"), base64.b64encode(bytes(raw)))
+        self.failed(self.inspect(sig=self.w("flipped.sig")), r"(?i)signature")
+        write(self.w("junk.sig"), b"!!!not base64!!!")
+        self.failed(self.inspect(sig=self.w("junk.sig")), r"(?i)signature")
+        write(self.w("empty.sig"), b"")
+        self.failed(self.inspect(sig=self.w("empty.sig")), r"(?i)signature")
+        self.failed(self.inspect(pubkey=self.pub_b), r"(?i)signature")
+        self.sign(key=self.key_b)
+        self.failed(self.inspect(), r"(?i)signature")
+
+    def test_tampered_manifest_after_signing(self):
+        self.good()
+        raw = bytearray(rb(self.w("manifest.json")))
+        i = raw.index(b'"seq": 3')
+        raw[i + 7] = ord("4")
+        write(self.w("manifest.json"), bytes(raw))
+        self.failed(self.inspect(), r"(?i)signature")
+
+    def test_wrong_hash_or_size_of_the_package(self):
+        self.good()
+        raw = bytearray(rb(self.patch))
+        raw[0x70] ^= 0xFF
+        flipped = write(self.w("flipped.pck"), bytes(raw))
+        self.failed(self.inspect(pck=flipped), r"(?i)sha-?256|hash")
+        self.failed(self.inspect(pck=write(self.w("short.pck"), rb(self.patch)[:-16])), r"(?i)size")
+        self.failed(self.inspect(pck=write(self.w("long.pck"), rb(self.patch) + b"\0" * 16)), r"(?i)size")
+        self.forge(lambda m: m.update(pck_size=m["pck_size"] + 1))
+        self.failed(self.inspect(), r"(?i)size")
+        self.forge(lambda m: m.update(pck_sha256="0" * 64))
+        self.failed(self.inspect(), r"(?i)sha-?256|hash")
+
+    def test_wrong_runtime_fingerprint_channel_or_base(self):
+        self.good()
+        for label, bi_edit, pattern in (("runtime", {"runtime_id": "android-godot-4.6.0-r77"}, r"(?i)runtime"),
+                                        ("fingerprint", {"runtime_fingerprint": "cd" * 32}, r"(?i)fingerprint"),
+                                        ("channel", {"ota_channel": "stable"}, r"(?i)channel"),
+                                        ("base", {"commit": OTHER40}, r"(?i)base")):
+            bi = write(self.w(f"bi-{label}.json"), json.dumps(dict(jload(self.bi), **bi_edit)))
+            self.failed(self.inspect(build_info=bi), pattern)
+        self.forge(lambda m: m.update(runtime_id="android-godot-4.6.0-r77"))
+        self.failed(self.inspect(), r"(?i)runtime")
+        self.forge(lambda m: m.update(runtime_fingerprint="cd" * 32))
+        self.failed(self.inspect(), r"(?i)fingerprint")
+        self.forge(lambda m: m.update(base_source_sha=OTHER40))
+        self.failed(self.inspect(), r"(?i)base")
+        self.forge(lambda m: m.update(channel="stable", ota_id="stable-000003"))
+        self.failed(self.inspect(), r"(?i)channel")
+
+    def test_protected_paths_are_flagged(self):
+        evil = pck_of(self.w("evil.pck"), {"scripts/a.gdc": b"A2", "scripts/boot/ota_core.gdc": b"EVIL", "project.binary": b"PB2"})
+        files = write(self.w("evil.json"), json.dumps([{"path": "project.binary", "op": "add"}, {"path": "scripts/a.gdc", "op": "add"},
+                                                       {"path": "scripts/boot/ota_core.gdc", "op": "add"}]))
+        r = self.mm(pck=evil, files=files, out=self.w("evil-manifest.json"))
+        self.assertIn("MANIFEST OK", r.stdout, "the maker builds what it is given; the inspector is the gate")
+        self.sign(self.w("evil-manifest.json"), self.w("evil.sig"))
+        r = self.inspect(manifest=self.w("evil-manifest.json"), sig=self.w("evil.sig"), pck=evil, files=files)
+        self.failed(r, r"pack path scripts/boot/ota_core\.gdc: protected")
+        self.assertRegex(r.stdout, r"pack path project\.binary: protected")
+        for p in ("../x.gdc", "user://x.gdc"):
+            esc = pck_of(self.w("esc.pck"), {p: b"x"})
+            files = write(self.w("esc.json"), json.dumps([{"path": p, "op": "add"}]))
+            self.mm(pck=esc, files=files, out=self.w("esc-manifest.json"))
+            self.sign(self.w("esc-manifest.json"), self.w("esc.sig"))
+            self.failed(self.inspect(manifest=self.w("esc-manifest.json"), sig=self.w("esc.sig"), pck=esc, files=files), r"(?i)escape|illegal")
+
+    def test_manifest_files_must_equal_the_pack_directory(self):
+        self.forge(lambda m: m["files"].append({"path": "data/ghost.json", "op": "add"}))
+        self.failed(self.inspect(files=None), r"lists data/ghost\.json which the pack does not contain")
+        self.forge(lambda m: m["files"].pop())
+        self.failed(self.inspect(files=None), r"the pack contains scripts/b\.gdc which files\[\] does not list")
+        self.forge(lambda m: m["files"][2].update(op="replace"))   # the removal marker listed as a write
+        self.failed(self.inspect(files=None), r"is not a removal marker|is a removal marker|says")
+        self.good()
+        other = write(self.w("other.json"), json.dumps([{"path": "scripts/a.gdc", "op": "replace"}]))
+        self.failed(self.inspect(files=other), r"differs from files\.json")
+
+    def test_game_version_and_source_identity(self):
+        self.forge(lambda m: m.update(game_version="9.9.9"))
+        self.failed(self.inspect(), r"game_version 9\.9\.9 is not <native_version>\.<seq>\.0")
+        self.forge(lambda m: m.update(native_version=self.version + 1, game_version=f"{self.version + 1}.3.0"))
+        self.failed(self.inspect(build_info=None, self_identity=None, runtime_id=self.rid, runtime_fingerprint=FP64, base_sha=BASE40, channel=self.channel),
+                    r"native_version \d+ != VERSION")
+        self.forge(lambda m: m.update(payload_kind="full"))
+        self.failed(self.inspect(), r"(?i)payload.?kind")
+        self.forge(lambda m: m.update(platform="windows"))
+        self.failed(self.inspect(), r"(?i)platform")
+        self.good()
+        self.failed(self.inspect(expect_source_sha=OTHER40), r"source_sha .* != the expected")
+        self.forge(lambda m: m.update(save_schema=m["save_schema"] + 5))
+        r = self.inspect()
+        self.failed(r, r"save_schema")
+
+    def test_ota_id_must_match_channel_and_seq(self):
+        self.forge(lambda m: m.update(ota_id="dev-000009"))
+        self.failed(self.inspect(), r"(?i)ota_id")
+
+    def test_missing_files_and_arguments(self):
+        r = self.gd("ota_inspect_pack.gd", manifest=self.w("nope.json"), sig=self.w("nope.sig"), pck=self.patch, build_info=self.bi, pubkey=self.pub)
+        self.failed(r, r"(?i)manifest .* missing or empty")
+        r = self.gd("ota_inspect_pack.gd", manifest=self.w("nope.json"))
+        self.failed(r, r"missing argument")
+        self.good()
+        self.failed(self.inspect(pck=self.w("nope.pck")), r"(?i)package|pack|unreadable|not a PCK|cannot open")
+
+    def test_runtime_id_of_the_config_matches_ota_runtime_py(self):
+        if not self.real_core:
+            notice("no real scripts/boot yet: the cross-check of ota_config.runtime_id() against tools/ota_runtime.py waits for the merge")
+            self.skipTest("stand-in core")
+        tree = ota_runtime.Tree(ROOT)
+        self.assertEqual(self.rid, tree.runtime_id("android"), "scripts/boot/ota_config.gd runtime_id() and tools/ota_runtime.py disagree")
+        self.assertEqual(self.channel, tree.channel())
+
+
+# ------------------------------------------------------------------------------------------------ publisher decisions
+
+class TestPublishGates(TmpCase):
+    # --- branch / identity
+    def test_branch_parsing(self):
+        sha = "a" * 40
+        self.assertEqual(gates.parse_branch(f"ota/dev/{sha}", sha), ("dev", sha))
+        self.assertEqual(gates.parse_branch(f"refs/heads/ota/stable/{sha}", sha), ("stable", sha))
+        self.assertEqual(gates.parse_branch(f"ota/dev-2/{sha}", sha)[0], "dev-2")
+        for ref in ("ota/dev/main", f"ota/dev/{'a' * 39}", f"ota/dev/{'a' * 41}", f"ota/dev/{'A' * 40}", f"ota/Dev/{sha}", f"ota//{sha}",
+                    f"feature/ota/dev/{sha}", f"ota/dev/{sha}/extra", sha, "ota/dev", f"ota/channel/{sha}", f"ota/1dev/{sha}"):
+            with self.assertRaises(otalib.OtaError, msg=ref):
+                gates.parse_branch(ref, sha)
+        with self.assertRaises(otalib.OtaError) as cm:
+            gates.parse_branch(f"ota/dev/{sha}", "b" * 40)
+        self.assertIn("head commit", str(cm.exception))
+        for bad_sha in ("", "abc", "G" * 40):
+            with self.assertRaises(otalib.OtaError):
+                gates.parse_branch(f"ota/dev/{sha}", bad_sha)
+
+    def test_sequence_numbers_are_never_reused(self):
+        self.assertEqual(gates.next_seq([], "dev"), 1)
+        self.assertEqual(gates.next_seq(["ota-dev-000001", "ota-dev-000002"], "dev"), 3)
+        self.assertEqual(gates.next_seq(["ota-dev-000001", "ota-dev-000007"], "dev"), 8, "gaps are not refilled")
+        self.assertEqual(gates.next_seq(["ota-dev-000009", "ota-dev-000002"], "dev"), 10, "order does not matter")
+        self.assertEqual(gates.next_seq(["ota-stable-000050", "ota-channel-dev", "v7", "ota-dev-2-000044", "ota-dev-0000099", "ota-dev-000x01"], "dev"), 1,
+                        "other channels, the pointer tag and malformed tags are ignored")
+        self.assertEqual(gates.next_seq(["ota-dev-2-000044"], "dev-2"), 45)
+        self.assertEqual(gates.next_seq(["ota-dev-000003\n", " ota-dev-000004 "], "dev"), 5, "whitespace around tags is tolerated")
+        # a deleted release whose tag remains still counts because the caller passes every tag; a sequence never goes backwards
+        seqs = []
+        tags = []
+        for _ in range(5):
+            n = gates.next_seq(tags, "dev")
+            self.assertNotIn(n, seqs)
+            seqs.append(n)
+            tags.append(gates.RELEASE_TAG.format(channel="dev", seq=n))
+        self.assertEqual(seqs, [1, 2, 3, 4, 5])
+
+    def test_release_host_resolution(self):
+        h = gates.resolve_host("me/private-src")
+        self.assertEqual((h["repo"], h["same_repo"], h["ok"]), ("me/private-src", True, True), "the default host is this repository")
+        h = gates.resolve_host("Me/Private-Src", "me/private-src")
+        self.assertTrue(h["same_repo"] and h["ok"], "same repository, case-insensitively")
+        h = gates.resolve_host("me/private-src", "me/updates", token_present=False)
+        self.assertFalse(h["ok"], "a different host needs OTA_RELEASE_TOKEN")
+        self.assertIn("unconfigured host", h["reason"])
+        h = gates.resolve_host("me/private-src", "me/updates", token_present=True)
+        self.assertTrue(h["ok"] and not h["same_repo"])
+        with self.assertRaises(otalib.OtaError):
+            gates.resolve_host("me/src", "not a repo")
+        with self.assertRaises(otalib.OtaError) as cm:
+            gates.resolve_host("me/src", "me/updates", True, baked_repo="me/elsewhere")
+        self.assertIn("devices would never see", str(cm.exception))
+        gates.resolve_host("me/src", "me/updates", True, baked_repo="ME/Updates")
+
+    # --- pointer
+    def test_pointer_is_forward_only(self):
+        self.assertTrue(gates.pointer_forward(None, 1))
+        self.assertTrue(gates.pointer_forward(3, 4))
+        self.assertFalse(gates.pointer_forward(3, 3), "never to seq == current")
+        self.assertFalse(gates.pointer_forward(3, 2), "never backwards")
+        r = tool("publish_gates.py", "pointer-decision", "--current-seq", "5", "--new-seq", "5")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("only moves forward", r.stderr)
+        self.assertEqual(tool("publish_gates.py", "pointer-decision", "--current-seq", "none", "--new-seq", "1").returncode, 0)
+        self.assertEqual(tool("publish_gates.py", "pointer-decision", "--current-seq", "4", "--new-seq", "5").returncode, 0)
+
+    def test_pointer_document(self):
+        d = gates.pointer_document("dev", "dev-000003", 3, "android-godot-4.6.0-r1", "https://h/m.json", "https://h/m.sig", "2026-10-06T00:00:00Z")
+        self.assertEqual(set(d), {"channel", "ota_id", "seq", "runtime_id", "manifest_url", "signature_url", "published_at"})
+        self.assertEqual(gates.parse_pointer(otalib.canonical_json(d))["seq"], 3)
+        for bad in (dict(ota_id="dev-000004"), dict(channel="Bad"), dict(manifest_url="http://h/m.json"), dict(signature_url="ftp://x")):
+            args = dict(channel="dev", ota_id="dev-000003", seq=3, runtime_id="r", manifest_url="https://h/m", signature_url="https://h/s")
+            args.update(bad)
+            with self.assertRaises(otalib.OtaError, msg=bad):
+                gates.pointer_document(**args)
+        for bad in (b"not json", b"[]", json.dumps(dict(d, seq="3")).encode(), json.dumps({k: v for k, v in d.items() if k != "ota_id"}).encode()):
+            with self.assertRaises(otalib.OtaError):
+                gates.parse_pointer(bad)
+        r = tool("publish_gates.py", "make-pointer", "--channel", "dev", "--ota-id", "dev-000003", "--seq", "3", "--runtime-id", "r",
+                 "--manifest-url", "https://h/m", "--signature-url", "https://h/s", "--out", self.p("latest.json"))
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertEqual(jload(self.p("latest.json"))["ota_id"], "dev-000003")
+
+    # --- anonymous reachability (a private host fails here)
+    def serve(self, handler_body):
+        class H(http.server.BaseHTTPRequestHandler):
+            seen = []
+
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                H.seen.append({"path": self.path, "auth": self.headers.get("Authorization"), "cookie": self.headers.get("Cookie")})
+                handler_body(self)
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        return srv, H, f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def test_anonymous_reachability_and_exact_bytes(self):
+        data = os.urandom(5000)
+        sha = hashlib.sha256(data).hexdigest()
+
+        def body(h):
+            if h.path == "/redirect":
+                h.send_response(302)
+                h.send_header("Location", "/real")
+                h.end_headers()
+            elif h.path in ("/real", "/direct"):
+                h.send_response(200)
+                h.send_header("Content-Length", str(len(data)))
+                h.end_headers()
+                h.wfile.write(data)
+            elif h.path == "/wrong":
+                h.send_response(200)
+                h.send_header("Content-Length", str(len(data)))
+                h.end_headers()
+                h.wfile.write(data[:-1] + b"X")
+            else:
+                h.send_response(404)       # what GitHub answers an anonymous request for a PRIVATE repository's release asset
+                h.send_header("Content-Length", "0")
+                h.end_headers()
+
+        _, H, base = self.serve(body)
+        env = {"GH_TOKEN": "ghp_secret", "GITHUB_TOKEN": "ghp_secret2"}
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        self.addCleanup(lambda: [os.environ.pop(k) if v is None else os.environ.__setitem__(k, v) for k, v in old.items()])
+        nosleep = lambda s: None  # noqa: E731
+        self.assertEqual(gates.check_anonymous([(base + "/direct", sha, len(data)), (base + "/redirect", sha, None)], retries=1, sleep=nosleep), [])
+        self.assertTrue(all(s["auth"] is None and s["cookie"] is None for s in H.seen), "no credential may be sent: " + str(H.seen))
+        probs = gates.check_anonymous([(base + "/private", sha, len(data))], retries=2, delay=0, sleep=nosleep)
+        self.assertEqual(len(probs), 1)
+        self.assertIn("not anonymously reachable (HTTP 404)", probs[0])
+        self.assertIn("private", probs[0])
+        probs = gates.check_anonymous([(base + "/wrong", sha, len(data))], retries=1, sleep=nosleep)
+        self.assertIn("SHA-256", probs[0])
+        probs = gates.check_anonymous([(base + "/direct", sha, len(data) + 1)], retries=1, sleep=nosleep)
+        self.assertIn("bytes", probs[0])
+        probs = gates.check_anonymous([("http://127.0.0.1:9/x", sha, None)], retries=1, sleep=nosleep)
+        self.assertIn("HTTP 0", probs[0], "a refused connection is a refusal, not a pass")
+        self.assertEqual(len([s for s in H.seen if s["path"] == "/private"]), 2, "retries cover CDN propagation")
+        self.assertEqual(gates.anonymous_verdict([]), ["nothing to check"])
+        # the CLI mirrors it with exit codes
+        r = tool("publish_gates.py", "check-anonymous", "--retries", "1", "--expect", f"{base}/direct={sha}:{len(data)}", env=env)
+        self.assertEqual(r.returncode, 0, out(r))
+        r = tool("publish_gates.py", "check-anonymous", "--retries", "1", "--delay", "0", "--expect", f"{base}/private={sha}:{len(data)}", env=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("REFUSED", r.stderr)
+        self.assertEqual(tool("publish_gates.py", "check-anonymous", "--expect", "nonsense").returncode, 1)
+
+    def test_pointer_confirmation(self):
+        doc = {"v": gates.pointer_document("dev", "dev-000004", 4, "r", "https://h/m", "https://h/s", "2026-10-06T00:00:00Z")}
+
+        def body(h):
+            data = otalib.canonical_json(doc["v"])
+            h.send_response(200)
+            h.send_header("Content-Length", str(len(data)))
+            h.end_headers()
+            h.wfile.write(data)
+
+        _, H, base = self.serve(body)
+        nosleep = lambda s: None  # noqa: E731
+        self.assertEqual(gates.pointer_confirm(base + "/latest.json", "dev", "dev-000004", retries=1, sleep=nosleep)["seq"], 4)
+        self.assertIn("nocache=", H.seen[0]["path"], "the confirmation bypasses caches")
+        with self.assertRaises(otalib.OtaError) as cm:
+            gates.pointer_confirm(base + "/latest.json", "dev", "dev-000005", retries=2, sleep=nosleep)
+        self.assertIn("serves dev/dev-000004, expected dev/dev-000005", str(cm.exception))
+        with self.assertRaises(otalib.OtaError):
+            gates.pointer_confirm(base + "/latest.json", "stable", "dev-000004", retries=1, sleep=nosleep)
+        self.assertEqual(tool("publish_gates.py", "pointer-confirm", "--url", base + "/latest.json", "--channel", "dev", "--expect-id", "dev-000009",
+                              "--retries", "1").returncode, 1)
+
+    # --- signing key
+    def test_key_match(self):
+        ka, kb = self.p("a.pem"), self.p("b.pem")
+        pub_a, pub_b = genkey(ka), genkey(kb)
+        cfg = lambda pem: f'extends RefCounted\nconst PUBLIC_KEY_PEM := """\n{pem}"""\nconst REPO := "o/r"\nconst BOOTSTRAP_VERSION := 1\n'  # noqa: E731
+        fp = gates.key_match(ka, cfg(rt(pub_a)))
+        self.assertEqual(fp, otalib.public_key_der_sha256(rb(pub_a)))
+        gates.key_match(ka, cfg(rt(pub_a).replace("\n", "\r\n")))           # formatting differences do not matter
+        gates.key_match(ka, cfg("   " + rt(pub_a).strip() + "\n\n"))
+        with self.assertRaises(otalib.OtaError) as cm:
+            gates.key_match(kb, cfg(rt(pub_a)))
+        self.assertIn("does not match the public key embedded in the APK", str(cm.exception))
+        self.assertNotIn("PRIVATE", str(cm.exception))
+        for bad in ("", "not a pem", "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n"):
+            with self.assertRaises(otalib.OtaError, msg=bad):
+                gates.key_match(ka, cfg(bad))
+        with self.assertRaises(otalib.OtaError):
+            gates.key_match(ka, "extends RefCounted\n")
+        weak = self.p("weak.pem")
+        subprocess.run(["openssl", "genrsa", "-out", weak, "2048"], check=True, capture_output=True)
+        with self.assertRaises(otalib.OtaError) as cm:
+            gates.key_match(weak, cfg(rt(pub_a)))
+        self.assertIn("3072", str(cm.exception))
+        write(self.p("ota_config.gd"), cfg(rt(pub_a)))
+        r = tool("publish_gates.py", "key-match", "--key", ka, "--config", self.p("ota_config.gd"))
+        self.assertEqual(r.returncode, 0, out(r))
+        body = "".join(rt(ka).splitlines()[1:-1])
+        self.assertNotIn("PRIVATE", out(r))
+        self.assertNotIn(body[:30], out(r), "the key is never printed")
+        r = tool("publish_gates.py", "key-match", "--key", kb, "--config", self.p("ota_config.gd"))
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn(body[:30], out(r))
+        self.assertNotIn("PRIVATE", out(r))
+
+    def test_config_value_forms(self):
+        text = ('const RUNTIME_REVISION := 5\nconst CHANNEL: String = "dev"\nconst REPO = "o/r"\nconst BOOTSTRAP_VERSION: int = 2\n'
+                'const PUBLIC_KEY_PEM := """\nPEM\n"""\n# const REPO := "commented/out"\n')
+        self.assertEqual(gates.config_value(text, "RUNTIME_REVISION"), 5)
+        self.assertEqual(gates.config_value(text, "CHANNEL"), "dev")
+        self.assertEqual(gates.config_value(text, "REPO"), "o/r")
+        self.assertEqual(gates.config_value(text, "BOOTSTRAP_VERSION"), 2)
+        self.assertEqual(gates.config_value(text, "PUBLIC_KEY_PEM").strip(), "PEM")
+        with self.assertRaises(otalib.OtaError):
+            gates.config_value(text, "NOPE")
+
+    # --- baseline and runtime
+    def test_baseline_identity_and_runtime_gate(self):
+        info = {"commit": BASE40, "runtime_id": "android-godot-4.6.0-r1", "runtime_fingerprint": FP64, "ota_channel": "dev", "public_version": 7}
+        b = gates.baseline_identity(info, "dev")
+        self.assertEqual((b["base_sha"], b["native_version"]), (BASE40, 7))
+        for key in info:
+            bad = dict(info)
+            bad.pop(key)
+            with self.assertRaises(otalib.OtaError, msg=key):
+                gates.baseline_identity(bad)
+        for edit in (dict(commit="abc"), dict(runtime_fingerprint="XYZ"), dict(runtime_id="android"), dict(public_version="7"), dict(ota_channel="Bad!")):
+            with self.assertRaises(otalib.OtaError, msg=edit):
+                gates.baseline_identity(dict(info, **edit))
+        with self.assertRaises(otalib.OtaError) as cm:
+            gates.baseline_identity(info, "stable")
+        self.assertIn("never be offered", str(cm.exception))
+        cur = {"runtime_id": info["runtime_id"], "runtime_fingerprint": FP64, "ota_channel": "dev"}
+        self.assertEqual(gates.same_runtime(info, cur), [])
+        for edit in (dict(runtime_id="android-godot-4.6.0-r2"), dict(runtime_fingerprint="cd" * 32), dict(ota_channel="stable")):
+            probs = gates.same_runtime(info, dict(cur, **edit))
+            self.assertTrue(probs and "new APK is required" in probs[-1], edit)
+        write(self.p("bi.json"), json.dumps(info))
+        write(self.p("cur.json"), json.dumps(dict(cur, runtime_fingerprint="cd" * 32)))
+        r = tool("publish_gates.py", "same-runtime", "--baseline", self.p("bi.json"), "--current", self.p("cur.json"))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("fingerprint differs", r.stderr)
+
+    # --- receipt
+    def full_receipt(self, **over):
+        facts = dict(channel="dev", ota_id="dev-000003", seq=3, source_sha=SRC40, base_source_sha=BASE40, native_base_tag="v7",
+                     runtime_id="android-godot-4.6.0-r1", runtime_fingerprint=FP64, pck_sha256="1" * 64, pck_size=123,
+                     manifest_sha256="2" * 64, signature_sha256="3" * 64, release_host="o/r",
+                     urls={"pck": "https://h/p", "manifest": "https://h/m", "signature": "https://h/s", "pointer": "https://h/l"},
+                     run={"id": "9", "url": "https://h/run/9"})
+        facts.update(over)
+        return facts
+
+    def test_receipt_shape(self):
+        r = gates.make_receipt(True, True, True, "", **self.full_receipt())
+        self.assertEqual(set(r), set(gates.RECEIPT_KEYS))
+        self.assertEqual(gates.validate_receipt(r), "")
+        for key in ("source_sha", "runtime_id", "runtime_fingerprint", "ota_id", "pck_sha256", "manifest_sha256", "published", "pointer_moved"):
+            self.assertIn(key, r)
+        # unpublished: needs a reason, may lack everything else
+        u = gates.make_receipt(False, False, False, "no OTA signing key is available", channel="dev", source_sha=SRC40)
+        self.assertEqual((u["published"], u["pointer_moved"], u["release_created"], u["reason"]), (False, False, False, "no OTA signing key is available"))
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(False, False, False, "")
+        # inconsistent claims are refused
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(True, False, True, "", **self.full_receipt())
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(False, True, False, "x", **self.full_receipt())
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(True, True, True, "", **self.full_receipt(pck_sha256=None))
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(True, True, True, "", **self.full_receipt(urls={"pointer": ""}))
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(False, False, False, "x", **self.full_receipt(source_sha="nothex"))
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(False, False, False, "x", bogus=1)
+        bad = dict(r)
+        bad.pop("urls")
+        self.assertNotEqual(gates.validate_receipt(bad), "")
+
+    def test_receipt_cli(self):
+        r = tool("publish_gates.py", "receipt", "--out", self.p("r.json"), "--published", "0", "--reason", "no key", "--channel", "dev",
+                 "--source-sha", SRC40, "--run-id", "5")
+        self.assertEqual(r.returncode, 0, out(r))
+        d = jload(self.p("r.json"))
+        self.assertEqual((d["published"], d["reason"], d["run"]["id"]), (False, "no key", "5"))
+        self.assertEqual(gates.validate_receipt(d), "")
+        r = tool("publish_gates.py", "receipt", "--out", self.p("r2.json"), "--published", "1")
+        self.assertEqual(r.returncode, 1, "a published receipt without facts is refused")
+        self.assertFalse(os.path.exists(self.p("r2.json")))
+        r = tool("publish_gates.py", "receipt", "--out", self.p("r3.json"), "--published", "1", "--pointer-moved", "1", "--release-created", "1",
+                 "--channel", "dev", "--ota-id", "dev-000003", "--seq", "3", "--source-sha", SRC40, "--runtime-id", "android-godot-4.6.0-r1",
+                 "--runtime-fingerprint", FP64, "--pck-sha256", "1" * 64, "--pck-size", "9", "--manifest-sha256", "2" * 64,
+                 "--signature-sha256", "3" * 64, "--pck-url", "https://h/p", "--manifest-url", "https://h/m", "--signature-url", "https://h/s",
+                 "--pointer-url", "https://h/l")
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertTrue(jload(self.p("r3.json"))["published"])
+
+    def test_branch_cli(self):
+        sha = "c" * 40
+        r = tool("publish_gates.py", "parse-branch", f"ota/dev/{sha}", sha)
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertIn("channel=dev", r.stdout)
+        r = tool("publish_gates.py", "parse-branch", "ota/dev/latest", sha)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("SHA-named", r.stderr)
+        r = run([sys.executable, os.path.join(OTA, "publish_gates.py"), "next-seq", "dev"], input_text="ota-dev-000002\n")
+        self.assertEqual(r.stdout.strip(), "3")
+
+
+# ------------------------------------------------------------------------------------------------ release tool / package verification
+
+class TestBuildInfoAndVerify(TmpCase):
+    def test_build_info_bakes_the_runtime_identity(self):
+        r = tool("release_tool.py", "build-info", self.p("bi.json"), "--commit", BASE40, "--run-id", "9", "--release",
+                 "--runtime-id", "android-godot-4.6.0-r3", "--runtime-fingerprint", FP64, "--ota-channel", "dev", base=TOOLS)
+        self.assertEqual(r.returncode, 0, out(r))
+        d = jload(self.p("bi.json"))
+        self.assertEqual((d["runtime_id"], d["runtime_fingerprint"], d["ota_channel"], d["commit"], d["release"]),
+                         ("android-godot-4.6.0-r3", FP64, "dev", BASE40, True))
+        self.assertEqual(d["public_version"], int(rt(os.path.join(ROOT, "VERSION")).strip()))
+        for args in (["--runtime-id", "android-godot-4.6.0-r3"], ["--runtime-id", "x", "--runtime-fingerprint", FP64, "--ota-channel", "dev"],
+                     ["--runtime-id", "android-godot-4.6.0-r3", "--runtime-fingerprint", "abc", "--ota-channel", "dev"],
+                     ["--runtime-id", "android-godot-4.6.0-r3", "--runtime-fingerprint", FP64, "--ota-channel", "Bad Channel"]):
+            r = tool("release_tool.py", "build-info", self.p("bad.json"), "--commit", BASE40, *args, base=TOOLS)
+            self.assertNotEqual(r.returncode, 0, args)
+        self.assertFalse(os.path.exists(self.p("bad.json")))
+
+    def test_build_info_computes_the_identity_from_the_tree(self):
+        if not os.path.isfile(os.path.join(ROOT, "scripts", "boot", "ota_config.gd")):
+            r = tool("release_tool.py", "build-info", self.p("bi.json"), "--commit", BASE40, base=TOOLS)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("native runtime identity", out(r))
+            notice("no scripts/boot/ota_config.gd yet: build-info refuses to ship a build without a runtime identity (computing it waits for the merge)")
+            return
+        r = tool("release_tool.py", "build-info", self.p("bi.json"), "--commit", BASE40, base=TOOLS)
+        self.assertEqual(r.returncode, 0, out(r))
+        ident = ota_runtime.identity(ota_runtime.Tree(ROOT), "android")
+        d = jload(self.p("bi.json"))
+        self.assertEqual((d["runtime_id"], d["runtime_fingerprint"], d["ota_channel"]), (ident["runtime_id"], ident["runtime_fingerprint"], ident["ota_channel"]))
+
+    def names_ok(self, extra=(), bi=None, drop=()):
+        names = ["scenes/StudioSplash.tscn", "scripts/studio_splash.gd", "scenes/MainMenu.tscn", "scripts/build_info.gd", "build_info.json",
+                 "Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png", "scripts/boot/ota_core.gd", "scripts/boot/ota_config.gd"]
+        names = [n for n in names if n not in drop] + list(extra)
+        info = {"public_version": 7, "release": True, "commit": BASE40, "runtime_id": "android-godot-4.6.0-r1", "runtime_fingerprint": FP64,
+                "ota_channel": "dev"}
+        info.update(bi or {})
+        content = {"build_info.json": json.dumps(info).encode()}
+        problems, notes = [], []
+        vp.check_names(names, lambda n: content.get(n, b"x"), "PCK", 7, True, True, BASE40, problems, notes)
+        return problems
+
+    def test_package_checks(self):
+        self.assertEqual(self.names_ok(), [])
+        self.assertEqual(self.names_ok(drop=("scripts/boot/ota_core.gd", "scripts/boot/ota_config.gd")), [], "a build without the client is fine")
+        for field in ("runtime_id", "runtime_fingerprint", "ota_channel"):
+            probs = self.names_ok(bi={field: None})
+            self.assertTrue(any(field in p for p in probs), field)
+        self.assertTrue(any("runtime_fingerprint" in p for p in self.names_ok(bi={"runtime_fingerprint": "abc"})))
+        for legacy in ("ota_trust.pem", "ota_channel.json", "scripts/ota/ota_core.gd"):
+            self.assertTrue(any("first-generation" in p for p in self.names_ok(extra=[legacy])), legacy)
+        for key in ("ota-signing.key", "secrets/x.p12", "a/release.keystore", "b/my.jks", "ota_signing_backup.bin"):
+            self.assertTrue(any("key material" in p for p in self.names_ok(extra=[key])), key)
+        names = ["scenes/StudioSplash.tscn", "scripts/studio_splash.gd", "scenes/MainMenu.tscn", "scripts/build_info.gd", "build_info.json",
+                 "Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png", "data/leak.txt"]
+        problems, notes = [], []
+        vp.check_names(names, lambda n: b"-----BEGIN PRIVATE KEY-----\nAAA" if n == "data/leak.txt" else json.dumps(
+            {"public_version": 7, "runtime_id": "android-godot-4.6.0-r1", "runtime_fingerprint": FP64, "ota_channel": "dev"}).encode(),
+            "PCK", 7, True, False, "", problems, notes)
+        self.assertTrue(any("PRIVATE key material" in p for p in problems))
+
+    def test_apk_build_requires_internet_when_the_client_is_present(self):
+        text = rt(os.path.join(TOOLS, "android", "build_apk.sh"))
+        self.assertIn("scripts/boot/ota_core.gd", text)
+        self.assertIn("android.permission.INTERNET", text)
+        self.assertNotIn("scripts/ota", text)
+        self.assertNotIn("ota_trust", rt(os.path.join(TOOLS, "verify_apk.py")) + text)
+
+
+# ------------------------------------------------------------------------------------------------ local end-to-end pieces
+
+class TestE2eDriver(unittest.TestCase):
+    def test_fault_server_selftest(self):
+        self.assertEqual(ota_e2e.selftest_server(), [])
+
+    def test_driver_lists_scenarios_and_needs_godot_for_the_rest(self):
+        r = run([sys.executable, os.path.join(TESTS, "ota_e2e.py"), "--list"])
+        self.assertEqual(r.returncode, 0, out(r))
+        for name in ("no_network_start", "check_stage_apply_promote", "crash_loop", "supersede_and_rollback", "baseline_fallbacks", "fault_transport",
+                     "fault_pointer", "fault_manifest"):
+            self.assertIn(name, r.stdout)
+        r = run([sys.executable, os.path.join(TESTS, "ota_e2e.py")])
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_every_documented_fault_is_covered(self):
+        src = rt(os.path.join(TESTS, "ota_e2e.py"))
+        for fault in ("truncated-body", "wrong-bytes", "hang-pointer", "hang-manifest", "hang-package", "404-pointer", "404-manifest", "404-package",
+                      "pointer-other-channel", "malformed-manifest", "bad-signature", "wrong-runtime", "wrong-fingerprint", "wrong-channel",
+                      "wrong-base-sha", "stale", "crash"):
+            self.assertIn(fault, src, fault)
+        self.assertIn("--ota-pointer=", src)
+        self.assertNotIn("github.com", src.replace("https://github.com/o/r", ""), "the driver never talks to GitHub")
+
+    def test_probe_matches_the_contract(self):
+        gd = rt(os.path.join(TESTS, "ota_e2e_probe.gd"))
+        for needle in ("Boot", "report_ready", "diagnostics", "PROBE_PATCHED", "res://data/ota_probe.json"):
+            self.assertIn(needle, gd)
 
 
 # ------------------------------------------------------------------------------------------------ keys.sh
@@ -1420,172 +1915,453 @@ class TestKeysGitHubFlow(TmpCase):
         self.assertIn("no ota-signing.key asset", r.stderr)
 
 
-# ------------------------------------------------------------------------------------------------ workflow / wiring
 
-class TestWiring(unittest.TestCase):
+
+# ------------------------------------------------------------------------------------------------ workflows (static)
+
+def wf(name):
+    return rt(os.path.join(ROOT, ".github", "workflows", name))
+
+
+def load_yaml(text):
+    try:
+        import yaml
+    except ImportError:
+        notice("PyYAML not installed: skipping the structural YAML assertions (the text assertions still ran)")
+        return None
+    return yaml.safe_load(text)
+
+
+class TestPublishWorkflow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.yml = rt(os.path.join(ROOT, ".github", "workflows", "ota.yml"))
+        cls.y = wf("ota-publish.yml")
+        cls.d = load_yaml(cls.y)
 
-    def has(self, needle):
-        self.assertTrue(needle in self.yml, f"ota.yml must contain {needle!r}")
+    def pos(self, needle, start=0):
+        i = self.y.find(needle, start)
+        self.assertGreaterEqual(i, 0, f"ota-publish.yml must contain {needle!r}")
+        return i
 
     def lacks(self, needle):
-        self.assertFalse(needle in self.yml, f"ota.yml must not contain {needle!r}")
+        self.assertFalse(needle in self.y, f"ota-publish.yml must not contain {needle!r}")
 
-    def test_triggers_and_jobs(self):
-        y = self.yml
-        for needle in ("branches-ignore:", "'promote/**'", "'release/**'", "needs: ota-validate",
-                       "startsWith(github.ref, 'refs/heads/ota/v')", "--self-test", "OTA_CHANNEL_REPO", "OTA_PUBLISH_TOKEN"):
-            self.has(needle)
-        self.lacks("pull_request")
-        self.assertRegex(y, r"(?m)^  ota-validate:")
-        self.assertRegex(y, r"(?m)^  ota-publish:")
-        self.assertRegex(y, r"(?m)^permissions:\n  contents: read\n")
-        self.assertEqual(len(re.findall(r"(?m)^      contents: write", y)), 1, "contents: write only on the publish job")
-
-    def test_never_touches_releases_or_tags(self):
-        y = self.yml
-        for bad in ("gh release create", "gh release edit", "gh release upload", "gh release delete", "--latest", "make_latest",
-                    "--force", "--tags", "refs/tags/*:", "gh api -X DELETE", "gh api --method DELETE", "publish_release.sh"):
+    def test_trigger_is_only_a_push_to_ota_branches(self):
+        self.assertRegex(self.y, r"(?m)^on:\n  push:\n    branches:\n      - 'ota/\*\*'\n\npermissions:")
+        for bad in ("workflow_dispatch", "pull_request", "schedule:", "repository_dispatch", "workflow_run", "tags:", "release:", "issue_comment"):
             self.lacks(bad)
-        self.assertIsNone(re.search(r"\bgit tag (?!--list)", y), "no tag may be created")
-        self.assertIsNone(re.search(r"\bgit push\b", y), "only `git -C channel-repo push` may push")
-        for line in y.splitlines():
-            if "gh release" in line:
-                self.assertIn("gh release download", line, "OTA may only READ releases")
-            if re.search(r"\bpush\b", line) and "git -C" in line:
-                self.assertIn("git -C channel-repo push", line, "the only push is to the channel repository")
+        if self.d:
+            self.assertEqual(self.d[True], {"push": {"branches": ["ota/**"]}})
 
-    def test_publish_is_a_dry_run_unless_configured(self):
-        y = self.yml
-        publish = y[y.index("  ota-publish:"):]
-        for needle in ("OTA_KEYS_NO_CREATE", "not configured", "upload-artifact"):
-            self.assertTrue(needle in publish, needle)
-        self.assertRegex(publish, r"(?s)Publish to the channel repository.*?if: env\.OTA_CHANNEL_REPO != '' && env\.OTA_PUBLISH_TOKEN != ''")
+    def test_branch_name_and_sha_gate_comes_first(self):
+        first_gate = self.pos("python3 tools/ota/publish_gates.py parse-branch")
+        self.assertLess(first_gate, self.pos("name: 02a"))
+        self.assertLess(first_gate, self.pos("gh release download"))
+        self.assertIn('"$REF_NAME" "$EVENT_SHA"', self.y)
+        self.assertIn("REF_NAME: ${{ github.ref_name }}", self.y)
+        self.assertIn("EVENT_SHA: ${{ github.sha }}", self.y)
+        # attacker-controlled names are never interpolated into a script body
+        for m in re.finditer(r"run: \|\n((?:          .*\n|\n)+)", self.y):
+            self.assertNotIn("github.ref_name", m.group(1))
+            self.assertNotIn("github.head_ref", m.group(1))
 
-    def test_yaml_structure(self):
-        try:
-            import yaml
-        except ImportError:
-            notice("PyYAML not installed: skipping the structural check of ota.yml (text checks still ran)")
-            self.skipTest("no yaml")
-        d = yaml.safe_load(self.yml)
-        self.assertEqual(d[True]["push"]["branches-ignore"], ["promote/**", "release/**"])
-        self.assertEqual(d["permissions"], {"contents": "read"})
-        self.assertEqual(set(d["jobs"]), {"ota-validate", "ota-publish"})
-        self.assertEqual(d["jobs"]["ota-publish"]["needs"], "ota-validate")
-        self.assertIsNone(d["jobs"]["ota-validate"].get("permissions"), "validation needs nothing beyond the top-level read")
-        self.assertEqual(d["jobs"]["ota-publish"]["permissions"], {"contents": "write"})
-        self.assertFalse(d["jobs"]["ota-publish"]["concurrency"]["cancel-in-progress"], "never cancel a publication half way")
-        allowed = {"actions/checkout@v4", "actions/cache@v4", "actions/upload-artifact@v4"}
-        for job in d["jobs"].values():
-            for step in job["steps"]:
-                if "uses" in step:
-                    self.assertIn(step["uses"], allowed)
-        # the only steps allowed to write anywhere are gated on the owner's configuration
-        gated = [s for s in d["jobs"]["ota-publish"]["steps"] if "channel-repo push" in s.get("run", "")]
-        self.assertEqual(len(gated), 1)
-        self.assertEqual(gated[0]["if"], "env.OTA_CHANNEL_REPO != '' && env.OTA_PUBLISH_TOKEN != ''")
+    def test_steps_run_in_the_documented_order(self):
+        order = ["name: 01 Pin the exact commit", "name: 02a Resolve the release host", "name: 02b Resolve identity", "name: 03 Native baseline",
+                 "name: 04 Classify", "name: 05 Runtime gate", "uses: ./.github/workflows/ota-tests.yml", "name: 07 Build the payload",
+                 "name: 08 Build the manifest", "name: 09 Signing key", "name: 10 The key's public half", "name: 11 Sign",
+                 "name: 12 Inspect", "name: 13 Create the immutable release", "name: 14 Re-download", "name: 15 Verify the published objects are ANONYMOUSLY",
+                 "name: 16 Advance the channel pointer", "name: 17 Publication receipt"]
+        last = -1
+        for needle in order:
+            i = self.pos(needle)
+            self.assertGreater(i, last, f"{needle!r} is out of order")
+            last = i
 
-    def test_run_tests_wiring(self):
-        runner = rt(os.path.join(ROOT, "tests", "run_tests.sh"))
-        self.assertTrue("tests/test_ota_tools.py" in runner)
-        self.assertTrue("check_res_paths" in runner)
+    def test_gates_are_wired_and_fail_closed(self):
+        self.assertIn("python3 tools/ota/classify.py", self.y)
+        self.assertIn("python3 tools/ota_runtime.py --check", self.y)
+        self.assertIn("publish_gates.py same-runtime", self.y)
+        self.assertIn("publish_gates.py baseline", self.y)
+        self.assertIn("OTA_NATIVE_BASE_TAG", self.y)
+        self.assertIn("gh release download", self.y)
+        self.assertIn("tools/ota_build_payload.sh", self.y)
+        self.assertIn("--native-artifact", self.y, "the byte comparison with the shipped APK is part of the build")
+        self.assertIn("ota_make_manifest.gd", self.y)
+        self.assertIn("ota_inspect_pack.gd", self.y)
+        self.assertGreaterEqual(self.y.count("-s res://tools/ota_inspect_pack.gd"), 2, "inspected before AND after publishing")
+        self.assertIn("grep -q '^INSPECT OK'", self.y)
+        self.assertIn("grep -q '^MANIFEST OK'", self.y)
+        self.assertIn("python3 tools/ota/publish_gates.py next-seq", self.y)
+        self.assertNotIn("continue-on-error", self.y, "no step may fail open")
+        for m in re.finditer(r"(?m)^\s*set \+e", self.y):
+            self.fail("set +e at " + str(m.start()))
+        if self.d:
+            jobs = self.d["jobs"]
+            self.assertEqual(set(jobs), {"prepare", "tests", "publish"})
+            self.assertEqual(jobs["tests"]["uses"], "./.github/workflows/ota-tests.yml")
+            self.assertEqual(jobs["tests"]["with"], {"ref": "${{ needs.prepare.outputs.sha }}"}, "the suite runs on the pinned SHA, not on a branch name")
+            self.assertEqual(jobs["publish"]["needs"], ["prepare", "tests"])
+            self.assertEqual(jobs["tests"]["needs"], "prepare")
+            self.assertIn("proceed == '1'", jobs["publish"]["if"])
+            self.assertIn("ref: ${{ needs.prepare.outputs.sha }}", self.y)
 
-    def test_scripts_are_executable(self):
-        for f in ("keys.sh", "build_ota.sh"):
-            self.assertTrue(os.access(os.path.join(OTA, f), os.X_OK), f + " must be executable")
+    def test_signing_key_handling(self):
+        key = self.pos("name: 09 Signing key")
+        km = self.pos("publish_gates.py key-match")
+        sign = self.pos("openssl dgst -sha256 -sign")
+        self.assertLess(key, km)
+        self.assertLess(km, sign, "the key must be proven to match the embedded public key BEFORE it signs anything")
+        self.assertLess(sign, self.pos("name: 12 Inspect"))
+        self.assertIn("OTA_SIGNING_KEY_PEM_BASE64: ${{ secrets.OTA_SIGNING_KEY_PEM_BASE64 }}", self.y)
+        self.assertIn("source tools/ota/keys.sh --no-create", self.y, "the private draft release is read, never created")
+        self.assertIn('OTA_KEYS_NO_CREATE: "1"', self.y)
+        self.assertIn("ok=false", self.y)
+        self.assertIn("NOT PUBLISHING", self.y, "a missing key ends in published=false")
+        self.assertRegex(self.y, r"(?s)name: 10 .*?if: steps\.key\.outputs\.ok == 'true'")
+        self.assertRegex(self.y, r"(?s)name: 11 Sign.*?if: steps\.key\.outputs\.ok == 'true'")
+        self.assertIn("shred -u", self.y, "the key file is destroyed right after signing")
+        self.assertIn("-sha256 -sign", self.y)
+        # the key is never printed, copied or uploaded
+        for bad in ("cat \"$OTA_PRIVATE_KEY_PATH\"", "cat $OTA_PRIVATE_KEY_PATH", "echo \"$OTA_SIGNING_KEY", "set -x", "set -o xtrace", "base64 \"$OTA_PRIVATE",
+                    "upload-artifact@v4\n        with:\n          name: ota-key"):
+            self.lacks(bad)
+        art = self.y[self.pos("Upload the receipt"):]
+        for bad in (".pem", ".key", "ota-signing", "OTA_PRIVATE"):
+            self.assertNotIn(bad, art, f"{bad} must not be uploaded")
+        self.assertNotRegex(self.y, r"(?m)^\s*echo .*\$OTA_PRIVATE_KEY_PATH")
+
+    def test_publication_order_and_immutability(self):
+        create = self.pos("name: 13 Create the immutable release")
+        verify = self.pos("name: 14 Re-download")
+        anon = self.pos("name: 15 Verify the published objects are ANONYMOUSLY")
+        ptr = self.pos("name: 16 Advance the channel pointer")
+        self.assertLess(create, verify)
+        self.assertLess(verify, anon)
+        self.assertLess(anon, ptr)
+        step13 = self.y[create:verify]
+        self.assertIn('gh release view "$TAG"', step13)
+        self.assertIn("already exists", step13)
+        self.assertIn("git/ref/tags/$TAG", step13, "an existing tag aborts, even without a release")
+        self.assertIn("--latest=false", step13)
+        self.assertIn('--target "$SHA"', step13)
+        self.assertIn("SAME_REPO", step13)
+        step14 = self.y[verify:anon]
+        for needle in ("cmp ", "sha256sum", "ota_inspect_pack.gd", "gh release download"):
+            self.assertIn(needle, step14)
+        step15 = self.y[anon:ptr]
+        self.assertIn("check-anonymous", step15)
+        self.assertIn("env -u GH_TOKEN", step15, "no credential reaches the anonymous check")
+        self.assertIn("purgatory-$OTA_ID.pck", step15)
+        step16 = self.y[ptr:self.pos("name: 17 Publication receipt")]
+        self.assertLess(step16.index("pointer-decision"), step16.index("gh release upload"), "forward-only decision before the pointer moves")
+        self.assertLess(step16.index("gh release upload"), step16.index("pointer-confirm"), "the live pointer is re-fetched after the move")
+        self.assertIn("make-pointer", step16)
+        self.assertIn("--expect-id", step16)
+        self.assertIn("env -u GH_TOKEN", step16)
+        self.assertIn("ota-channel-$CHANNEL", step16)
+        self.assertEqual(self.y.count("gh release upload"), 1, "the only upload is latest.json")
+        self.assertIn('"$OUT/latest.json" --repo "$HOST" --clobber', step16)
+        self.assertEqual(self.y.count("--clobber"), 2, "clobber: the pointer upload and the local re-download directory only")
+
+    def test_no_release_or_tag_outside_the_ota_flow(self):
+        for m in re.finditer(r"gh release (create|upload|edit|delete)\b[^\n]*", self.y):
+            line = m.group(0)
+            self.assertTrue('"$TAG"' in line or '"$PTAG"' in line, "release write outside the ota-* flow: " + line)
+            self.assertNotRegex(line, r'create "?v[0-9]', "never a v<N> release")
+        for m in re.finditer(r"--latest\b[^\s]*", self.y):
+            self.assertEqual(m.group(0), "--latest=false", "nothing may be marked Latest")
+        self.assertEqual(len(re.findall(r"gh release create", self.y)), 2, "the immutable release and (once) the pointer release")
+        for bad in ("gh release edit", "gh release delete", "gh api -X DELETE", "gh api --method DELETE", "git push", "--tags", "refs/tags/v",
+                    "publish_release.sh", "make_latest", "gh repo ", "gh secret", "gh variable", "gh auth", "git config", "workflow_dispatch"):
+            self.lacks(bad)
+        self.assertNotRegex(self.y, r"git tag (?!-l )", "tags may be listed, never created")
+        self.assertNotRegex(self.y, r"(?m)tag:\s*v[0-9]")
+        self.assertNotRegex(self.y, r'TAG="?v[0-9]')
+        # tags are built only from the OTA id
+        self.assertIn("tag=ota-$id", self.y)
+
+    def test_least_privilege(self):
+        self.assertRegex(self.y, r"(?m)^permissions:\n  contents: read\n")
+        self.assertEqual(len(re.findall(r"(?m)^\s+contents: write", self.y)), 1, "contents: write on the publish job only")
+        for bad in ("write-all", "id-token", "actions: write", "packages: write", "pull-requests: write", "issues: write", "security-events"):
+            self.lacks(bad)
+        if self.d:
+            jobs = self.d["jobs"]
+            self.assertEqual(jobs["prepare"]["permissions"], {"contents": "read"})
+            self.assertEqual(jobs["tests"]["permissions"], {"contents": "read"})
+            self.assertEqual(jobs["publish"]["permissions"], {"contents": "write"})
+            self.assertFalse(self.d["concurrency"]["cancel-in-progress"], "never cancel a publication half way")
+            self.assertEqual(self.d["concurrency"]["group"], "ota-publish")
+            allowed = {"actions/checkout@v4", "actions/cache@v4", "actions/upload-artifact@v4"}
+            for name, job in jobs.items():
+                for step in job.get("steps", []):
+                    if "uses" in step:
+                        self.assertIn(step["uses"], allowed, f"{name}: only first-party, pinned-major actions")
+        # the host token is used for host calls only; the baseline is read with the workflow token
+        self.assertIn("secrets.OTA_RELEASE_TOKEN", self.y)
+        self.assertEqual(self.y.count("secrets.OTA_RELEASE_TOKEN"), 3)
+        prep = self.y[self.pos("name: 03 Native baseline"):self.pos("name: 04 Classify")]
+        self.assertIn("GH_TOKEN: ${{ github.token }}", prep)
+        self.assertNotIn("OTA_RELEASE_TOKEN", prep)
+        self.assertIn("OTA_RELEASE_REPO: ${{ vars.OTA_RELEASE_REPO }}", self.y)
+        self.assertNotIn("OTA_RELEASE_TOKEN }}\n      OTA_SIGNING", self.y)
+
+    def test_receipt(self):
+        step = self.y[self.pos("name: 17 Publication receipt"):]
+        self.assertIn("if: always()", step.split("run:")[0])
+        for flag in ("--published", "--pointer-moved", "--release-created", "--source-sha", "--runtime-id", "--runtime-fingerprint", "--ota-id",
+                     "--pck-sha256", "--manifest-sha256", "--signature-sha256", "--pck-url", "--manifest-url", "--pointer-url"):
+            self.assertIn(flag, step, flag)
+        self.assertIn("GITHUB_STEP_SUMMARY", step)
+        self.assertIn("actions/upload-artifact@v4", step)
+        self.assertIn('[ "$JOB_STATUS" = "success" ] && [ "$moved" = "1" ] && published=1', step, "published only when the whole chain succeeded and the pointer moved")
+        self.assertIn("OTA_POINTER_MOVED=1", self.y)
+        self.assertLess(self.y.index("pointer-confirm"), self.y.index("OTA_POINTER_MOVED=1"), "pointer_moved is claimed only after the live confirmation")
+
+    def test_host_variable_and_unconfigured_host(self):
+        self.assertIn("--var \"$OTA_RELEASE_REPO\"", self.y)
+        self.assertIn("--config scripts/boot/ota_config.gd", self.y, "the host must equal the REPO the installed app looks at")
+        self.assertIn("unconfigured release host: NOT PUBLISHING", self.y)
+        self.assertIn("proceed: ${{ steps.host.outputs.ok }}", self.y)
+        self.assertIn("Receipt (prepare stage", self.y)
 
 
-# ------------------------------------------------------------------------------------------------ build_ota.sh (needs Godot)
+class TestOtherWorkflows(unittest.TestCase):
+    def test_reusable_test_workflow(self):
+        y = wf("ota-tests.yml")
+        d = load_yaml(y)
+        self.assertRegex(y, r"(?m)^on:\n  workflow_call:\n    inputs:\n      ref:\n")
+        for bad in ("push:", "pull_request", "workflow_dispatch", "schedule", "secrets.", "contents: write", "gh release", "upload-artifact"):
+            self.assertNotIn(bad, y)
+        self.assertIn("tests/run_tests.sh", y, "the FULL suite")
+        self.assertNotIn("TEST_FILTER", y, "no subset")
+        self.assertIn("ref: ${{ inputs.ref }}", y)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$WANT"', y)
+        self.assertRegex(y, r"(?m)^permissions:\n  contents: read\n")
+        if d:
+            self.assertEqual(d["jobs"]["suite"]["permissions"], {"contents": "read"})
 
-class TestBuildOta(TmpCase):
-    """End to end on a tiny temporary repository: classification, export, patch, bundle, verification."""
+    def test_ci_has_no_ota_key_job_or_trust_anchor_steps(self):
+        y = wf("ci.yml")
+        for gone in ("ota-key", "OTA trust anchor", "ota_trust", "keys.sh", "OTA_PUB_B64", "pub_b64", "OTA_SIGNING_KEY"):
+            self.assertNotIn(gone, y, gone)
+        self.assertEqual(y.count("python3 tools/ota_runtime.py --check"), 2)
+        d = load_yaml(y)
+        if d:
+            for job in ("validate-and-export", "android"):
+                runs = [s.get("run", "") for s in d["jobs"][job]["steps"]]
+                self.assertIn("python3 tools/ota_runtime.py --check", runs, job)
+                self.assertNotIn("needs", d["jobs"][job], job + " no longer waits for an ota-key job")
+            self.assertNotIn("ota-key", d["jobs"])
+        # everything else is still there
+        for keep in ("tools/release_tool.py check", "tests/run_tests.sh", "tools/verify_package.py", "tools/android/build_apk.sh", "tools/publish_release.sh",
+                     "promote/", "android-signing-key"):
+            self.assertIn(keep, y, keep)
 
-    def sh(self, *args):
-        env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-        r = run(["git", "-C", self.repo] + list(args), env=env)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        return r.stdout.strip()
+    def test_nothing_else_publishes_ota_releases(self):
+        for name in os.listdir(os.path.join(ROOT, ".github", "workflows")):
+            if name in ("ota-publish.yml",):
+                continue
+            text = wf(name)
+            self.assertNotRegex(text, r"gh release (create|upload)[^\n]*ota-", name)
+            self.assertNotIn("ota-channel-", text.replace("ota-channel-dev", ""), name)
 
-    def commit(self, msg):
-        self.sh("add", "-A")
-        self.sh("-c", "commit.gpgsign=false", "commit", "-q", "-m", msg)
-        return self.sh("rev-parse", "HEAD")
+    def test_the_dev_utility_workflow_only_prints_a_public_key(self):
+        y = wf("ota-pubkey.yml")
+        self.assertIn("--public-only", y)
+        self.assertNotRegex(y, r"gh release (create|upload|edit|delete)")
+        self.assertNotIn("PRIVATE", y.replace("never the private key", "").replace("private key is never", "").replace("private draft", ""))
+
+
+# ------------------------------------------------------------------------------------------------ hygiene
+
+class TestHygiene(unittest.TestCase):
+    NAMES = [r"scripts/ota/", r"ota_trust\.pem", r"ota_channel\.json", r"make_bundle", r"verify_bundle", r"\bchannel\.py\b", r"ota_rules\.json",
+             r"build_ota\.sh", r"\bchannel\.json\b", r"\bOtaBoot\b", r"\bOtaUpdater\b"]
+    OWNED = ("tools/", ".github/", "ota/", "tests/ota_e2e.py", "tests/ota_e2e_probe.gd", "tests/ota_standin/")
+    SELF = ("tests/test_ota_tools.py", "docs/OTA.md", "tools/verify_package.py")   # these name the removed files on purpose
+
+    def tracked(self):
+        r = run(["git", "-C", ROOT, "ls-files"], env=GIT_ENV)
+        if r.returncode != 0:
+            self.skipTest("not a git checkout")
+        return [f for f in r.stdout.splitlines() if os.path.isfile(os.path.join(ROOT, f))]
+
+    def test_no_reference_to_the_first_generation_names(self):
+        native_merged = os.path.isfile(os.path.join(ROOT, "scripts", "boot", "ota_core.gd"))
+        if not native_merged:
+            notice("native layer not merged: scanning the tooling-owned files only; after the merge the whole tree must be clean")
+        rx = re.compile("|".join(self.NAMES))
+        hits = []
+        for f in self.tracked():
+            if f in self.SELF or f.endswith((".png", ".import", ".uid", ".pck", ".ogg", ".glb", ".ttf", ".wav", ".mp3", ".mp4", ".svg", ".ico", ".icns", ".jpg", ".webp")):
+                continue
+            if not native_merged and not f.startswith(self.OWNED):
+                continue
+            if f.startswith(("tools/ota/fixtures/", "archive/", "production/")):
+                continue
+            try:
+                text = rt(os.path.join(ROOT, f))
+            except (UnicodeDecodeError, OSError):
+                continue
+            for i, line in enumerate(text.splitlines(), 1):
+                if rx.search(line):
+                    hits.append(f"{f}:{i}: {line.strip()[:100]}")
+        self.assertEqual(hits, [], "first-generation OTA names must not survive v7:\n" + "\n".join(hits[:25]))
+
+    def test_the_first_generation_tooling_is_gone(self):
+        for gone in ("tools/ota/make_bundle.py", "tools/ota/channel.py", "tools/ota/verify_bundle.py", "tools/ota/ota_rules.json", "tools/ota/build_ota.sh"):
+            self.assertFalse(os.path.exists(os.path.join(ROOT, gone)), gone)
+        lib = rt(os.path.join(OTA, "otalib.py"))
+        for gone in ("update_rel_dir", "scan_updates", "UPDATE_DIR_RE", "ota_rules", "load_rules", "OTA_API"):
+            self.assertNotIn(gone, lib, gone)
+
+    def test_scripts_are_executable_and_wired(self):
+        for rel in ("tools/ota_build_payload.sh", "tools/ota/keys.sh", "tools/ota/publish_gates.py", "tools/ota_runtime.py"):
+            self.assertTrue(os.access(os.path.join(ROOT, rel), os.X_OK), rel + " must be executable")
+        runner = rt(os.path.join(TESTS, "run_tests.sh"))
+        self.assertIn("tests/test_ota_tools.py", runner)
+        self.assertIn("check_res_paths", runner)
+        for rel in ("tools/ota_make_manifest.gd", "tools/ota_inspect_pack.gd", "tools/ota_runtime.py", "tools/ota_build_payload.sh", "ota/boundary.json"):
+            self.assertTrue(os.path.isfile(os.path.join(ROOT, rel)), rel)
+        self.assertTrue(rt(os.path.join(TOOLS, "ota_build_payload.sh")).startswith("#!/usr/bin/env bash"))
+
+    def test_no_key_material_is_committed(self):
+        for f in self.tracked():
+            low = f.lower()
+            self.assertFalse(low.endswith((".key", ".p12", ".jks", ".keystore")) or "ota-signing" in low or "ota_signing" in low, f)
+        for f in self.tracked():
+            if f.startswith(self.OWNED) and not f.endswith((".pck", ".png")) and f not in self.SELF:
+                try:
+                    self.assertNotIn("PRIVATE KEY-----", rt(os.path.join(ROOT, f)), f)
+                except UnicodeDecodeError:
+                    pass
+
+
+# ------------------------------------------------------------------------------------------------ ota_build_payload.sh (needs Godot)
+
+class TestPayloadBuilder(TmpCase):
+    """The real script on a tiny temporary repository: classification, export, patch, files[], limits."""
 
     def setUp(self):
         super().setUp()
         self.godot = godot_bin()
         if not self.godot:
-            notice("Godot 4.6 not found ($GODOT): skipping the build_ota.sh end-to-end test")
+            notice("Godot 4.6 not found ($GODOT): skipping the ota_build_payload.sh end-to-end tests")
             self.skipTest("no godot")
         self.repo = self.p("repo")
         make_probe_project(self.repo)
-        os.makedirs(os.path.join(self.repo, "tools"))
         shutil.copytree(OTA, os.path.join(self.repo, "tools", "ota"), ignore=shutil.ignore_patterns("__pycache__", "fixtures"))
-        shutil.copyfile(os.path.join(ROOT, "tools", "release_tool.py"), os.path.join(self.repo, "tools", "release_tool.py"))
-        write(os.path.join(self.repo, ".gitignore"), ".godot/\nbuild_info.json\nota_trust.pem\nout/\n*.pck\n")
-        self.sh("init", "-q")
-        self.base = self.commit("base")
-        self.sh("tag", "v5")
-        self.keydir = self.p("keys")
+        for f in ("release_tool.py", "ota_runtime.py", "ota_build_payload.sh"):
+            shutil.copyfile(os.path.join(TOOLS, f), os.path.join(self.repo, "tools", f))
+        os.chmod(os.path.join(self.repo, "tools", "ota_build_payload.sh"), 0o755)
+        shutil.copytree(os.path.join(ROOT, "ota"), os.path.join(self.repo, "ota"), ignore=shutil.ignore_patterns("runtime_lock.json"))
+        write(os.path.join(self.repo, ".github", "workflows", "ci.yml"), CI_YML)
+        write(os.path.join(self.repo, "scripts", "boot", "ota_config.gd"), CONFIG_GD)       # a minimal native layer: the runtime identity needs it
+        write(os.path.join(self.repo, "scripts", "boot", "ota_core.gd"), "extends RefCounted\n")
+        write(os.path.join(self.repo, "tools", "android", "build_apk.sh"), "#!/bin/bash\n")
+        write(os.path.join(self.repo, ".gitignore"), ".godot/\nbuild_info.json\nout/\n*.pck\n")
+        self.git(self.repo, "init", "-q")
+        self.base = self.commit(self.repo, "base")
+        self.git(self.repo, "tag", "v5")
 
-    def build(self, *args, seq=1, out_dir=None):
-        env = {"OTA_KEY_DIR": self.keydir, "GITHUB_REPOSITORY": "", "OTA_SIGNING_KEY_PEM_BASE64": ""}
-        r = run(["bash", os.path.join(self.repo, "tools", "ota", "keys.sh"), self.p("trust.pem")], env=env)
-        self.assertEqual(r.returncode, 0, out(r))
-        key = os.path.join(self.keydir, "ota-signing.key")
-        e = dict(os.environ)
-        e.update(env)
-        return subprocess.run(["bash", os.path.join(self.repo, "tools", "ota", "build_ota.sh"), "--platform", "windows",
-                               "--godot", self.godot, "--seq", str(seq), "--key", key, "--out", out_dir or self.p("out")] + list(args),
-                              cwd=self.repo, env=e, capture_output=True, text=True, timeout=900)
+    def build(self, *args, out_dir=None):
+        return subprocess.run(["bash", os.path.join(self.repo, "tools", "ota_build_payload.sh"), "--godot", self.godot, "--preset", "Windows Desktop",
+                               "--out", out_dir or self.p("out")] + list(args), cwd=self.repo, env=dict(os.environ, **GIT_ENV),
+                              capture_output=True, text=True, timeout=900)
 
-    def test_real_update_end_to_end(self):
+    def test_real_update(self):
         write(os.path.join(self.repo, "data", "probe.json"), '{"probe":"updated"}\n')
         write(os.path.join(self.repo, "data", "added.json"), '{"a":1}\n')
         os.remove(os.path.join(self.repo, "data", "gone.json"))
-        head = self.commit("update")
-        r = self.build("--base-ref", "v5")
+        write(os.path.join(self.repo, "docs", "note.md"), "not shipped\n")
+        head = self.commit(self.repo, "update")
+        r = self.build("--base-sha", "v5", "--head-sha", "HEAD", "--emit-base")
         self.assertEqual(r.returncode, 0, out(r))
-        self.assertIn("BUNDLE OK", r.stdout)
-        d = self.p("out", "v5", "windows", "update-1")
-        m = jload(os.path.join(d, "manifest.json"))
-        self.assertEqual(m["base_commit"], self.base)
-        self.assertEqual(m["source_commit"], head)
-        self.assertEqual({f["path"]: f["op"] for f in m["files"]},
-                         {"data/probe.json": "replace", "data/added.json": "add", "data/gone.json": "remove"})
-        self.assertTrue(m["engine"].startswith("4.6."))
-        ch = jload(self.p("out", "channel.json"))
-        self.assertEqual(ch["generation"], 1)
-        # the update number only goes up
-        r = self.build("--base-ref", "v5", out_dir=self.p("out"))
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("not higher", out(r))
-        # the worktrees are cleaned up
-        self.assertEqual([l for l in self.sh("worktree", "list").splitlines()], [l for l in self.sh("worktree", "list").splitlines()[:1]])
+        o = self.p("out")
+        self.assertEqual(sorted(os.listdir(o)), ["base.pck", "build_info.json", "classify.json", "files.json", "payload.pck", "payload_report.json"])
+        files = jload(os.path.join(o, "files.json"))
+        self.assertEqual({f["path"]: f["op"] for f in files}, {"data/probe.json": "replace", "data/added.json": "add", "data/gone.json": "remove"})
+        rep = jload(os.path.join(o, "payload_report.json"))
+        self.assertEqual((rep["head_sha"], rep["base_source_sha"], rep["native_version"], rep["self_test"]), (head, self.base, 5, False))
+        self.assertEqual(rep["payload_sha256"], otalib.sha256_file(os.path.join(o, "payload.pck")))
+        self.assertEqual(rep["native_comparison"], "not-compared")
+        self.assertEqual(jload(os.path.join(o, "classify.json"))["result"], "ota_safe")
+        bi = jload(os.path.join(o, "build_info.json"))
+        self.assertEqual((bi["commit"], bi["public_version"]), (self.base, 5))
+        self.assertEqual((bi["runtime_id"], bi["ota_channel"]), ("android-godot-4.6.0-r1", "dev"), "the baseline identity is baked into the build info")
+        self.assertRegex(bi["runtime_fingerprint"], r"^[0-9a-f]{64}$")
+        self.assertEqual(pcklib.verify_entries(pcklib.read_pck(os.path.join(o, "payload.pck"))), [])
+        self.assertNotIn("build_info.json", {f["path"] for f in files}, "the identity file is identical in both packs and never patched")
+        self.assertIn("WARNING: --native-artifact not given", r.stdout)
+        # worktrees are cleaned up
+        self.assertEqual(self.git(self.repo, "worktree", "list").count("\n"), 0)
 
-    def test_apk_required_change_aborts(self):
-        write(os.path.join(self.repo, "project.godot"), 'config_version=5\n[application]\nconfig/name="Changed"\n')
-        self.commit("settings change")
-        r = self.build("--base-ref", "v5")
+    def test_pins_the_commit(self):
+        write(os.path.join(self.repo, "data", "probe.json"), '{"probe":"one"}\n')
+        one = self.commit(self.repo, "one")
+        write(os.path.join(self.repo, "data", "probe.json"), '{"probe":"two"}\n')
+        self.commit(self.repo, "two")
+        r = self.build("--base-sha", "v5", "--head-sha", one)
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertEqual(jload(self.p("out", "payload_report.json"))["head_sha"], one, "the update is built from the named commit, not from HEAD")
+        r = self.build("--base-sha", "v5", "--head-sha", "no-such-commit", out_dir=self.p("out2"))
         self.assertNotEqual(r.returncode, 0)
+        self.assertIn("cannot resolve --head-sha", out(r))
+
+    def test_apk_required_change_stops_with_exit_10(self):
+        write(os.path.join(self.repo, "project.godot"), 'config_version=5\n[application]\nconfig/name="Changed"\n')
+        self.commit(self.repo, "settings change")
+        r = self.build("--base-sha", "v5")
+        self.assertEqual(r.returncode, 10, out(r))
         self.assertIn("needs a new APK", out(r))
-        self.assertFalse(os.path.exists(self.p("out", "v5")))
+        self.assertIn("runtime fingerprint would change", out(r))
+        self.assertFalse(os.path.exists(self.p("out", "payload.pck")))
+
+    def test_guarded_change_stops_with_exit_11_unless_accepted(self):
+        write(os.path.join(self.repo, "scripts", "save_manager.gd"), "extends Node\n")
+        self.commit(self.repo, "guarded")
+        r = self.build("--base-sha", "v5")
+        self.assertEqual(r.returncode, 11, out(r))
+        r = self.build("--base-sha", "v5", "--accept-guarded", "format unchanged", out_dir=self.p("out2"))
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertEqual(jload(self.p("out2", "payload_report.json"))["guarded_accepted"], "format unchanged")
+
+    def test_refuses_bad_arguments(self):
+        for args, needle in (([], "--base-sha is required"), (["--base-sha", "nope"], "cannot resolve --base-sha"),
+                             (["--base-sha", "v5", "--native-check", "maybe"], "--native-check"), (["--self-test", "--base-sha", "v5"], "do not pass --base-sha")):
+            r = subprocess.run(["bash", os.path.join(self.repo, "tools", "ota_build_payload.sh"), "--godot", self.godot, "--out", self.p("o")] + args,
+                               cwd=self.repo, capture_output=True, text=True, timeout=120)
+            self.assertNotEqual(r.returncode, 0, args)
+            self.assertIn(needle, out(r))
+        os.makedirs(self.p("busy"))
+        write(self.p("busy", "x"), "x")
+        r = self.build("--base-sha", "v5", out_dir=self.p("busy"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("is not empty", out(r))
+
+    def test_engine_must_match_the_project_pin(self):
+        write(os.path.join(self.repo, ".github", "workflows", "ci.yml"), CI_YML.replace("4.6-stable", "4.5-stable"))
+        self.commit(self.repo, "pin another engine")
+        r = self.build("--base-sha", "v5")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("engine mismatch", out(r))
 
     def test_self_test_mode(self):
-        env = {"OTA_PRIVATE_KEY_PATH": "/nonexistent", "OTA_SIGNING_KEY_PEM_BASE64": "ignored-in-self-test"}
-        e = dict(os.environ)
-        e.update(env)
-        r = subprocess.run(["bash", os.path.join(self.repo, "tools", "ota", "build_ota.sh"), "--platform", "windows", "--self-test",
-                            "--godot", self.godot, "--out", self.p("st")], cwd=self.repo, env=e, capture_output=True, text=True, timeout=900)
+        env = dict(os.environ, **GIT_ENV, OTA_PRIVATE_KEY_PATH="/nonexistent", OTA_SIGNING_KEY_PEM_BASE64="ignored")
+        r = subprocess.run(["bash", os.path.join(self.repo, "tools", "ota_build_payload.sh"), "--godot", self.godot, "--preset", "Windows Desktop",
+                            "--self-test", "--out", self.p("st")], cwd=self.repo, env=env, capture_output=True, text=True, timeout=900)
         self.assertEqual(r.returncode, 0, out(r))
         self.assertIn("SELF-TEST PASSED", r.stdout)
-        m = jload(self.p("st", "v5", "windows", "update-1", "manifest.json"))
-        self.assertEqual(m["files"], [{"op": "add", "path": "data/ota_probe.json"}])
+        self.assertEqual(jload(self.p("st", "files.json")), [{"op": "add", "path": "data/ota_probe.json"}])
+        self.assertTrue(jload(self.p("st", "payload_report.json"))["self_test"])
         self.assertFalse(os.path.exists(os.path.join(self.repo, "data", "ota_probe.json")), "the probe is created in the temp worktree only")
+        self.assertFalse(os.path.exists(self.p("st", "base.pck")), "base.pck is only copied with --emit-base")
+        self.assertEqual(os.listdir(self.p("st")).count("payload.pck"), 1)
+        # no signing here, ever
+        text = rt(os.path.join(TOOLS, "ota_build_payload.sh"))
+        self.assertNotIn("openssl", text)
+        self.assertNotIn("sign_file", text)
 
 
 if __name__ == "__main__":
