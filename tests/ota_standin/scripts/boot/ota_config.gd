@@ -6,7 +6,8 @@ const RUNTIME_REVISION := 1
 const CHANNEL := "dev"
 const REPO := "standin/updates"
 const BOOTSTRAP_VERSION := 1
-const PUBLIC_KEY_PEM := ""
+const PUBLIC_KEY_PEM := """
+"""
 
 
 static func runtime_id(platform: String) -> String:
