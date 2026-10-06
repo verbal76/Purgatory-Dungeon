@@ -74,7 +74,7 @@ records `{runtime_revision, godot_version, fingerprint, files}` and is committed
 - `--bump`: increments `RUNTIME_REVISION` and relocks (a new APK is then required).
 - `--print`: shows `runtime_id` and fingerprint.
 
-**Runtime ID** = `android-godot-<engine>-r<revision>` (e.g. `android-godot-4.6.0-r1`). **Runtime fingerprint** = the 64-hex value
+**Runtime ID** = `android-godot-<engine>-r<revision>` (e.g. `android-godot-4.6.0-r1`; r1 = v7 / v7.1 / v7.2, r2 = the post-v7.2 native generation that adds the Boot status API of section 10 and removes the player-facing overlay). **Runtime fingerprint** = the 64-hex value
 above. Both are:
 - compiled into the APK's build identity: `build_info.json` gains `runtime_id`, `runtime_fingerprint`, `ota_channel`,
   and (existing) `commit` = the native baseline source SHA;
@@ -178,9 +178,31 @@ first activated the client copies the save folder to `user://ota/backups/` (last
 defines `SAVE_SCHEMA` / `MIN_SAVE_SCHEMA`; manifests carry both and the client will not activate an OTA that cannot read the
 schema recorded on the device (this protects rollbacks past a deliberate migration). Save formats are unchanged in v7.
 
-## 10. Diagnostics
+## 10. What players see, and diagnostics
 
-Native overlay (five quick taps in the top-left corner, or F9) and `Boot.diagnostics()` text. The first lines make the layers obvious:
+**Players see no OTA or debug text over the game or the menus** (runtime r2 onwards; v7.x showed "v7.2 (dev-000002) ready: restart to run it" as a
+toast, a staged-update note in the menu footer and a fixed readout button in Options > Gameplay). Specifically:
+- The native layer never opens its overlay or a toast by itself: a finished download, a staged update or a failed check produce no on-screen text from
+  `scripts/boot/`. The only transient native UI is the restrained "Applying update vX" panel while a never-run package starts (at most 20 s).
+- The main menu footer is the Exit button over the plain version (`Purgatory Dungeon v7.2`), inside the phone safe area (`HudKit.insets`).
+- **Options > About** (last tab; 5th on a phone) is where this information lives, built from `Boot.status_snapshot()` by `scripts/about_info.gd`:
+  game version, app (native) version, the OTA label (`v7.2 (OTA #000002)` or "None (original v7)"), a "Waiting to start" row while an update is staged,
+  the update status line, and technical rows (runtime id, shortened fingerprint, channel, engine, platform, last check).
+  Status words: "You are up to date", "Update available - downloading...", "Update ready - restart to apply", "Checking for updates...", and calm
+  failure lines (offline, could not be verified, needs a newer app, could not be completed) with no technical reason. On desktop: "Updates are
+  delivered through the Android app." (no error, Check disabled).
+- **Check for updates** calls `Boot.check_now()`: the *same* pipeline as the automatic check (pointer -> signed manifest -> signature, runtime
+  fingerprint and save-schema checks -> download -> size + SHA-256 -> stage as PENDING). There is no second updater and no network code in the game layer
+  (a test scans for it). Presses while a check runs are ignored. Nothing is applied mid-run: a staged update starts at the next cold start; About tells
+  the player to close and reopen the game. (There is no separate "UpdateGate": staging + cold-start activation is the safe-apply path.)
+- **Copy diagnostics** puts `AboutInfo.diagnostics_text()` on the clipboard: versions, update state and last error, runtime id + full fingerprint,
+  channel, `Boot.diagnostics_text()` (slots, last results, recent events), device model/OS/GPU/renderer/screen/safe area/touch. No key material,
+  tokens or file contents; the finished text goes through `AboutInfo.redact()` as a last line of defence.
+- **Developer tools** (hidden): tapping the version heading in About seven times quickly toggles `DeveloperMode` (a setting; `SettingsManager`). They
+  hold the performance readout (`ShowPerf`, previously a Gameplay option; a stored `ShowPerf=true` without DeveloperMode is ignored at load) and
+  "Open update diagnostics". The native overlay also opens with F9, five quick taps in the top-left corner, or `--ota-diagnostics` (developer runs).
+
+Native overlay and `Boot.diagnostics()` text. The first lines make the layers obvious:
 
 ```
 Purgatory Dungeon v7.1
@@ -192,8 +214,14 @@ Runtime: android-godot-4.6.0-r1  fingerprint <64 hex>
 followed by channel, embedded vs OTA, active OTA (id, seq, source SHA, package SHA-256), pending/ready/previous, status
 (up to date / update available / downloaded / offline / incompatible / rejected), last check, last result, rollback count,
 recent events. Buttons: Check, Download, Activate on restart, Roll back, Boot baseline / Re-enable OTA, Copy diagnostics, Close.
-The main menu footer shows the owner-facing running version: `Purgatory Dungeon v7` on the baseline, `Purgatory Dungeon v7.1` while OTA
-7.1 runs (never "v7 · update K"); a staged OTA waiting for a restart is added as `· v7.2 ready, restart to apply`. No secrets are ever shown.
+The main menu footer shows the owner-facing running version only: `Purgatory Dungeon v7` on the baseline, `Purgatory Dungeon v7.1` while OTA
+7.1 runs (never "v7 · update K"); a staged OTA is not announced there any more (see About). No secrets are ever shown.
+
+Public API for the game layer (`scripts/boot/boot.gd`, all secret-free, all degrade to "inactive" when the client is off): `status_snapshot()`
+(identity, runtime, channel, staged version, last error ...), `update_state()` (`inactive | disabled | unchecked | checking | downloading |
+up_to_date | pending_restart | downloaded | offline | incompatible | rejected | failed`), `can_check_now()`, `check_now()` (awaitable; returns the
+final state, or `busy`/`inactive`/`disabled` when nothing started), `last_error()`, `diagnostics_text()`, `show_diagnostics()`, signal
+`status_changed`. `tests/test_ota_core.gd` (section 13b) covers it against the loopback stub; `tests/test_about.gd` covers the screen.
 
 ## 11. Publishing (`.github/workflows/ota-publish.yml`)
 

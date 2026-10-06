@@ -37,7 +37,7 @@ one native baseline; a runtime lock (`ota/runtime_lock.json`, `tools/ota_runtime
 APK is defined once in `ota/boundary.json` (`tools/ota/classify.py` enforces it). Never edit `scripts/boot/**`,
 `project.godot`, `export_presets.cfg`, `ota/**`, the Android manifest settings or the engine version expecting an OTA to
 carry it (changing them changes the fingerprint: run `python3 tools/ota_runtime.py --check`, then `--bump`/`--relock`).
-An OTA cannot add a new global `class_name`, autoload or input action. Publication = push branch `ota/<channel>/<40-hex sha>`
+An OTA cannot add a new global `class_name`, autoload or input action. Players see no OTA/channel/debug text over the menus or the game: update state, the OTA label, **Check for updates** (`Boot.check_now()`, the one updater) and **Copy diagnostics** live in Options > About (docs/OTA.md section 10); the performance readout and the native diagnostics overlay are developer tools. Publication = push branch `ota/<channel>/<40-hex sha>`
 (`.github/workflows/ota-publish.yml`); recovery = automatic rollback, the diagnostics overlay and channel revocation. The
 signing key lives outside the repo (CI key store); only the public key is compiled in. Saves are never written by OTA.
 OTA files are served from this repository's own GitHub Releases (the Mote pattern), published by the publish workflow with GitHub's

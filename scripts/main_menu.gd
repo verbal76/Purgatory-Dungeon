@@ -18,7 +18,12 @@ var load_char_btn: Button
 var codex_btn: Button
 var options_btn: Button
 var alchemist_btn: Button
-var quit_btn: Button
+var quit_btn: Button            # the Exit button (bottom-right, above the version text)
+var _footer: VBoxContainer      # Exit button + version text, kept inside the phone safe area
+var _quitting: bool = false
+var quit_override: Callable = Callable()   # test hook: replaces get_tree().quit()
+
+const FOOTER_W := 320.0         # width of the footer column; a long version string wraps inside it
 
 func _ready() -> void:
 	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
@@ -40,8 +45,8 @@ func _ready() -> void:
 	if new_char_btn:
 		new_char_btn.call_deferred("grab_focus")
 
-	_wire_button_clicks()
 	_add_version_label()
+	_wire_button_clicks()   # after the footer exists: the Exit button clicks like the rest
 	if TouchControls.is_touch_platform():
 		_fit_for_phone()
 	# The menu is built: this is the game's boot-health checkpoint for the native OTA client (scripts/boot/).
@@ -65,11 +70,8 @@ func _build_backdrop() -> void:
 	move_child(column, at + 1)
 
 
-# Phones: Quit has no place on Android (Home leaves the app) and the rest must fit a 720-high canvas
-# with thumb-sized buttons.
+# Phones: the buttons must fit a 720-high canvas with thumb-sized buttons.
 func _fit_for_phone() -> void:
-	if quit_btn:
-		quit_btn.hide()
 	var box := find_child("VBox", true, false) as VBoxContainer
 	if box:
 		box.add_theme_constant_override("separation", 10)
@@ -82,29 +84,75 @@ func _fit_for_phone() -> void:
 		margin.add_theme_constant_override("margin_bottom", 24)
 
 
-# Small public-version label in the bottom-right corner ("Purgatory Dungeon v2"), plus the
-# engineering diagnostics in the log. See BuildInfo and docs/RELEASES.md.
+# Footer in the bottom-right corner: the Exit button with the version text under it ("Purgatory Dungeon v7.2"), plus the
+# engineering diagnostics in the log (BuildInfo, docs/RELEASES.md). The text is only the version: update state lives in
+# Options > About. The footer sits inside the phone safe area (cut-outs, gesture bar) with a real margin, and is laid out
+# again when the window changes.
 func _add_version_label() -> void:
 	print(BuildInfo.diagnostics())
+	_footer = VBoxContainer.new()
+	_footer.name = "FooterBox"
+	_footer.add_theme_constant_override("separation", PUI.S3)
+	_footer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_footer)
+
+	quit_btn = PUI.button("Exit", "nav")
+	quit_btn.name = "ExitButton"
+	quit_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	quit_btn.pressed.connect(_on_quit_pressed)
+	_footer.add_child(quit_btn)
+
 	var label := PUI.label(BuildInfo.display_string(), "CaptionLabel")
 	label.name = "VersionLabel"
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	label.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	label.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	label.offset_right = -PUI.S5
-	label.offset_bottom = -PUI.S3
-	add_child(label)
-	# A staged OTA update shows "restart to apply" without leaving the menu.
-	var ota: Node = get_node_or_null("/root/Boot")
-	if ota != null and ota.has_signal("status_changed"):
-		ota.status_changed.connect(_refresh_version_label)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_footer.add_child(label)
+
+	resized.connect(_apply_footer_layout)
+	_apply_footer_layout()
+	_link_exit_focus()
 
 
-func _refresh_version_label() -> void:
-	var label := get_node_or_null("VersionLabel") as Label
-	if label != null:
-		label.text = BuildInfo.display_string()
+## Safe-area insets (left, top, right, bottom) in virtual px; zero off phones (a desktop "safe area" is only the work area).
+func _safe_insets() -> Vector4:
+	return HudKit.insets(get_viewport())
+
+
+func _apply_footer_layout() -> void:
+	layout_footer(_safe_insets())
+
+
+## Anchors the footer to the bottom-right corner, `insets` (virtual px) plus a margin away from the edges. Public so a
+## test can simulate a notched phone.
+func layout_footer(insets: Vector4) -> void:
+	if _footer == null:
+		return
+	var margin: float = float(PUI.S6 if TouchControls.is_touch_platform() else PUI.S5)
+	_footer.anchor_left = 1.0
+	_footer.anchor_right = 1.0
+	_footer.anchor_top = 1.0
+	_footer.anchor_bottom = 1.0
+	_footer.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_footer.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_footer.offset_right = -(margin + insets.z)
+	_footer.offset_left = _footer.offset_right - FOOTER_W
+	_footer.offset_bottom = -(margin + insets.w)
+	_footer.offset_top = _footer.offset_bottom
+
+
+# Gamepad / keyboard: the last button of the column leads down to Exit and Exit leads back up.
+func _link_exit_focus() -> void:
+	var last: Button = null
+	for b in [new_char_btn, load_char_btn, alchemist_btn, codex_btn, options_btn]:
+		if b != null and b.visible:
+			last = b
+	if last == null or quit_btn == null:
+		return
+	last.focus_neighbor_bottom = last.get_path_to(quit_btn)
+	quit_btn.focus_neighbor_top = quit_btn.get_path_to(last)
+	quit_btn.focus_neighbor_left = quit_btn.get_path_to(last)
 
 
 # Enforces the desired button order in whatever VBoxContainer (or other
@@ -115,7 +163,7 @@ func _refresh_version_label() -> void:
 #   3. Alchemist's Lab   ← third
 #   4. Codex
 #   5. Options
-#   6. Quit
+#   6. Exit (footer, bottom-right, above the version text)
 func _wire_button_clicks() -> void:
 	if has_node("/root/AudioManager"):
 		AudioManager.wire_click_sounds(self)
@@ -136,7 +184,6 @@ func _reorder_buttons() -> void:
 		alchemist_btn,
 		codex_btn,
 		options_btn,
-		quit_btn,
 	]
 
 	# Keep the game title (and its spacer) above the buttons: moving the buttons to the front would
@@ -165,7 +212,6 @@ func _bind_nodes() -> void:
 	codex_btn = find_child("CodexButton", true, false)
 	options_btn = find_child("OptionsButton", true, false)
 	alchemist_btn = find_child("AlchemistButton", true, false)
-	quit_btn = find_child("QuitButton", true, false)
 
 func _connect_signals() -> void:
 	if new_char_btn:  new_char_btn.pressed.connect(_on_new_character_pressed)
@@ -173,7 +219,6 @@ func _connect_signals() -> void:
 	if codex_btn:     codex_btn.pressed.connect(func(): _try_load_scene(codex_scene))
 	if options_btn:   options_btn.pressed.connect(func(): _try_load_scene(options_scene))
 	if alchemist_btn: alchemist_btn.pressed.connect(func(): _try_load_scene(alchemist_scene))
-	if quit_btn:      quit_btn.pressed.connect(_on_quit_pressed)
 
 func _on_new_character_pressed() -> void:
 	# Check for an empty slot first
@@ -278,8 +323,18 @@ func _try_load_scene(path: String) -> void:
 		printerr("ERROR: Scene file not found at: ", path)
 
 
+## Exit: flush the profile and the settings, then quit. Every write in this game is synchronous and atomic (temp file +
+## rename), so nothing can be half-written at this point; an update download still running is abandoned and its partial
+## file is discarded at the next start, while an already verified update stays staged and starts then.
 func _on_quit_pressed() -> void:
-	# Final save before exit so nothing is lost.
+	if _quitting:
+		return
+	_quitting = true
 	if has_node("/root/SaveManager") and not SaveManager.current_profile.is_empty():
 		SaveManager.save_profile()
+	if has_node("/root/SettingsManager"):
+		SettingsManager.save_settings()
+	if quit_override.is_valid():
+		quit_override.call()
+		return
 	get_tree().quit()

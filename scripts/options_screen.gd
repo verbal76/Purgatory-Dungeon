@@ -4,7 +4,7 @@
 # Description: Fully code-built options screen.
 #              Clears any .tscn content in _ready() and builds all UI from
 #              scratch so node names and layout are never ambiguous.
-#              Tabbed layout: Sound | Video | Gameplay | Accessibility
+#              Tabbed layout: Sound | Video | Gameplay | Accessibility | (Controls, desktop only) | About
 #              All settings read from and written to SettingsManager.
 #
 #  ADJUSTABLE SETTINGS:
@@ -70,6 +70,19 @@ var _val_labels : Dictionary = {}   # key → value display Label
 # Gameplay tab: touch control scheme selector (phones only)
 var _scheme_buttons : Dictionary = {}   # "twin"/"classic" -> Button (a ButtonGroup of selector buttons)
 var _scheme_hint    : Label = null
+
+# About tab (see scripts/about_info.gd): the status model is pure; this screen only draws it.
+var about_provider : Node = null   # test hook: stands in for the Boot autoload (same methods); null = the real one
+var _about_values   : Dictionary = {}   # row key -> value Label
+var _about_status   : Label = null
+var _about_detail   : Label = null
+var _about_check    : Button = null
+var _about_copy     : Button = null
+var _about_copied   : Label = null
+var _about_checking : bool = false
+var _about_dev_box  : VBoxContainer = null
+var _about_taps     : int = 0
+var _about_last_tap : int = -1
 
 # Video tab
 var _display_option  : OptionButton    = null
@@ -158,6 +171,7 @@ func _build_ui() -> void:
 	_build_accessibility_tab()
 	if not touch:
 		_build_controls_tab()   # key/button remapping means nothing on a phone (touch layout: Gameplay tab)
+	_build_about_tab()          # always the last tab (5th on a phone, where there is no Controls tab)
 
 	_back_btn = PUI.button("Back", "nav")
 	_back_btn.name = "BackButton"
@@ -366,9 +380,6 @@ func _build_gameplay_tab() -> void:
 		_slider(t, "Look Sensitivity",  TouchControls.KEY_LOOK,    40.0, 250.0, 5.0)
 		_slider(t, "Aim Smoothing",     TouchControls.KEY_AIM_SMOOTH, 0.0, 100.0, 5.0)
 		_hint(t, "Aim Smoothing steadies the turn while you drag from Attack. 0% turns exactly as your thumb moves.")
-		_section(t, "Playtest")
-		_checkbox(t, "Show performance readout", PerfOverlay.KEY)
-		_hint(t, "FPS, slowest 1% of frames, draw calls. Tell us these numbers if the game stutters.")
 
 
 const SCHEME_HINTS : Dictionary = {
@@ -412,6 +423,200 @@ func _build_accessibility_tab() -> void:
 	_section(t, "Visibility", "Applies immediately")
 	_slider(t, "Ambient Brightness", "AmbientBrightness", 0.0, 100.0, 5.0)
 	_hint(t, "Raises the dim background light so floors, walls and enemies stay readable. 0% is the standard dark look.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ABOUT TAB
+#  What build this is and whether it is up to date. All facts and wording come from AboutInfo (pure, tested);
+#  the OTA facts come from the native `Boot` autoload and "Check for updates" goes through Boot.check_now():
+#  this screen has no network code and no second updater. Without Boot (desktop, tests) it shows a calm note.
+# ══════════════════════════════════════════════════════════════════════════════
+
+const ABOUT_ROWS : Array = [
+	["version", "Game version"], ["app", "App version"], ["update", "Update"], ["staged", "Waiting to start"],
+]
+const ABOUT_TECH_ROWS : Array = [
+	["runtime", "Runtime"], ["fingerprint", "Runtime fingerprint"], ["channel", "Update channel"],
+	["engine", "Engine"], ["platform", "Platform"], ["checked", "Last check"],
+]
+
+var last_copied_text : String = ""   # what Copy diagnostics put on the clipboard (tests read it)
+var _about_row_boxes : Dictionary = {}   # row key -> HBoxContainer
+
+
+func _build_about_tab() -> void:
+	var t := _new_tab("About")
+
+	var title := PUI.label("", "CardTitle")
+	title.name = "AboutTitle"
+	title.mouse_filter = Control.MOUSE_FILTER_STOP     # seven quick taps unlock the developer tools
+	title.gui_input.connect(_on_about_title_input)
+	t.add_child(title)
+	_about_values["title"] = title
+
+	_section(t, "Version")
+	for r in ABOUT_ROWS:
+		_about_value_row(t, r[0], r[1])
+
+	_section(t, "Updates")
+	var plate := PUI.panel("inset")
+	plate.name = "AboutStatusPlate"
+	t.add_child(plate)
+	var pv := VBoxContainer.new()
+	pv.add_theme_constant_override("separation", PUI.S1)
+	plate.add_child(pv)
+	_about_status = Label.new()
+	_about_status.name = "AboutStatus"
+	_about_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_about_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pv.add_child(_about_status)
+	_about_detail = PUI.label("", "SecondaryLabel")
+	_about_detail.name = "AboutDetail"
+	_about_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_about_detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pv.add_child(_about_detail)
+
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", PUI.S4)
+	t.add_child(buttons)
+	_about_check = PUI.button("Check for updates", "secondary")
+	_about_check.name = "CheckUpdatesButton"
+	_about_check.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_about_check.pressed.connect(_on_about_check_pressed)
+	buttons.add_child(_about_check)
+	_about_copy = PUI.button("Copy diagnostics", "secondary")
+	_about_copy.name = "CopyDiagnosticsButton"
+	_about_copy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_about_copy.pressed.connect(_on_about_copy_pressed)
+	buttons.add_child(_about_copy)
+	_about_copied = PUI.label("", "SecondaryLabel")
+	_about_copied.name = "AboutCopied"
+	t.add_child(_about_copied)
+	_hint(t, "Updates download in the background and start the next time you open the game. Copy diagnostics puts the details above on the clipboard, without any personal data, so you can paste them into a bug report.")
+
+	_section(t, "Technical details")
+	for r in ABOUT_TECH_ROWS:
+		_about_value_row(t, r[0], r[1])
+
+	# Developer tools: hidden until the version is tapped seven times. Never shown to a normal player.
+	_about_dev_box = VBoxContainer.new()
+	_about_dev_box.name = "DeveloperTools"
+	_about_dev_box.add_theme_constant_override("separation", PUI.S3)
+	t.add_child(_about_dev_box)
+	_section(_about_dev_box, "Developer tools")
+	_checkbox(_about_dev_box, "Show performance readout", PerfOverlay.KEY)
+	_hint(_about_dev_box, "FPS, slowest 1% of frames, draw calls (phones).")
+	var diag := PUI.button("Open update diagnostics", "secondary")
+	diag.name = "OpenDiagnosticsButton"
+	diag.pressed.connect(_on_about_open_diagnostics)
+	_about_dev_box.add_child(diag)
+	var hide_dev := PUI.button("Hide developer tools", "nav")
+	hide_dev.name = "HideDeveloperToolsButton"
+	hide_dev.pressed.connect(func() -> void: _set_developer_mode(false))
+	_about_dev_box.add_child(hide_dev)
+	_about_dev_box.visible = _developer_mode()
+
+	var b = AboutInfo.boot_node(about_provider)
+	if b != null and b.has_signal("status_changed"):
+		b.status_changed.connect(_refresh_about)
+	_refresh_about()
+
+
+func _about_value_row(parent: VBoxContainer, key: String, label_text: String) -> void:
+	var r := _row(parent, label_text)
+	r.name = "AboutRow_" + key
+	var v := Label.new()
+	v.name = "Value"
+	v.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	r.add_child(v)
+	_about_values[key] = v
+	_about_row_boxes[key] = r
+
+
+func _developer_mode() -> bool:
+	return has_node("/root/SettingsManager") and SettingsManager.is_developer_mode()
+
+
+func _set_developer_mode(on: bool) -> void:
+	if has_node("/root/SettingsManager"):
+		SettingsManager.set_developer_mode(on)
+	if _about_dev_box != null:
+		_about_dev_box.visible = on
+	if _checkboxes.has(PerfOverlay.KEY):
+		_suppress = true
+		(_checkboxes[PerfOverlay.KEY] as CheckBox).button_pressed = bool(SettingsManager.gameplay_settings.get(PerfOverlay.KEY, false)) if on else false
+		_suppress = false
+
+
+func _on_about_title_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		var now: int = Time.get_ticks_msec()
+		_about_taps = AboutInfo.dev_tap(_about_taps, _about_last_tap, now)
+		_about_last_tap = now
+		if _about_taps >= AboutInfo.DEV_TAPS:
+			_about_taps = 0
+			_set_developer_mode(not _developer_mode())
+
+
+## Redraws the tab from the current snapshot. Connected to Boot.status_changed, so progress appears by itself.
+func _refresh_about() -> void:
+	if _about_status == null or not is_instance_valid(_about_status):
+		return
+	var model: Dictionary = AboutInfo.build_model(AboutInfo.snapshot(about_provider), _about_checking)
+	(_about_values["title"] as Label).text = model["title"]
+	for key in _about_row_boxes.keys():
+		(_about_row_boxes[key] as Control).visible = false
+	for entry in (model["rows"] as Array) + (model["tech"] as Array):
+		var k: String = entry["key"]
+		if _about_values.has(k):
+			(_about_values[k] as Label).text = entry["value"]
+			(_about_row_boxes[k] as Control).visible = true
+	var st: Dictionary = model["status"]
+	_about_status.text = st["text"]
+	_about_status.add_theme_color_override("font_color", {
+		AboutInfo.KIND_OK: PUI.MOSS, AboutInfo.KIND_WARN: PUI.EMBER_BRIGHT,
+		AboutInfo.KIND_ERROR: PUI.BLOOD_BRIGHT}.get(st["kind"], PUI.BONE))
+	_about_detail.text = st.get("detail", "")
+	_about_detail.visible = _about_detail.text != ""
+	_about_check.disabled = not model["can_check"]
+	_about_check.text = model["check_label"]
+
+
+## "Check for updates": the native client's own check (Boot.check_now): signed manifest, verification, download, staging.
+## A second press while one runs is ignored. The result is only a state change; nothing is applied until a restart.
+func _on_about_check_pressed() -> void:
+	if _about_checking:
+		return
+	var b = AboutInfo.boot_node(about_provider)
+	if b == null or not b.has_method("check_now"):
+		_refresh_about()
+		return
+	_about_checking = true
+	_refresh_about()
+	await b.check_now()
+	_about_checking = false
+	if is_inside_tree():
+		_refresh_about()
+
+
+func about_diagnostics_text() -> String:
+	var b = AboutInfo.boot_node(about_provider)
+	var boot_text: String = str(b.diagnostics_text()) if b != null and b.has_method("diagnostics_text") else ""
+	return AboutInfo.diagnostics_text(AboutInfo.snapshot(about_provider), AboutInfo.device_info(), boot_text)
+
+
+func _on_about_copy_pressed() -> void:
+	last_copied_text = about_diagnostics_text()
+	DisplayServer.clipboard_set(last_copied_text)
+	_about_copied.text = "Copied to the clipboard."
+
+
+func _on_about_open_diagnostics() -> void:
+	var b = AboutInfo.boot_node(about_provider)
+	if b != null and b.has_method("show_diagnostics"):
+		b.show_diagnostics()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -40,6 +40,13 @@ done
 for scene in res://tests/test_touch_controls.tscn res://tests/test_touch_art.tscn res://tests/test_aim_pacing.tscn res://tests/test_twin_stick.tscn res://tests/test_mobile_ui.tscn res://tests/test_app_lifecycle.tscn res://tests/test_typography.tscn; do
 	PURGATORY_FORCE_TOUCH=1 run "$scene" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene"
 done
+# Options > About (status model, Check for updates through Boot, Copy diagnostics, developer tools), the main-menu footer
+# (safe area, Exit above the version), no OTA/debug text over the menus, and the Alchemist's Lab "Main Menu" button.
+# Desktop and phone.
+for scene in res://tests/test_about.tscn res://tests/test_menu_footer.tscn; do
+	run "$scene" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene"
+	PURGATORY_FORCE_TOUCH=1 run "$scene (touch)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene"
+done
 # Twin-stick (default scheme): the right stick and the ATTACK drag turn the real Barbarian and the real Mage.
 for cls in barbarian mage; do
 	TWIN_CLASS="$cls" PURGATORY_FORCE_TOUCH=1 run "res://tests/test_twin_stick.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_twin_stick.tscn

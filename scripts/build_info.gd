@@ -62,12 +62,6 @@ static func running_version() -> String:
 	return str(public_version())
 
 
-## " · v7.2 ready, restart to apply" while a newer OTA is staged; "" otherwise (release footer unchanged).
-static func _ota_suffix() -> String:
-	var b: Node = _boot()
-	return str(b.call("footer_suffix")) if b != null and b.has_method("footer_suffix") else ""
-
-
 static func _ota_lines() -> PackedStringArray:
 	var b: Node = _boot()
 	if b == null or not b.has_method("diagnostics_text"):
@@ -76,10 +70,10 @@ static func _ota_lines() -> PackedStringArray:
 
 
 ## Short line for the menu: "Purgatory Dungeon v7" (baseline) or "Purgatory Dungeon v7.1" (OTA 7.1 running), or the
-## explicit development-build form.
+## explicit development-build form. Never carries update status: a staged update is shown in Options > About only.
 static func display_string() -> String:
 	var tail := " · " + short_commit() if commit() != "" else ""
-	return compose_display(is_release_build(), public_version(), running_version(), tail, _ota_suffix())
+	return compose_display(is_release_build(), public_version(), running_version(), tail, "")
 
 
 ## Pure composition of the footer (unit-tested). `running` is "7" or "7.1"; `suffix` the staged-update note.
