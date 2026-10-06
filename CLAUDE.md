@@ -46,6 +46,24 @@ from the signature + runtime fingerprint, not the host. **Verified repository vi
 never assume it: `curl -s https://api.github.com/repos/verbal76/Purgatory-Dungeon`, `"private": false`); so never commit keys or private artifacts.
 Publishing an actual OTA to players needs the owner's explicit authorization.
 
+## GitHub Actions budget (standing owner policy: GitHub-hosted minutes are scarce)
+
+Actions usage is shared across the owner's projects with a deliberately small monthly budget. Before starting any hosted workflow ask:
+**"Does this need GitHub Actions, or can I prove it locally?"** Validate locally first (`tests/run_tests.sh`, `python3 tools/ota_runtime.py --check`,
+`python3 tools/ota/classify.py <base> HEAD`, the local OTA e2e `tests/ota_e2e.py`, the lavapipe render probes); use Actions only for evidence only
+GitHub can give. Rules:
+- Appropriate: final validation of a candidate that is approaching a release/OTA; tests that cannot be reproduced locally; an APK/AAB/EXE the owner actually
+  needs for physical testing or release; OTA publication and its safety/compatibility/signing checks (`ota-publish.yml`); release builds and release verification.
+- Not appropriate: building every platform on every push; Windows EXEs when Windows was not requested; APKs for an OTA-only change; re-running a workflow to see
+  whether an intermittent test passes (root-cause it locally instead); rebuilding the same SHA when a verified result/artifact can be reused; release validation
+  for docs/comments/bookkeeping; using CI instead of local debugging.
+- How `ci.yml` enforces it: pull requests run only when ready for review (never drafts) and never for docs-only changes; a newer commit cancels the superseded
+  run; ordinary runs execute the tests only; the Windows package and the Android APK are built only for a release (tag `v<N>` / branch `release/v<N>`) or an
+  explicit `workflow_dispatch` (`build_windows` / `build_android`); promote branches never rebuild. Keep PRs as drafts until a candidate is really close to release.
+- Release safety is NOT traded for minutes: signing verification, runtime/OTA compatibility, the release gates, rollback protections and the full test suite on
+  the exact OTA SHA (`ota-tests.yml`) stay mandatory. Do not publish a release/OTA/APK merely because workflows were audited or edited.
+- Prefer one verified run per SHA; push several commits together rather than one at a time; do not push to a branch with an open non-draft PR for every small edit.
+
 ## Studio splash (Hot Attic Games standing requirement — do not remove)
 
 Every Hot Attic Games application opens with the studio splash before its own title screen:

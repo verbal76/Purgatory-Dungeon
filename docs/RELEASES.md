@@ -59,6 +59,11 @@ no binary drift. (A branch push is used because `workflow_dispatch` only works f
 default branch, and the agent environment cannot push tags or download CI artifacts directly.)
 That is how v1 and v2 were published; their release notes were then edited to add a plain-English summary.
 
+## CI cost (GitHub Actions budget policy)
+`ci.yml` runs the tests on ready-for-review PRs and ordinary pushes, and builds the Windows package and the Android APK only for a release
+(tag `v<N>` / branch `release/v<N>`) or an explicit `workflow_dispatch` (`build_windows`, `build_android`). Drafts and docs-only PRs cost nothing; a newer
+commit cancels the superseded PR run. The OTA publish workflow is unchanged (its tests and safety gates are release gates). See CLAUDE.md.
+
 ## Package verification
 `tools/verify_package.py` inspects the package itself: CI runs it on the exported build directory
 (PCK contents, studio splash scene/script, canonical logo, generated `build_info.json` for the right

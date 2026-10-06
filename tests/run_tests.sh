@@ -32,12 +32,12 @@ GODOT="$GODOT" python3 tests/test_ota_tools.py || { echo "!!! FAILED: OTA build 
 # Refresh the import cache + global class registry (needed on a fresh clone).
 echo "=== import"
 "$GODOT" --headless --path . --import >/dev/null 2>&1 || true
-for scene in res://tests/validate_project.tscn res://tests/test_save_manager.tscn res://tests/test_fireball_pool.tscn res://tests/test_menu_scenes.tscn res://tests/test_pause_options.tscn res://tests/test_enemy_pooling.tscn res://tests/test_clock_buffs.tscn res://tests/test_run_lifecycle.tscn res://tests/test_audio_buses.tscn res://tests/test_pause_freeze.tscn res://tests/test_settings_controls.tscn res://tests/test_release_metadata.tscn res://tests/test_trap_fireball.tscn res://tests/test_misc_fixes.tscn res://tests/test_portal_completion.tscn res://tests/test_studio_splash.tscn res://tests/test_ui_brand.tscn res://tests/test_typography.tscn res://tests/test_ota_core.tscn res://tests/test_mage_aim.tscn; do
+for scene in res://tests/validate_project.tscn res://tests/test_save_manager.tscn res://tests/test_fireball_pool.tscn res://tests/test_menu_scenes.tscn res://tests/test_pause_options.tscn res://tests/test_enemy_pooling.tscn res://tests/test_clock_buffs.tscn res://tests/test_run_lifecycle.tscn res://tests/test_audio_buses.tscn res://tests/test_pause_freeze.tscn res://tests/test_settings_controls.tscn res://tests/test_release_metadata.tscn res://tests/test_trap_fireball.tscn res://tests/test_misc_fixes.tscn res://tests/test_portal_completion.tscn res://tests/test_studio_splash.tscn res://tests/test_ui_brand.tscn res://tests/test_typography.tscn res://tests/test_ota_core.tscn res://tests/test_mage_aim.tscn res://tests/test_lighting_readability.tscn; do
 	run "$scene" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene"
 done
 # Touch layer (Android): runs as a touch platform so the layer is built; the desktop bindings test runs
 # WITHOUT it and proves keyboard / controller input is untouched.
-for scene in res://tests/test_touch_controls.tscn res://tests/test_touch_art.tscn res://tests/test_twin_stick.tscn res://tests/test_mobile_ui.tscn res://tests/test_app_lifecycle.tscn res://tests/test_typography.tscn; do
+for scene in res://tests/test_touch_controls.tscn res://tests/test_touch_art.tscn res://tests/test_aim_pacing.tscn res://tests/test_twin_stick.tscn res://tests/test_mobile_ui.tscn res://tests/test_app_lifecycle.tscn res://tests/test_typography.tscn; do
 	PURGATORY_FORCE_TOUCH=1 run "$scene" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene"
 done
 # Twin-stick (default scheme): the right stick and the ATTACK drag turn the real Barbarian and the real Mage.
@@ -78,6 +78,26 @@ done
 for seed in 1 2 3 7 42 123 2024 98765; do
 	GEN_TEST_SEEDS="$seed" run "res://tests/test_dungeon_generation.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_dungeon_generation.tscn
 done
+# Threaded dungeon scene load (no frozen menu while a run starts).
+run "res://tests/test_dungeon_entry.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_dungeon_entry.tscn
+# Staged dungeon entry: the sliced generation equals the synchronous one; the player's neighbourhood is complete at hand-over.
+for seed in 7 42; do
+	ENTRY_TEST_SEED="$seed" run "res://tests/test_entry_staging.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_entry_staging.tscn
+done
+# Torches: every module has at least one and every torch is seated on a wall (one seed per process, as above).
+for seed in 1 7 42; do
+	TORCH_TEST_SEEDS="$seed" run "res://tests/test_torch_placement.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_torch_placement.tscn
+done
+# Render cost: torch light budget (cap, hysteresis, fade, dimming hand-over), batched flames, opaque modules.
+for seed in 7 42; do
+	LIGHT_TEST_SEED="$seed" run "res://tests/test_light_budget.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_light_budget.tscn
+done
+# Rooms outside the useful area cost no rendering work: distance culling (render nodes only).
+for seed in 7 42; do
+	VIS_TEST_SEED="$seed" run "res://tests/test_module_visibility.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_module_visibility.tscn
+done
+# ... and in the real main scene with the real minimap (map key shows every room, closing hides them again).
+run "res://tests/test_module_visibility_main.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_module_visibility_main.tscn
 if [ "${#FAILED_STAGES[@]}" -gt 0 ]; then
 	echo "=== FAILED STAGES (${#FAILED_STAGES[@]}):"
 	printf '  %s\n' "${FAILED_STAGES[@]}"

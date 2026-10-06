@@ -48,51 +48,67 @@ var _exhausted_spawn_points : Dictionary = {}
 #  INITIALISATION
 # ══════════════════════════════════════════════════════════════
 
-func _ready() -> void:
-	await get_tree().process_frame
-	await get_tree().process_frame
+# Staged population (see Purgatory_Dungeon_main_game_file.gd). Modules are visited in random order; every
+# module that has a clear point contributes a spawn point, and the first `orb_count` of them get their orb
+# at once (`stage_near_done`), the rest are only collected for the respawn / relocation draws. The old pass
+# computed a safe point for ALL ~330 modules before placing 10 orbs.
+var stage_near_done : bool = true
+var stage_done : bool = true
 
+
+func stage_begin(_origin: Vector3) -> void:
+	stage_near_done = false
+	stage_done = false
+	call("_stage_run")   # dynamic call: runs as a background coroutine
+
+
+func _entry_mark(label: String) -> void:
+	var main : Node = get_parent()
+	if main != null and main.has_method("entry_mark"):
+		main.entry_mark(label)
+
+
+func _stage_run() -> void:
+	var main : Node = get_parent()
 	# ── Easy difficulty: more frequent orbs ───────────────────────────────────
 	if has_node("/root/GlobalRunData") and GlobalRunData.difficulty == "easy":
 		orb_count    = int(orb_count * 1.6)
 		respawn_time = respawn_time * 0.5
 
-	_collect_spawn_points()
-	_spawn_all_orbs()
-
-
-func _collect_spawn_points() -> void:
-	var gen : Node = get_parent().get_node_or_null("DungeonGenerationFunction")
+	var gen : Node = main.get_node_or_null("DungeonGenerationFunction")
+	var modules : Array = []
 	if gen == null:
 		push_warning("HealthOrbManager: DungeonGenerationFunction not found.")
-		return
-
-	var modules : Array = gen.get("placed_modules") if gen.get("placed_modules") != null else []
-	if modules.is_empty():
-		push_warning("HealthOrbManager: placed_modules is empty.")
-		return
-
+	else:
+		modules = (gen.get("placed_modules") as Array).duplicate() if gen.get("placed_modules") != null else []
+		if modules.is_empty():
+			push_warning("HealthOrbManager: placed_modules is empty.")
+	modules.shuffle()
+	var want : int = 0 if GlobalRunData.debug_no_health_orbs else orb_count
+	_entry_mark("orbs_begin")
+	if want <= 0:
+		modules.clear()
+		stage_near_done = true
+	var created : int = 0
 	for mod in modules:
-		if mod is Node3D and gen.has_method("get_random_safe_interior_point"):
+		if mod is Node3D and is_instance_valid(mod):
 			# Margin 2.0 (up from default 1.25) keeps the larger FBX model clear of walls.
 			var safe_point : Vector3 = gen.get_random_safe_interior_point(mod as Node3D, orb_height, 2.0)
 			if safe_point != Vector3.ZERO:
 				_spawn_points.append(safe_point)
-
-	_spawn_points.shuffle()
-
-
-func _spawn_all_orbs() -> void:
-	if GlobalRunData.debug_no_health_orbs:
-		return
-
-	if _spawn_points.is_empty():
+				if created < want:
+					_create_orb(safe_point)
+					created += 1
+					if created >= want:
+						stage_near_done = true
+						_entry_mark("orbs_placed")
+		if main.has_method("stage_over") and main.stage_over():
+			await get_tree().process_frame
+	if want > 0 and created == 0:
 		push_warning("HealthOrbManager: no spawn points — orbs not placed.")
-		return
-
-	var count : int = mini(orb_count, _spawn_points.size())
-	for i in count:
-		_create_orb(_spawn_points[i])
+	stage_near_done = true
+	stage_done = true
+	_entry_mark("orbs_end")
 
 
 # ══════════════════════════════════════════════════════════════

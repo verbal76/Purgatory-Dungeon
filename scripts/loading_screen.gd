@@ -26,8 +26,12 @@ var label: Label         # "Loading the dungeon" (display face)
 var _dots: Label         # animated dots in their own fixed-width slot so the title never shifts
 var _content: Control    # title block, faded together with the background
 
-# Minimum seconds before we even check if spawning is done.
-const MIN_DISPLAY_TIME : float = 3.0
+# Minimum seconds before we even check if spawning is done (a floor so the screen never flashes; it used to be
+# 3 s, which kept a fast device waiting on an already finished dungeon).
+const MIN_DISPLAY_TIME : float = 1.2
+# Rendered frames with the whole neighbourhood in place before the fade starts: the first draws of its meshes,
+# lights and materials happen behind the screen instead of under the player's first steps.
+const SETTLE_FRAMES : int = 3
 # Safety fallback — dismiss after this many seconds regardless.
 const MAX_DISPLAY_TIME : float = 30.0
 
@@ -35,6 +39,9 @@ var _elapsed      : float = 0.0
 var _spawn_done   : bool  = false   # Set true when enemy_spawner signals complete
 var _connected    : bool  = false   # True once we've connected the spawn signal
 var is_fading     : bool  = false
+var _gen_node     : Node  = null    # the dungeon's main node (group "dungeon_generator"), once found
+var _settle       : int   = 0
+var _world_hidden : bool  = false   # the root viewport's 3D rendering is off (see _enter_tree)
 
 var original_volume : float = 0.0
 var bus_idx         : int   = 0
@@ -55,6 +62,13 @@ func _enter_tree() -> void:
 
 	# Freeze physics, enemies, and player inputs instantly.
 	get_tree().paused = true
+
+	# Nothing of the 3D world is visible behind this screen while the dungeon is being built, so it is not rendered:
+	# the layout used to be drawn (hundreds of draw calls, growing every slice) under an opaque overlay on every
+	# loading frame. It is switched back on (_show_world) once the neighbourhood is complete, a few frames before
+	# the fade, so the first draws of its meshes, lights and materials still happen behind the screen.
+	get_tree().root.disable_3d = true
+	_world_hidden = true
 
 
 func _ready() -> void:
@@ -133,9 +147,31 @@ func _process(delta: float) -> void:
 			if spawner.get("_initial_spawn_done") == true:
 				_spawn_done = true
 
-	# Dismiss as soon as spawn is confirmed done.
-	if _spawn_done:
-		_start_fade_in()
+	# Dismiss as soon as spawn is confirmed done AND the dungeon reports the player's neighbourhood complete
+	# (props, chests, orbs around the spawn), then a few settle frames.
+	if _spawn_done and _entry_ready():
+		if _world_hidden:
+			_show_world()   # settle frames count from the first frame that renders the world
+		else:
+			_settle += 1
+			if _settle >= SETTLE_FRAMES:
+				_start_fade_in()
+
+
+func _show_world() -> void:
+	if _world_hidden and is_inside_tree():
+		get_tree().root.disable_3d = false
+	_world_hidden = false
+
+
+# True when there is no staged dungeon to wait for (menus, tests) or it reports entry_is_ready.
+func _entry_ready() -> bool:
+	if _gen_node == null or not is_instance_valid(_gen_node):
+		var nodes : Array[Node] = get_tree().get_nodes_in_group("dungeon_generator")
+		_gen_node = nodes[0] if not nodes.is_empty() else null
+	if _gen_node == null or not ("entry_is_ready" in _gen_node):
+		return true
+	return bool(_gen_node.entry_is_ready)
 
 
 # Called by EnemyManager via the spawn_complete signal.
@@ -145,6 +181,7 @@ func _on_spawn_complete() -> void:
 
 func _start_fade_in() -> void:
 	is_fading = true
+	_show_world()
 
 	# Unpause the game so physics and AI resume.
 	get_tree().paused = false
@@ -175,6 +212,10 @@ func _set_vol(vol: float) -> void:
 # the tween dies with it and Master would stay at -80 dB: the whole game silent until
 # a slider is touched. Always put the Master bus back where the settings say it belongs.
 func _exit_tree() -> void:
+	if _world_hidden:
+		# Freed before it ever showed the world (scene change, quit): rendering must come back.
+		get_tree().root.disable_3d = false
+		_world_hidden = false
 	if bus_idx < 0:
 		return
 	var target : float = original_volume

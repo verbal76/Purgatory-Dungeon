@@ -31,6 +31,20 @@ func _ready() -> void:
 	var traps = main.get_node("TrapManager")
 	var player = main.get_node("Player")
 	var pause = main.get_node("pause_menu_function")
+	# 240 frames is not real time: the entry loading screen keeps the tree paused for a wall-clock floor, so a fast headless
+	# run can reach this point with the player still dropping into the start room (the fireball then spawned in a wall). Wait
+	# until play has really started and the player stands.
+	var waited := 0
+	while (get_tree().paused or not player.is_on_floor()) and waited < 3000:
+		await get_tree().physics_frame
+		waited += 1
+	await _frames(30)
+	# The player must start on the room floor: no prop (a 1.7 m crate, a table) may be furnished onto the spawn point.
+	var under := PhysicsRayQueryParameters3D.create(player.global_position, player.global_position + Vector3(0, -4, 0))
+	under.exclude = [player.get_rid()]
+	var under_hit: Dictionary = player.get_world_3d().direct_space_state.intersect_ray(under)
+	var under_body: Node = under_hit.get("collider") as Node
+	_check(under_body == null or not under_body.is_in_group("kickable_prop"), "the player does not start standing on a prop (%s)" % [str(under_body.name) if under_body != null else "nothing"])
 
 	# Launch a homing fireball from open space (a spot in a wall would free it on contact). The dungeon
 	# is random: a free ray does not guarantee a 0.3 m sphere clear of props at the spawn point, so try

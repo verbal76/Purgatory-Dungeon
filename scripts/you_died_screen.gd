@@ -1,4 +1,6 @@
 extends CanvasLayer
+
+const DungeonEntry = preload("res://scripts/dungeon_entry.gd")   # threaded dungeon load (no global class name)
 # ══════════════════════════════════════════════════════════════
 #  FILE:         you_died_screen.gd
 #  PATH:         res://scripts/you_died_screen.gd
@@ -291,5 +293,5 @@ func _do_quick_restart() -> void:
 
 	RunLifecycle.end_run_cleanup()
 
-	get_tree().change_scene_to_file(QUICK_RESTART_SCENE)
+	DungeonEntry.start(get_tree(), QUICK_RESTART_SCENE)
 	queue_free()

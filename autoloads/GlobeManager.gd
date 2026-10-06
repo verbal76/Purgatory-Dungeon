@@ -256,12 +256,10 @@ func spawn_globes(dungeon_gen: Node) -> void:
 		push_warning("GlobeManager: Cannot spawn globes — Globe.tscn is missing.")
 		return
 
-	var spawn_points := _collect_spawn_points(dungeon_gen)
+	var spawn_points := _collect_spawn_points(dungeon_gen, globe_count)
 	if spawn_points.is_empty():
 		push_warning("GlobeManager: No valid spawn points found. No globes spawned.")
 		return
-
-	spawn_points.shuffle()
 
 	var total_globes : int = mini(globe_count, spawn_points.size())
 
@@ -287,15 +285,21 @@ func spawn_globes(dungeon_gen: Node) -> void:
 	_start_next_timer()
 
 
-func _collect_spawn_points(dungeon_gen: Node) -> Array:
+# A safe point in each of up to `limit` randomly chosen modules. Modules are visited in random order and the
+# search stops at `limit` points: the old pass computed a safe point (up to 24 physics queries) for every one of
+# the ~330 modules and then kept only globe_count of them.
+func _collect_spawn_points(dungeon_gen: Node, limit: int) -> Array:
 	var points : Array = []
 
-	var modules : Array = dungeon_gen.get("placed_modules") if dungeon_gen.get("placed_modules") != null else []
+	var modules : Array = (dungeon_gen.get("placed_modules") as Array).duplicate() if dungeon_gen.get("placed_modules") != null else []
 	if modules.is_empty():
 		push_warning("GlobeManager: placed_modules is empty on the dungeon generator.")
 		return points
+	modules.shuffle()
 
 	for mod in modules:
+		if points.size() >= limit:
+			break
 		if mod is Node3D and dungeon_gen.has_method("get_random_safe_interior_point"):
 			var safe_point : Vector3 = dungeon_gen.get_random_safe_interior_point(mod as Node3D, spawn_height)
 			if safe_point != Vector3.ZERO:

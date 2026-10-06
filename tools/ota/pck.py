@@ -34,6 +34,7 @@ MAGIC = b"GDPC"
 FORMAT_VERSION = 3
 PACK_DIR_ENCRYPTED = 1
 PACK_REL_FILEBASE = 2
+PACK_SPARSE_BUNDLE = 4     # Godot 4.5+: directory only; the file data lives OUTSIDE the pack (Android: loose under assets/)
 FILE_ENCRYPTED = 1
 FILE_REMOVAL = 2
 FILE_DELTA = 4
@@ -84,6 +85,7 @@ class Pck:
         self.dir_offset = 0
         self.entries = []
         self.by_path = {}
+        self.sparse = False
 
     @property
     def engine_str(self):
@@ -98,8 +100,12 @@ def _u64(b, o):
     return struct.unpack_from("<Q", b, o)[0]
 
 
-def read_pck(path: str) -> Pck:
-    """Parses and structurally validates a pack; raises PckError on anything malformed."""
+def read_pck(path: str, allow_sparse: bool = False) -> Pck:
+    """Parses and structurally validates a pack; raises PckError on anything malformed.
+
+    A sparse-bundle pack (flag 4) is only a directory (path, size, md5) of files stored elsewhere: Godot's Android gradle export writes
+    assets/assets.sparsepck next to the loose project files. It is refused unless `allow_sparse` (then `pck.sparse` is set, entries
+    carry offset 0 and no data can be read from the pack itself); an update payload is never allowed to be one."""
     try:
         with open(path, "rb") as f:
             data = f.read()
@@ -116,15 +122,19 @@ def read_pck(path: str) -> Pck:
         raise PckError(f"unsupported PCK format version {pck.format} (only {FORMAT_VERSION} is supported)")
     pck.engine = (_u32(data, 8), _u32(data, 12), _u32(data, 16))
     pck.flags = _u32(data, 20)
-    if pck.flags & ~KNOWN_PACK_FLAGS:
+    if pck.flags & PACK_SPARSE_BUNDLE:
+        if not allow_sparse:
+            raise PckError("sparse-bundle pack (a directory of files stored outside the pack) is not supported here")
+        pck.sparse = True
+    if pck.flags & ~(KNOWN_PACK_FLAGS | PACK_SPARSE_BUNDLE):
         raise PckError(f"unknown pack flags 0x{pck.flags:x}")
     if pck.flags & PACK_DIR_ENCRYPTED:
         raise PckError("encrypted pack directory is not supported")
     pck.file_base = _u64(data, 24)          # packs here start at byte 0, so relative == absolute
     pck.dir_offset = _u64(data, 32)
-    if pck.file_base < HEADER_FIXED + HEADER_RESERVED or pck.file_base > n:
+    if not pck.sparse and (pck.file_base < HEADER_FIXED + HEADER_RESERVED or pck.file_base > n):
         raise PckError(f"file_base {pck.file_base} outside the file")
-    if pck.dir_offset < pck.file_base or pck.dir_offset + 4 > n:
+    if pck.dir_offset < (HEADER_FIXED + HEADER_RESERVED if pck.sparse else pck.file_base) or pck.dir_offset + 4 > n:
         raise PckError(f"directory offset {pck.dir_offset} outside the file")
     p = pck.dir_offset
     count = _u32(data, p)
@@ -161,11 +171,11 @@ def read_pck(path: str) -> Pck:
             raise PckError(f"entry {name!r}: unknown file flags 0x{flags:x}")
         if name in pck.by_path:
             raise PckError(f"duplicate path in the directory: {name!r}")
-        e = Entry(name, pck.file_base + off, size, md5, flags)
+        e = Entry(name, 0 if pck.sparse else pck.file_base + off, size, md5, flags)
         if e.removal:
             if size != 0:
                 raise PckError(f"removal entry {name!r} has a non-zero size")
-        elif e.offset + size > n or e.offset < pck.file_base:
+        elif not pck.sparse and (e.offset + size > n or e.offset < pck.file_base):
             raise PckError(f"entry {name!r}: data (offset {e.offset}, size {size}) lies outside the file")
         pck.entries.append(e)
         pck.by_path[name] = e
@@ -175,6 +185,8 @@ def read_pck(path: str) -> Pck:
 def read_entry(pck: Pck, entry: Entry) -> bytes:
     if entry.removal:
         return b""
+    if pck.sparse:
+        raise PckError(f"{entry.path!r}: a sparse-bundle pack holds no file data")
     with open(pck.path, "rb") as f:
         f.seek(entry.offset)
         data = f.read(entry.size)
@@ -186,6 +198,8 @@ def read_entry(pck: Pck, entry: Entry) -> bytes:
 def verify_entries(pck: Pck) -> list:
     """Problems (strings) found by re-hashing every stored file; empty list = all md5s match."""
     problems = []
+    if pck.sparse:
+        return ["sparse-bundle pack: the file data is not in the pack, nothing to re-hash"]
     with open(pck.path, "rb") as f:
         for e in pck.entries:
             if e.removal:
