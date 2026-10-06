@@ -82,9 +82,18 @@ sensitivity apply to both.
   `brute_player.gd` / `mage_player.gd` are untouched (they turn by `relative.x * 0.0025` rad). The
   rate is physical (rad/s), so frame time does not matter (step capped at `LOOK_MAX_STEP` against hitches).
   The players have no pitch today and ignore `relative.y`; it is sent at `LOOK_PITCH_RATIO` for when they get one.
-- **Response** (`look_response`): d = offset / radius; inside `LOOK_DEADZONE` nothing; then
-  x = (d - dz) / (1 - dz) and rate = `LOOK_MAX_YAW_RATE` * x^`LOOK_CURVE_EXP` * Look Sensitivity.
-  The drag origin follows a thumb dragged past the radius (never runs out of travel, reversing is immediate).
+- **Response** (`look_response`, then the filter): d = offset / radius, measured from the touch-down point after the
+  first `AIM_SETTLE_PX` (6 px) of finger travel is ignored (the press itself wobbles the thumb; distance, not time, so a
+  fast deliberate drag is not delayed). Turning **engages** at d >= `AIM_ENGAGE` (0.20, about 18 px) and stays engaged
+  until d < `LOOK_DEADZONE` (0.12): a thumb hovering at the edge does not chatter. While engaged
+  x = (d - 0.12) / 0.88 and rate = `LOOK_MAX_YAW_RATE` * x^`LOOK_CURVE_EXP` * Look Sensitivity, continuous (about 1% of
+  full at the entry point, exactly 0 at the exit). The drag origin follows a thumb dragged past the radius (never runs out
+  of travel, reversing is immediate).
+- **Aim Smoothing** (Options slider, `TouchAimSmoothing`, 0-100%, default 60%): an exponential low-pass on the command,
+  tau = `AIM_SMOOTH_TAU_MAX` (120 ms) x slider (0% = off = the raw path, 60% = 72 ms, 100% = 120 ms), alpha = 1 - exp(-dt / tau)
+  so it is frame-rate independent (dt capped by `LOOK_MAX_STEP`). It removes tremor so the aim is not loose or wavy. Lifting
+  the finger, a touch cancel, background, lock or pause zero the filtered command at once (no coasting). Applies live;
+  Classic is unaffected.
 - **Lifecycle**: `release_all()` (background, lock, call, shade, pause menu, layer disabled, scheme
   change, node exit) and an engine touch cancel clear every finger, the stick, the drag and the look command, so
   nothing keeps moving, turning or attacking after returning; stale drags from the old fingers are ignored.
@@ -100,8 +109,11 @@ sensitivity apply to both.
 | Constant | Value | Meaning |
 |---|---|---|
 | `AIM_DRAG_RADIUS` | 90 px | drag travel from the touch-down point for full deflection (x Control Size) |
-| `LOOK_DEADZONE` | 0.12 | fraction of the radius that does nothing |
-| `LOOK_CURVE_EXP` | 1.7 | response exponent (fine aim near centre, fast at the rim) |
+| `AIM_SETTLE_PX` | 6 px | finger travel after touch-down that is ignored |
+| `AIM_ENGAGE` | 0.20 | deflection that starts the turn (hysteresis entry) |
+| `LOOK_DEADZONE` | 0.12 | deflection below which an engaged turn stops (hysteresis exit; the response starts here) |
+| `AIM_SMOOTH_TAU_MAX` | 0.12 s | low-pass time constant at 100% Aim Smoothing (default slider 60% = 72 ms) |
+| `LOOK_CURVE_EXP` | 2.0 (was 1.7) | response exponent (fine aim near centre, fast at the rim) |
 | `LOOK_MAX_YAW_RATE` | 4.2 rad/s (~240 deg/s) | full deflection at 100% sensitivity |
 | `LOOK_PITCH_RATIO` | 0.55 | pitch rate / yaw rate |
 | `LOOK_MAX_STEP` | 0.1 s | cap on one look step |
@@ -161,7 +173,7 @@ offset 0.07 r down), bezel 0.22 r (Pause/Map 0.18 r) with a hairline and inner s
 bezel when held. The move stick uses this language: a recessed well in a 0.10 r aged-brass bezel with a bone thumb in its
 own bezel; resting sticks keep the idle alpha (`STICK_IDLE_ALPHA` 0.62); the Control Opacity setting scales everything.
 
-Options > Gameplay > Touch Controls: control scheme, opacity, size, look sensitivity. Buttons are laid out inside the
+Options > Gameplay > Touch Controls: control scheme, opacity, size, look sensitivity, aim smoothing. Buttons are laid out inside the
 system safe area (cutouts, rounded corners, gesture bar). Onboarding shows one contextual hint at a
 time, fades when the player does the thing, is saved, and is retired after 3 ignored showings.
 
