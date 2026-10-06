@@ -611,7 +611,7 @@ func _part4(gen: Node, root: Node3D, tag: String) -> void:
 	var opaque_checked := 0
 	for f in dir.get_files():
 		if f.ends_with(tuning.TEXTURE_SUFFIX):
-			var img := Image.load_from_file("res://dungeon modules/" + f)
+			var img := Image.load_from_file(ProjectSettings.globalize_path("res://dungeon modules/" + f))
 			_check(img != null and img.detect_alpha() == Image.ALPHA_NONE, tag + "module texture %s is fully opaque (the tuning relies on it)" % f)
 			opaque_checked += 1
 	_check(opaque_checked >= 10, tag + "checked the module colormap textures (%d)" % opaque_checked)

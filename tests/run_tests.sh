@@ -96,6 +96,8 @@ done
 for seed in 7 42; do
 	VIS_TEST_SEED="$seed" run "res://tests/test_module_visibility.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_module_visibility.tscn
 done
+# ... and in the real main scene with the real minimap (map key shows every room, closing hides them again).
+run "res://tests/test_module_visibility_main.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_module_visibility_main.tscn
 if [ "${#FAILED_STAGES[@]}" -gt 0 ]; then
 	echo "=== FAILED STAGES (${#FAILED_STAGES[@]}):"
 	printf '  %s\n' "${FAILED_STAGES[@]}"
