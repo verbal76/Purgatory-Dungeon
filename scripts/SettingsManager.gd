@@ -34,7 +34,7 @@ var gameplay_settings : Dictionary = {
 	"TouchOpacity"  : 70.0,
 	"TouchScale"    : 100.0,
 	"TouchLookSens" : 100.0,
-	"TouchScheme"   : "twin",   # "twin" (default: move stick + look stick + Attack) or "classic" (swipe to look)
+	"TouchScheme"   : "twin",   # "twin" (default: move stick + Attack, which also aims by dragging) or "classic" (swipe to look)
 	"ShowPerf"      : false,   # phone playtests: frame-time readout (Options > Gameplay)
 }
 

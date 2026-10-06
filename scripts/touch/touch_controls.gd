@@ -13,11 +13,12 @@
 #
 #   TWIN-STICK (default), landscape, virtual 1280x720-ish canvas:
 #     left thumb   floating move stick           -> move_left/right/forward/back (analog strength)
-#     right side   floating LOOK stick           -> continuous turn RATE (deflection = speed), fed to the
-#                  players as mouse-look motion once per physics frame (they need no change)
+#     right side   empty screen is inert: a finger that is not on a button does nothing
 #     lower right  big ATTACK button at the rim  -> attack (hold = charge, release = fire). A finger that
-#                  starts on ATTACK and drags becomes a look stick measured from the touch-down point, so
-#                  the player turns while attacking without lifting; the drag never releases/re-presses it.
+#                  starts on ATTACK and drags aims: a continuous turn RATE (deflection = speed) measured from the
+#                  touch-down point, fed to the players as mouse-look motion once per physics frame (they need
+#                  no change), so the player turns while attacking without lifting; the drag never
+#                  releases/re-presses it.
 #     arc around   slide, kick, block (hold), burst (cooldown ring + potion count): subordinate buttons on a
 #     ATTACK       semicircle on its upper/left side, plus the contextual USE one ring further out
 #     top right    pause, map (toggle)
@@ -59,12 +60,12 @@ const MIN_PRESS_MS    := 70      # a press shorter than this is stretched so pol
 const MARGIN_X        := 36.0    # keep clear of rounded corners / gesture edges
 const MARGIN_Y        := 28.0
 
-# ── Twin-stick look stick (all numbers in virtual px at 100% size unless stated) ─────────────────────────
-# Response: offset from the stick base / its radius = deflection d in 0..1. Inside LOOK_DEADZONE nothing
+# ── Twin-stick ATTACK-drag aiming (all numbers in virtual px at 100% size unless stated) ─────────────────────────
+# Response: offset from the touch-down point / AIM_DRAG_RADIUS = deflection d in 0..1. Inside LOOK_DEADZONE nothing
 # turns; outside it x = (d - dz) / (1 - dz) is stretched over 0..1 and shaped by x^LOOK_CURVE_EXP, so a
 # small push is a slow, precise aim and a full push is the maximum turn rate. Rates are physical
 # (radians per second at 100% Look Sensitivity) so they do not depend on the frame time.
-const LOOK_STICK_RADIUS := 90.0   # thumb travel for full deflection (the base follows the thumb past it)
+const AIM_DRAG_RADIUS   := 90.0   # thumb travel for full deflection (the drag origin follows the thumb past it)
 const LOOK_DEADZONE     := 0.12
 const LOOK_CURVE_EXP    := 1.7    # >1: fine control near the centre, fast turn at the rim
 const LOOK_MAX_YAW_RATE := 4.2    # rad/s at full deflection and 100% sensitivity (~240 deg/s)
@@ -108,9 +109,7 @@ var view_override : Vector2 = Vector2.ZERO                         # tests: pret
 
 var buttons : Dictionary = {}            # action name -> TouchButton
 var stick_zone : Rect2 = Rect2()
-var look_zone  : Rect2 = Rect2()
 var stick_default : Vector2 = Vector2.ZERO
-var look_default  : Vector2 = Vector2.ZERO   # idle marker of the look stick (twin scheme)
 var onboarding : Node = null
 
 var _root : Control = null
@@ -119,14 +118,10 @@ var _stick_vec  : Vector2 = Vector2.ZERO
 var _stick_active : bool = false
 var _stick_draw : Control = null
 var _overlay_draw : Control = null       # above the buttons: the drag ring of an ATTACK drag
-var _look_base : Vector2 = Vector2.ZERO  # twin: look stick base (follows the thumb past the radius)
-var _look_vec  : Vector2 = Vector2.ZERO  # offset / radius, length up to 1
-var _look_index : int = -1               # finger driving the look stick (-1: none)
 var _atk_index : int = -1                # finger that went down on ATTACK (-1: none)
 var _atk_origin : Vector2 = Vector2.ZERO # where that finger touched down (the drag is measured from here)
 var _atk_vec : Vector2 = Vector2.ZERO
-var _atk_aimed : bool = false            # the ATTACK finger has dragged out of the dead zone at least once
-var _look_cmd : Vector2 = Vector2.ZERO   # combined, curved look command (length <= 1), applied each physics frame
+var _look_cmd : Vector2 = Vector2.ZERO   # curved aim command of the ATTACK drag (length <= 1), applied each physics frame
 var _owners : Dictionary = {}            # finger index -> {"kind": Owner, "button": String}
 var _held : Dictionary = {}              # action -> strength currently pressed through us
 var _press_ms : Dictionary = {}          # action -> time pressed (for MIN_PRESS_MS)
@@ -138,7 +133,7 @@ var _status_poll : float = 0.0
 var _last_view : Vector2 = Vector2.ZERO
 var look_total : float = 0.0             # cumulative virtual px swiped (onboarding)
 var move_time : float = 0.0              # seconds the stick has been held out (onboarding)
-var look_time : float = 0.0              # seconds the look stick / attack drag has been held out (onboarding)
+var look_time : float = 0.0              # seconds the ATTACK drag has been held out (onboarding)
 
 
 ## True on phones (and when forced for desktop testing with PURGATORY_FORCE_TOUCH=1).
@@ -187,7 +182,7 @@ static func px_per_mm(view: Vector2, screen: Vector2, dpi: float) -> float:
 	return d / 25.4 * (view.y / sh)
 
 
-## Look-stick response for a stick offset (offset / radius, any length): dead zone, then x^LOOK_CURVE_EXP
+## Aim response for a drag offset (offset / AIM_DRAG_RADIUS, any length): dead zone, then x^LOOK_CURVE_EXP
 ## over the remaining travel. Returns a vector in the same direction with length 0..1 (1 = full rate).
 static func look_response(v: Vector2) -> Vector2:
 	var mag: float = v.length()
@@ -243,9 +238,7 @@ static func _layout_classic(view: Vector2, l: float, t: float, r: float, b: floa
 			"minimap": [Vector2(r - 40.0 * s, t + 112.0 * s + 100.0 * s), 38.0 * s],
 		},
 		"stick_default": Vector2(l + 168.0 * s, b - 150.0 * s),
-		"look_default": Vector2(view.x * 0.70, view.y * 0.50),
 		"stick_zone": Rect2(0.0, view.y * 0.28, view.x * 0.40, view.y * 0.72),
-		"look_zone": Rect2(view.x * 0.40, 0.0, view.x * 0.60, view.y),
 	}
 
 
@@ -274,17 +267,11 @@ static func _layout_twin(view: Vector2, l: float, t: float, r: float, b: float, 
 	spots["ui_menu"] = [Vector2(r - 40.0 * s, t + 112.0 * s), 38.0 * s]
 	spots["minimap"] = [Vector2(r - 40.0 * s, t + 112.0 * s + 100.0 * s), 38.0 * s]
 	var stick_def := Vector2(l + 168.0 * s, b - 150.0 * s)
-	# Idle look-stick marker: left of the whole cluster at the move stick's height, never on top of the move marker.
-	var lr: float = LOOK_STICK_RADIUS * s
-	var cluster_left: float = c.x - ur * absf(cos(ua)) - ru
-	var look_x: float = clampf(cluster_left - 24.0 * s - lr, stick_def.x + 2.0 * lr + 16.0 * s, view.x * 0.62)
 	return {
 		"safe": Rect2(l, t, r - l, b - t),
 		"buttons": spots,
 		"stick_default": stick_def,
-		"look_default": Vector2(look_x, stick_def.y),
 		"stick_zone": Rect2(0.0, view.y * 0.28, view.x * 0.40, view.y * 0.72),
-		"look_zone": Rect2(view.x * 0.40, 0.0, view.x * 0.60, view.y),
 	}
 
 
@@ -452,9 +439,7 @@ func _relayout() -> void:
 		if buttons.has(action):
 			(buttons[action] as TouchButton).place(spec[0], spec[1])
 	stick_default = lay["stick_default"]
-	look_default = lay["look_default"]
 	stick_zone = lay["stick_zone"]
-	look_zone = lay["look_zone"]
 	_root.modulate.a = opacity
 	if _stick_draw != null:
 		_stick_draw.queue_redraw()
@@ -505,7 +490,7 @@ func _poll_settings(delta: float) -> void:
 		_relayout()
 
 
-## Twin look stick / ATTACK drag: one look event per physics frame, a turn RATE (not a distance), so the
+## Twin ATTACK drag: one look event per physics frame, a turn RATE (not a distance), so the
 ## result does not depend on the frame time. Fed through the same mouse-motion path the classic swipe uses.
 func _physics_process(delta: float) -> void:
 	if _look_cmd == Vector2.ZERO or get_tree().paused or not touch_enabled:
@@ -513,7 +498,7 @@ func _physics_process(delta: float) -> void:
 	look_step(delta)
 
 
-## Applies one look step of `delta` seconds from the current look command; returns the mouse-motion px sent.
+## Applies one look step of `delta` seconds from the current aim command; returns the mouse-motion px sent.
 func look_step(delta: float) -> Vector2:
 	if _look_cmd == Vector2.ZERO:
 		return Vector2.ZERO
@@ -587,10 +572,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
-		if st.pressed:
+		if st.pressed and not st.canceled:
 			_touch_down(st.index, st.position)
 		else:
-			_touch_up(st.index)
+			_touch_up(st.index)   # a lift or an engine cancel: the same clean release
 		get_viewport().set_input_as_handled()
 	elif event is InputEventScreenDrag:
 		var sd := event as InputEventScreenDrag
@@ -613,8 +598,9 @@ func _nearest_button(p: Vector2) -> TouchButton:
 
 # Ownership: every finger is owned by exactly ONE thing from touch-down to touch-up, so fingers never
 # cross-talk. Buttons win (a touch on a button is that button); otherwise the left lower zone is the
-# move stick and the right zone is the look stick (twin) / a swipe (classic). A finger that starts on ATTACK
-# in the twin scheme stays a BUTTON finger and additionally measures a look drag from its touch-down point.
+# move stick. Anything else is a swipe-to-look finger in Classic and is IGNORED in twin-stick (no look zone: aiming
+# there is done by dragging from ATTACK). A finger that starts on ATTACK in the twin scheme stays a BUTTON finger and
+# additionally measures an aim drag from its touch-down point.
 func _touch_down(index: int, p: Vector2) -> void:
 	if _owners.has(index):
 		return
@@ -625,7 +611,6 @@ func _touch_down(index: int, p: Vector2) -> void:
 			_atk_index = index
 			_atk_origin = p
 			_atk_vec = Vector2.ZERO
-			_atk_aimed = false
 		_button_down(b)
 		return
 	if stick_zone.has_point(p) and not _stick_active:
@@ -635,18 +620,10 @@ func _touch_down(index: int, p: Vector2) -> void:
 		_stick_vec = Vector2.ZERO
 		_stick_draw.queue_redraw()
 		return
-	if not is_twin():
-		_owners[index] = {"kind": Owner.LOOK}
-		return
-	if look_zone.has_point(p) and _look_index < 0:
-		_owners[index] = {"kind": Owner.LOOK}
-		_look_index = index
-		_look_base = p
-		_look_vec = Vector2.ZERO
-		_update_look_cmd()
-		_stick_draw.queue_redraw()
-		return
-	_owners[index] = {"kind": Owner.NONE}   # a stray extra finger: owned (so it cannot turn into anything later), does nothing
+	if is_twin():
+		_owners[index] = {"kind": Owner.NONE}   # empty screen (or a stray extra finger): owned, so it can never become anything later, and does nothing
+	else:
+		_owners[index] = {"kind": Owner.LOOK}   # Classic: swipe anywhere free to look
 
 
 func _touch_move(index: int, p: Vector2, rel: Vector2) -> void:
@@ -665,40 +642,28 @@ func _touch_move(index: int, p: Vector2, rel: Vector2) -> void:
 			_apply_stick()
 			_stick_draw.queue_redraw()
 		Owner.LOOK:
-			if is_twin():
-				_look_base = _follow(_look_base, p)
-				_look_vec = (p - _look_base) / (LOOK_STICK_RADIUS * ui_scale)
-				_update_look_cmd()
-				_stick_draw.queue_redraw()
-			else:
-				_look(rel)
+			_look(rel)   # Classic only: twin-stick never creates a LOOK owner
 		Owner.BUTTON:
 			if index == _atk_index:
 				_atk_origin = _follow(_atk_origin, p)
-				_atk_vec = (p - _atk_origin) / (LOOK_STICK_RADIUS * ui_scale)
-				if not _atk_aimed and _atk_vec.length() > LOOK_DEADZONE:
-					_atk_aimed = true
-					action_performed.emit("aim")   # the onboarding "drag from Attack to aim" hint completes on this
+				_atk_vec = (p - _atk_origin) / (AIM_DRAG_RADIUS * ui_scale)
 				_update_look_cmd()
 				_overlay_draw.queue_redraw()
 
 
-## Floating base: stays put while the finger is within the look radius, then trails it at exactly that radius.
+## Floating drag origin: stays put while the finger is within AIM_DRAG_RADIUS, then trails it at exactly that radius
+## (the finger can leave the button and wander anywhere; it keeps aiming until it is lifted).
 func _follow(base: Vector2, p: Vector2) -> Vector2:
-	var radius: float = LOOK_STICK_RADIUS * ui_scale
+	var radius: float = AIM_DRAG_RADIUS * ui_scale
 	var d: Vector2 = p - base
 	if d.length() > radius:
 		return p - d.normalized() * radius
 	return base
 
 
-## Combines the look stick and the ATTACK drag (normally only one is live) into the command applied each
-## physics frame: both responses added, limited to full deflection.
+## The ATTACK drag's curved aim command, applied each physics frame.
 func _update_look_cmd() -> void:
-	var c: Vector2 = look_response(_look_vec) + look_response(_atk_vec)
-	if c.length() > 1.0:
-		c = c.normalized()
-	_look_cmd = c
+	_look_cmd = look_response(_atk_vec)
 
 
 func _touch_up(index: int) -> void:
@@ -712,17 +677,10 @@ func _touch_up(index: int) -> void:
 			_stick_vec = Vector2.ZERO
 			_apply_stick()
 			_stick_draw.queue_redraw()
-		Owner.LOOK:
-			if index == _look_index:
-				_look_index = -1
-				_look_vec = Vector2.ZERO
-				_update_look_cmd()
-				_stick_draw.queue_redraw()
 		Owner.BUTTON:
 			if index == _atk_index:
 				_atk_index = -1
 				_atk_vec = Vector2.ZERO
-				_atk_aimed = false
 				_update_look_cmd()   # releasing ATTACK ends the drag: the turn stops, the attack releases below
 				_overlay_draw.queue_redraw()
 			var b: TouchButton = buttons.get(o["button"])
@@ -731,6 +689,7 @@ func _touch_up(index: int) -> void:
 
 
 func _button_down(b: TouchButton) -> void:
+	_pending_release.erase(b.action)   # a re-press inside the stretch window keeps holding (never released under a live finger)
 	if b.mode == TouchButton.Mode.TOGGLE:
 		b.toggled_on = not b.toggled_on
 		_send(b.action, b.toggled_on, 1.0)
@@ -812,11 +771,8 @@ func release_all() -> void:
 	_pending_release.clear()
 	_stick_active = false
 	_stick_vec = Vector2.ZERO
-	_look_index = -1
-	_look_vec = Vector2.ZERO
 	_atk_index = -1
 	_atk_vec = Vector2.ZERO
-	_atk_aimed = false
 	_look_cmd = Vector2.ZERO   # nothing keeps turning after a background / lock / pause
 	for action in _held.keys():
 		var ev := InputEventAction.new()
@@ -844,18 +800,13 @@ const STICK_RING_FRAC := 0.10   # stick bezel thickness (fraction of the stick r
 const STICK_IDLE_ALPHA := 0.62   # resting joystick: faint but always findable (the opacity setting scales it further)
 
 
-## Floating sticks: a dark radial well with a faint iron rim and a bone/iron thumb. Cached textures only;
-## redrawn when a stick changes, never per frame. The look stick (twin scheme) uses the same language as the move
-## stick, always visible at rest (idle alpha) so the player can find it, ember-rimmed while held.
+## The floating move stick: a recessed well in a thin aged-brass bezel with a bone thumb (see _draw_one_stick). Cached
+## textures only; redrawn when the stick changes, never per frame. Always visible at rest (idle alpha) so the player can
+## find it, ember-rimmed while held.
 func _draw_stick() -> void:
 	_draw_one_stick(_stick_base if _stick_active else stick_default, _stick_vec, STICK_RADIUS * ui_scale, _stick_active)
-	if is_twin():
-		var live: bool = _look_index >= 0
-		_draw_one_stick(_look_base if live else look_default, _look_vec, LOOK_STICK_RADIUS * ui_scale, live)
 
 
-## Same anatomy as the buttons, fainter: a recessed well inside a thin aged-brass bezel with a hairline and an
-## inner shadow line; the thumb is a bone disc set in its own small bezel.
 func _draw_one_stick(base: Vector2, vec: Vector2, radius: float, active: bool) -> void:
 	var a: float = 1.0 if active else STICK_IDLE_ALPHA
 	var tint := Color(1, 1, 1, a)
@@ -884,7 +835,7 @@ func _draw_one_stick(base: Vector2, vec: Vector2, radius: float, active: bool) -
 func _draw_overlay() -> void:
 	if _atk_index < 0 or _atk_vec.length() <= LOOK_DEADZONE * 0.5:
 		return
-	var radius: float = LOOK_STICK_RADIUS * ui_scale
+	var radius: float = AIM_DRAG_RADIUS * ui_scale
 	var ring := PUI.EMBER
 	var dot: Vector2 = _atk_origin + _atk_vec.limit_length(1.0) * radius
 	_overlay_draw.draw_arc(_atk_origin, radius, 0.0, TAU, 48, Color(0, 0, 0, 0.35), 5.0, true)
