@@ -403,6 +403,9 @@ func _boot_enemy_manager(player_node: Node3D) -> void:
 		if dungeon_generation_function else []
 
 	if manager.has_method("boot_up"):
+		# The enemy manager parks a few spare enemies behind the loading screen (pool pre-warm): the hand-over waits
+		# for it like for the props and orbs, so no enemy has to be instantiated in the middle of play.
+		register_stage_worker(manager)
 		manager.boot_up(player_node, typed_spawns, waypoints,
 						brute_enemy_scene, mage_enemy_scene,
 						dungeon_generation_function)

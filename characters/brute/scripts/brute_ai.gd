@@ -572,12 +572,29 @@ func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -
 		_stun_indicator_root.visible = false
 
 	# ── Re-enable ─────────────────────────────────────────────────────────────
+	if anim_player != null:
+		anim_player.active = true   # EnemyManager._park() deactivates the mixer of a parked enemy
+	add_to_group("enemy")    # a parked enemy sits outside the groups (see EnemyManager._park)
+	add_to_group("enemies")
 	visible = true
 	set_physics_process(true)
 	set_process(true)
 
 	_change_state(_get_idle_state())
 	health_changed.emit(_current_health, max_health)
+
+
+# A brute that has chased for 12 s without ever seeing the player is retired. It used to be freed and the next
+# top-up instantiated a replacement: a free + instantiate pair is a multi-millisecond hitch (many times that on a
+# phone). It now goes back to EnemyManager's pool exactly like a corpse does and is reborn by reset_for_pool().
+func _retire_stuck() -> void:
+	if not _pool_return.is_valid():
+		queue_free()
+		return
+	_is_dead        = true    # EnemyManager's sweep drops dead enemies from its live list; reset_for_pool() revives
+	collision_layer = 0
+	velocity        = Vector3.ZERO
+	_pool_return.call()
 
 
 func _spawn_potion_pickup() -> void:
@@ -681,7 +698,7 @@ func _physics_tick(delta: float) -> void:
 		if _frustration_timer >= 12.0:
 			_frustration_timer = 0.0
 			if not _has_los:
-				queue_free()
+				_retire_stuck()
 				return
 	else:
 		_frustration_timer = 0.0
