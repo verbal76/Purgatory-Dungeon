@@ -98,6 +98,8 @@ for seed in 7 42; do
 done
 # ... and in the real main scene with the real minimap (map key shows every room, closing hides them again).
 run "res://tests/test_module_visibility_main.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_module_visibility_main.tscn
+# Floor seams: no gap or lip in the floor of any module scene or at any doorway of six generated dungeons.
+run "res://tests/test_floor_seams.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_floor_seams.tscn
 if [ "${#FAILED_STAGES[@]}" -gt 0 ]; then
 	echo "=== FAILED STAGES (${#FAILED_STAGES[@]}):"
 	printf '  %s\n' "${FAILED_STAGES[@]}"
