@@ -1,236 +1,192 @@
-# Purgatory Dungeon over-the-air (OTA) updates
+# Purgatory Dungeon over-the-air (OTA) updates (v7 architecture)
 
-Status: **infrastructure only. No OTA has been published.** The first OTA needs the owner's
-authorization (see "Publishing the first OTA"). v5 is the rollback baseline and is untouched.
+Status: **under construction on branch `v7-ota`. Nothing is published.** v6 is a shipped, protected baseline whose
+dormant first-generation client is *replaced* (not extended) by this design. This file is the contract that the
+native layer, the tooling and the CI follow; the "Evidence levels" section at the end says what is actually proven.
 
-## Why this design (Godot facts that drove it)
-- A Godot game is a native engine binary plus one data pack (`.pck`) of scripts, scenes, data and imported
-  assets. Almost all day-to-day changes live in the pack. The engine, Android manifest/permissions,
-  package ID, signing key and `project.godot` settings do not.
-- `ProjectSettings.load_resource_pack(path, replace_files=true)` overlays a patch pack on the running base
-  pack. Verified on Godot 4.6 (see `tests/test_ota_*`, `tools/ota/`): a patch mounted from the **first
-  autoload's `_init()`** overrides scripts, scenes and data seen by every later autoload and by the main
-  scene. Nothing after the first autoload has to know OTA exists.
-- `godot --export-patch <preset> <out.pck> --patches <base.pck>` writes a pack holding only files that changed
-  versus the base (plus removal markers). Each update is therefore **cumulative against the native build**,
-  not a chain of deltas: the newest valid update is the only one that is ever mounted, and no update depends
-  on another having been applied.
-- `load_resource_pack` returns `true` for a truncated patch file (observed). Success of the call proves
-  nothing, so the client verifies size, SHA-256 and an RSA signature **before** it mounts anything.
-- A pack is mounted once, at process start. There is never a mixed old/new state inside a running session.
+Reference architecture: the Hot Attic Games Godot OTA used by Mote (runtime lock, signed manifest, immutable releases,
+channel pointer, staged activation, health-confirmed promotion, rollback). Purgatory Dungeon adopts its properties and
+vocabulary and differs only where this game's size and packaging force it (see "Intentional differences").
 
-## Vocabulary
-| Term | Meaning |
-|---|---|
-| Native build | The installed APK (or the Windows exe + pck): public number `N` (`./VERSION`; Android versionCode = N), Godot engine build, package ID, signing key, manifest, `project.godot` settings, the OTA client itself. Changing any of these means a new APK = a new public number. |
-| Base commit | The 40-hex source commit the native build was made from (`build_info.json` `commit`). |
-| Update (payload) | A signed cumulative patch pack for **exactly one** (native `N`, platform, base commit). Numbered `seq = 1, 2, 3...` per base. Publicly: "Purgatory Dungeon v5 update 2". |
-| Channel | A static HTTPS directory holding `channel.json` (+ signature) and the update folders. |
-| Trust anchor | The OTA public key (`ota_trust.pem`), written into every CI build; the matching private key never leaves CI. |
+## 1. Layers
 
-(Public naming: owner-visible builds are still only "Purgatory Dungeon vN". An OTA is "vN update K" and is never
-a new `vN`; see docs/RELEASES.md.)
+| Layer | Contents | Changes by |
+|---|---|---|
+| **Native shell** (APK) | Godot 4.6 engine/template, Android manifest + permissions (incl. INTERNET), export presets, `project.godot` (autoloads, input map, settings), the OTA bootstrap `scripts/boot/*`, the embedded baseline game, signing identity | **new APK only** |
+| **Game layer** (OTA patch) | everything else under `res://`: GDScript, scenes, UI, art, audio, data, fonts, dungeon modules, saves-schema constants, `BuildInfo` | **OTA** |
 
-## Formats (version 1)
+Godot does not reload project settings from a pack and the bootstrap is loaded before any pack is mounted, so changes to
+native-shell files would silently do nothing over OTA. CI therefore refuses to publish them (section 3).
 
-### `manifest.json` (signed)
+OTA is **Android only**. The OTA client is switched on by the custom export feature `ota`, set only in the Android preset.
+Windows builds contain the (inert) bootstrap and never contact a channel.
+
+## 2. Single authoritative mechanism
+
+v6 shipped a first-generation client (`scripts/ota/*`, autoloads `OtaBoot` + `OtaUpdater`, `ota_trust.pem`,
+`ota_channel.json`, CI job `ota-key`, `tools/ota/{make_bundle,channel,verify_bundle}.py`). It points at an address that
+does not exist and cannot be reached by the new format. **v7 removes all of it.** After this branch there is one OTA
+mechanism: `scripts/boot/*` + `ota/*` + `tools/ota_*` + `.github/workflows/ota-publish.yml`. v6 installs never receive an
+OTA; they are upgraded by installing the v7 APK (same package ID and signing key, so saves are kept).
+
+## 3. Native boundary and runtime identity
+
+`ota/boundary.json` is the single machine-readable definition. It lists:
+- `native_inputs`: the files whose bytes define the installed runtime: `project.godot`, `export_presets.cfg`,
+  `scripts/boot/*.gd`, `tools/android/build_apk.sh`, and the engine version (the `GODOT_RELEASE` value in
+  `.github/workflows/ci.yml`). There are no native plugins or extensions in the repository; if one is ever added its
+  libraries and `.gdextension` files join this list.
+- `payload_protected`: `exact` / `prefixes` / `suffixes` of pack paths that may never appear in an OTA payload
+  (`project.godot`, `project.binary`, `export_presets.cfg`, `scripts/boot/`, `android/`, `*.gdextension`, `*.so`, `*.dll`,
+  `*.dylib`, `build_info.json`, `VERSION`, the godot extension list ...).
+- `guarded`: save/profile/settings code, OTA-able only with an explicit, recorded waiver.
+- `not_shipped`: paths that are never exported (tests, tools, docs ...).
+
+`tools/ota_runtime.py` computes the **runtime fingerprint** = SHA-256 over the engine version and the bytes of every
+`native_inputs` file (the `RUNTIME_REVISION` constant is normalised out of its own file, as in Mote). `ota/runtime_lock.json`
+records `{runtime_revision, godot_version, fingerprint, files}` and is committed.
+- `--check` (CI gate, also run by `tests/run_tests.sh`): fails if the native inputs changed without `--bump`.
+- `--bump`: increments `RUNTIME_REVISION` and relocks (a new APK is then required).
+- `--print`: shows `runtime_id` and fingerprint.
+
+**Runtime ID** = `android-godot-<engine>-r<revision>` (e.g. `android-godot-4.6.0-r1`). **Runtime fingerprint** = the 64-hex value
+above. Both are:
+- compiled into the APK's build identity: `build_info.json` gains `runtime_id`, `runtime_fingerprint`, `ota_channel`,
+  and (existing) `commit` = the native baseline source SHA;
+- named in every OTA manifest;
+- shown in diagnostics.
+
+Ordinary game-layer content does not touch any native input, so it never changes the identity. The device refuses an OTA
+unless `runtime_id` **and** `runtime_fingerprint` match exactly; the publisher refuses to build an OTA unless the
+fingerprint of the commit being published equals the fingerprint recorded for the installed baseline.
+
+## 4. Payload
+
+A **cumulative patch pack** (`.pck`) produced by `godot --export-patch "Android" <out> --patches <baseline.pck>`, where the
+baseline pack is rebuilt from the exact native source commit (`base_source_sha`) and byte-compared (import products
+excepted) with the shipped APK. It contains only game-layer files that differ from the embedded baseline plus removal
+markers. Each OTA supersedes all earlier ones for the same baseline: the device only ever mounts one, and never needs a
+chain. (A full-pack OTA, as Mote ships, would be ~600 MB for this game.) The pack path layout is `godot/...` because the
+project exports with a visible data directory.
+
+Protected-path rule: the pack's file list must contain no `payload_protected` path (checked by the publisher with an
+independent PCK parser and again by the client before mounting). A change set that touches the native boundary is
+**APK-required**; CI reports it as such and publishes nothing.
+
+## 5. Manifest (schema 1, Mote-compatible plus PD fields)
+
+```json
+{
+  "schema": 1, "channel": "dev", "ota_id": "dev-000003", "seq": 3,
+  "source_sha": "<40-hex commit that produced the patch>",
+  "runtime_id": "android-godot-4.6.0-r1", "runtime_fingerprint": "<64-hex>",
+  "minimum_bootstrap_version": 1,
+  "game_version": "7.3.0", "save_schema": 1, "min_save_schema": 1,
+  "pck_url": "https://github.com/<host>/releases/download/ota-dev-000003/purgatory-dev-000003.pck",
+  "pck_sha256": "<64-hex>", "pck_size": 123456, "created_at": "<UTC>",
+  "build_run": {"id": "", "number": "", "attempt": "", "url": ""},
+  "payload_kind": "patch", "base_source_sha": "<40-hex native baseline commit>", "platform": "android",
+  "native_version": 7, "files": [{"path": "godot/...", "op": "add|replace|remove"}]
+}
 ```
-{ "format": 1, "product": "purgatory-dungeon", "platform": "android" | "windows",
-  "native_version": 5, "base_commit": "<40 hex>", "engine": "4.6.stable.official.89cea1439", "ota_api": 1,
-  "payload_seq": 2, "label": "Purgatory Dungeon v5 update 2",
-  "source_commit": "<40 hex of the update source>", "created_utc": "2026-10-05T19:00:00Z",
-  "payload": { "file": "payload.pck", "size": 123456, "sha256": "<64 hex>" },
-  "files": [ { "path": "scripts/foo.gdc", "op": "replace" | "add" | "remove" } ] }
-```
-`files` is generated from the pack's own directory by the builder (and re-verified by an independent parser);
-the client enforces the protected-path rule against it before mounting.
-`manifest.sig` = base64 of `openssl dgst -sha256 -sign ota.key manifest.json` (RSA-3072, PKCS#1 v1.5, SHA-256).
-Godot checks it with `Crypto.verify()` against the embedded public key.
+`game_version` = `<native_version>.<seq>.0`. Public name: "Purgatory Dungeon v7 · update 3". `ota_id` = `<channel>-<seq:06d>`.
+The signature is RSA-3072 PKCS#1 v1.5 over SHA-256 of the exact manifest bytes (`openssl dgst -sha256 -sign`), base64 on one
+line in `manifest.json.sig`. The APK embeds only the public key (`scripts/boot/ota_config.gd`); the private key lives outside
+the repository (CI key store: the private draft release "OTA signing key (do not delete)", or the Actions secret
+`OTA_SIGNING_KEY_PEM_BASE64` which takes precedence). CI verifies the store's public key equals the embedded one before signing.
 
-### `channel.json` (signed, `channel.json.sig`)
-```
-{ "format": 1, "product": "purgatory-dungeon", "generation": 7, "generated_utc": "...",
-  "updates": [ { "native_version": 5, "platform": "android", "base_commit": "...", "seq": 2,
-                 "manifest": "v5/android/update-2/manifest.json",
-                 "signature": "v5/android/update-2/manifest.sig",
-                 "payload": "v5/android/update-2/payload.pck" } ],
-  "revoked": [ { "native_version": 5, "platform": "android", "base_commit": "...", "seq": 2 } ] }
-```
-`generation` only goes up; the client remembers the highest one it saw and refuses an older (replayed) index.
-`revoked` is the remote kill switch (see rollback).
+## 6. Distribution and channel
 
-### On-device layout (`user://ota/`, never the save folder)
-```
-state.json                     {active, pending, known_good, boot_attempts, failed[], revoked[], generation, last_*}
-slots/<seq>/{manifest.json, manifest.sig, payload.pck}
-staging/                       downloads in flight (deleted at every start)
-quarantine/<seq>-<reason>/     slots that failed verification or crash-looped (kept for diagnosis, size-capped)
-backups/seq-<k>-<utc>/         copy of saves + settings taken before an update is first activated (last 3 kept)
-```
+- Each OTA is an **immutable GitHub Release** `ota-<channel>-<seq:06d>` holding `purgatory-<ota_id>.pck`, `manifest.json`,
+  `manifest.json.sig`. It is never edited after publication; a tag that already exists aborts the job.
+- The **channel pointer** is the mutable release `ota-channel-<channel>` whose asset `latest.json` is
+  `{channel, ota_id, seq, runtime_id, manifest_url, signature_url, published_at}`. It only moves forward. Moving it is the
+  moment an OTA becomes visible to devices.
+- The installed app follows the channel baked into `ota_config.gd` (`dev` for owner testing; a later `stable` is a second
+  pointer, not a second code path).
+- **The release host is a configuration value (`REPO` in `ota_config.gd`, `OTA_RELEASE_REPO` in CI).** Devices download
+  anonymously, so the host repository's releases must be publicly readable. The source repository is private: this is the one
+  open owner decision (section 14). Until it is decided the pipeline is complete and proven against a local server that mirrors
+  the Releases layout, and the publish job refuses to advance a pointer that is not anonymously reachable.
 
-## What ships OTA and what needs a new APK
-Single source of truth: `tools/ota/ota_rules.json`, enforced by `tools/ota/classify.py` (CI) and again by the
-client (protected paths) before it mounts a payload.
+## 7. Client behaviour (native layer, `scripts/boot/`)
 
-**OTA-safe** (replaceable files inside the pack): GDScript, scenes, resources, shaders, data JSON/TXT, UI themes,
-audio, textures, models, dungeon modules, fonts, translations.
+- Autoload #1 `Boot` runs before any game-layer script. If the `ota` feature is absent (Windows, editor) it does nothing.
+- **Cold start, no network:** choose PENDING, else CURRENT, else PREVIOUS; verify (stored signed manifest, runtime ID +
+  fingerprint, channel, size, SHA-256); count the start; `load_resource_pack(path, true)`; otherwise run the embedded baseline.
+  The game **never needs a connection to start.**
+- **Check policy:** after the game reports ready and has run a few seconds (boot health), then on return to the foreground if
+  the last attempt was >= 15 min ago, then hourly while running; failed attempts count. Requests are polled from the main loop,
+  not threaded; 15 s timeout for the pointer and manifest, 15 min for the package.
+- **Download** goes to `.incoming-<id>.pck`; the manifest signature, compatibility and `pck_size` are checked first, the
+  package size cap is `pck_size + 1`, SHA-256 is checked on completion, and only then is the file promoted (rename) and the
+  signed manifest stored. A partial or failed download is deleted; nothing active changes.
+- **Activation** only at cold start (never mid-run). When a never-before-run package is being activated the native layer shows a
+  restrained "Applying update" panel until the game reports ready.
+- **Health:** `Boot.report_ready()` is called by the main menu when it is built; `report_ready + 5 s` running = boot healthy. Only
+  then does PENDING become CURRENT (the old CURRENT becomes PREVIOUS).
 
-**APK-required** (never OTA): anything outside the pack or read before it is mounted:
-`project.godot` / `project.binary` (autoloads, input map, rendering, display, physics), `export_presets.cfg`,
-the Android manifest/gradle/permissions/target SDK/ABIs/icons, version numbers, the signing identity,
-`addons/**` native code (`*.gdextension`, `*.so`, `*.dll`, `*.dylib`), the Godot engine version, the OTA client
-itself (`scripts/ota/**`), `ota_trust.pem`, `ota_channel.json`, `build_info.json`, `VERSION`.
+## 8. State machine (device, `user://ota/state.json`)
 
-**Guarded** (OTA only with `--accept-guarded` and a stated reason, because a rollback must still read saves written
-by the update): save/profile/settings code (`save_manager.gd`, `storage_paths.gd`, `SettingsManager.gd`).
+`EMBEDDED BASELINE` (always available) / `CURRENT` known-good / `PENDING` staged candidate / `PREVIOUS` known-good / `READY`
+(downloaded, not yet pending) / `bad[]` failed-or-blacklisted ids. Plus boot attempts/health, rollback count, disabled flag
+and last results. Written atomically (temp + rename). A corrupt state file falls back to the baseline.
 
-A change set that touches any APK-required path is not an OTA; it ships as the next numbered APK.
+Rules: an unconfirmed OTA gets two starts (the attempt is persisted *before* mounting, so a crash during load counts); the
+third start abandons and blacklists it and falls back (PREVIOUS, else baseline). A pack that fails to mount, a stored package
+that fails re-verification, or a runtime mismatch is dropped in the same boot. A SHA-256 mismatch on a full-size download is
+blacklisted (published packages are immutable). A blacklisted id is never downloaded again. Manual rollback and "boot baseline" /
+"re-enable OTA" actions exist in the diagnostics overlay and as `--ota-action=` args. No network is needed to recover.
 
-## Compatibility rules
-A device applies update `U` only if **all** hold, checked at download time and again at every boot:
-1. `U.manifest.signature` verifies against the embedded trust anchor and `sha256(manifest.json)` equals the slot id.
-2. `format == 1`, `product == purgatory-dungeon`, `ota_api == the client's OTA_API`.
-3. `platform` equals the device's; `native_version` equals the installed public number; `base_commit` equals the
-   installed `build_info.json` commit; `engine` equals the running engine build string.
-4. `payload.size` and `payload.sha256` match the file on disk, and `payload.size <= 512 MiB`.
-5. No entry in `files` is a protected path (above), none escapes `res://` (`..`, absolute, `user://`).
-6. `seq` is not in `failed[]`/`revoked[]`, and is higher than the active update.
-Anything else (unknown format, wrong base, missing key, bad signature) is **ignored and the game runs as the
-native build**. The client never downgrades, never guesses, never mounts "close enough".
-`OTA_API` is bumped only when the client contract itself changes (and that change ships as an APK).
+## 9. Saves
 
-## Failure and rollback behaviour
-Principle: **an update can only ever make the next launch fall back to something that already worked.**
-- *Unavailable / corrupt / interrupted download*: staged in `staging/`, verified fully, then moved into `slots/`
-  atomically. A partial file is never visible to the boot path. No network = no effect on the game.
-- *Verification failure at boot*: slot moved to `quarantine/`, seq added to `failed[]`, the boot continues with
-  the last known-good update if there is one, otherwise the native build.
-- *Crash loop guard*: `boot_attempts` is persisted **before** the pack is mounted. The game confirms health
-  (`known_good = seq`, attempts = 0) only after it has reached the main menu and stayed up 10 s. If an
-  unconfirmed update has been tried twice without confirming, the third launch quarantines it and falls back.
-  This covers parse errors, startup crashes and native crashes.
-- *Mount failure*: `load_resource_pack` returning false quarantines the slot the same way.
-- *Remote kill switch*: publishing a new `channel.json` that lists `{seq}` under `revoked` makes every device
-  that sees it stop using that update at the next launch and fall back to the previous known-good update or the
-  native build. Needs no APK and no cooperation from the update itself.
-- *Manual recovery*: `--no-ota` on the command line or `PURGATORY_NO_OTA=1` skips every OTA step for that launch;
-  installing the next APK (or reinstalling the same one) leaves old updates unusable (base commit differs) and they
-  are deleted at the next start. Uninstalling removes everything, including saves.
-- A bad update that does not crash (wrong behaviour) is handled by the kill switch; the device-visible update
-  number in the footer tells you which one it is running.
+OTA state is under `user://ota/`; the save folder and `settings.json` are never written by OTA. Before a never-run package is
+first activated the client copies the save folder to `user://ota/backups/` (last 3 kept). `scripts/save_schema.gd` (game layer)
+defines `SAVE_SCHEMA` / `MIN_SAVE_SCHEMA`; manifests carry both and the client will not activate an OTA that cannot read the
+schema recorded on the device (this protects rollbacks past a deliberate migration). Save formats are unchanged in v7.
 
-## Save and data protection
-- OTA code touches only `user://ota/`. It never writes the save folder (`PurgetoryDungeon/`) or `settings.json`.
-- Before an update is activated for the first time the client copies the save folder and settings to
-  `ota/backups/` (last 3 kept). Tests assert saves are byte-identical across stage, activate, fail and rollback.
-- Update code that changes save shape is *guarded* (above) and must stay readable by the previous code.
+## 10. Diagnostics
 
-## Device-visible diagnostics
-- Main menu footer: `Purgatory Dungeon v5` (native build) and, when an update is running, `· update 2`. A pending
-  update shows `· update 3 downloaded - restart to apply`; a fallback shows `· update 2 rolled back`.
-- `BuildInfo.diagnostics()` (also printed at startup and visible with `adb logcat -s godot`) adds:
-  native version, engine, platform, base commit, OTA API, trust-anchor present, channel configured, OTA status
-  (`none | active | pending | rolled_back:<reason> | disabled:<reason>`), active/pending/known-good seq, update
-  source commit, short payload id, boot attempts, last check time and last error.
+Native overlay (five quick taps in the top-left corner, or F9) and `Boot.diagnostics()` text: native version, runtime ID +
+fingerprint, channel, embedded vs OTA, active OTA (id, seq, source SHA, package SHA-256), pending/ready/previous, status
+(up to date / update available / downloaded / offline / incompatible / rejected), last check, last result, rollback count,
+recent events. Buttons: Check, Download, Activate on restart, Roll back, Boot baseline / Re-enable OTA, Copy diagnostics, Close.
+The main menu footer shows `Purgatory Dungeon v7` and `· update N`. No secrets are ever shown.
 
-## Hosting: the public channel repository (least privilege)
-Phones cannot read a private repository's releases (no login on the device), so updates are served from a
-**dedicated public repository that contains nothing but update files**:
+## 11. Publishing (`.github/workflows/ota-publish.yml`)
 
-    https://raw.githubusercontent.com/verbal76/purgatory-dungeon-updates/main/      (baked into ota_channel.json)
+Authorization is explicit: the workflow runs only for a pushed branch named `ota/<channel>/<full 40-hex sha>` whose head commit
+**is** that SHA (a moving target cannot publish). In order: pin the exact SHA; resolve identity; classify against the native
+baseline (APK-required => stop); runtime gate (`ota_runtime.py --check` and fingerprint == the baseline's); run the full test
+suite on that SHA; build the baseline pack and compare it with the shipped native build; export the patch; build the manifest;
+sign (after the key-match check); inspect with the client's own verification code; create the immutable release; re-download the
+published artifacts and verify them again; verify they are anonymously reachable; **only then** advance the pointer (forward only)
+and confirm the live pointer serves the intended OTA; write a receipt (source SHA, runtime, OTA id, hashes, URLs, `published`,
+`pointer_moved`). Any failure before the pointer moves leaves nothing new live. A missing signing key or unconfigured host ends in
+a receipt with `published: false`.
 
-- The Purgatory Dungeon **source repository stays private.** The channel repo holds only `channel.json`,
-  `channel.json.sig` and `v<N>/<platform>/update-<K>/{manifest.json, manifest.sig, payload.pck}`, plus a short README.
-  No source, no CI configuration, no signing material, no development artifacts. A payload contains the *changed
-  game files in exported form* (compiled scripts, scenes, data, imported assets) and is useless without the signing
-  key: a device refuses anything not signed by it. Manifests name the source commit hash (not its contents).
-- The URL is part of the native build (`ota_channel.json` is APK-required) so no further APK is needed just to
-  establish it. It is HTTPS only; plain http is honoured in test runs only.
-- **CI access is one credential with one job.** `OTA_PUBLISH_TOKEN` (Actions secret in the private source repo) is a
-  fine-grained personal access token whose repository access is *only* `verbal76/purgatory-dungeon-updates` and whose
-  only permission is *Contents: read and write* (no other repositories, no admin, no workflows, no packages). It is
-  referenced by exactly one job (`ota-publish` in `.github/workflows/ota.yml`), which only runs on a branch named
-  `ota/v<N>/<K>`, pushes fast-forward only (no force, no tags) and never touches a GitHub Release. Give the token an
-  expiry and rotate it. (A repository *deploy key* with write access is an equivalent single-repo alternative.)
-- The private OTA signing key lives in the source repo's private draft release "OTA signing key (do not delete)"
-  (or the Actions secret `OTA_SIGNING_KEY_PEM_BASE64`), never in the channel repo and never in logs.
-- A git-hosted channel accepts at most 100 MB per file; CI refuses bundles with a payload above 95 MiB (ship that
-  change as an APK, or move the channel to bucket hosting). The channel repo grows with every update; the owner can
-  squash its history at any time (devices only ever read the latest `channel.json` and the update they need).
+## 12. Intentional differences from Mote
 
-### One-time setup (owner actions; nothing here has been done)
-1. Create the **public** repository `verbal76/purgatory-dungeon-updates` with a default branch `main` and a README that
-   says only that it distributes signed update files for Purgatory Dungeon. Nothing else is committed by hand.
-2. Create the fine-grained token described above and add it to the source repo as secret `OTA_PUBLISH_TOKEN`; add the
-   repository variable `OTA_CHANNEL_REPO` = `verbal76/purgatory-dungeon-updates`. Until both exist the publish job is a
-   dry run that uploads the bundle as a CI artifact and writes "NOTHING WAS PUBLISHED" to its summary.
-3. (Optional, recommended) Add the Actions secret `OTA_SIGNING_KEY_PEM_BASE64` to hold the signing key outside the draft release.
+1. Patch pack against the embedded baseline instead of a full pack (size).
+2. Android only; client gated by the `ota` export feature.
+3. Manifest adds `runtime_fingerprint`, `payload_kind`, `base_source_sha`, `platform`, `native_version`, `files`; the runtime ID
+   is accompanied by a content fingerprint that the device also checks.
+4. Publication is triggered by an explicit SHA-named branch, not by pushes to a development branch.
+5. The release host may be a different repository from the (private) source repository.
+6. Signing private key custody: CI key store/secret, not committed.
 
-## CI and release integration
-- `.github/workflows/ci.yml`: job `ota-key` (serialised creation of the OTA signing key, the public half is handed on)
-  and both build jobs write the public key to `ota_trust.pem` before export. `tools/verify_package.py` /
-  `tools/verify_apk.py` fail a build that contains the OTA client but no trust anchor, contains key material, or
-  (Android) does not declare the INTERNET permission.
-- `.github/workflows/ota.yml`: `ota-validate` on every push (OTA unit tests, the end-to-end device simulation, an Android
-  self-test of the chain, classification against the latest native tag) and `ota-publish` only for `ota/v<N>/<K>`.
-- `tests/run_tests.sh` runs `tests/test_ota_client.gd` (150+ checks), `tests/test_mage_aim.gd` etc. and the python tool
-  tests (`tests/test_ota_tools.py`).
+## 13. v6 -> v7 and recovery of the shipped baseline
 
-## Procedures
+v6 (`release/v6`, `a9168e1`), v5 and the validated checkpoint are never modified. v7 is a new APK built from this branch (VERSION 7
+at its release commit). Rolling back the *app* means installing the v6 APK over v7 only if the version code is allowed to go down,
+which Android refuses; the supported rollback of an OTA is the in-app rollback to PREVIOUS / embedded baseline.
 
-### Decide: OTA or APK?
-Run `python3 tools/ota/classify.py v<N> HEAD` against the native build the phone has installed (N = the number in the
-footer). Exit 0 = OTA-safe, 10 = APK required (each offending path and rule is listed), 11 = guarded save/settings code
-was touched (re-run with `--accept-guarded "<why a rollback still reads the saves>"` only if that is true).
-Rules: "What ships OTA and what needs a new APK" above.
+## 14. Open owner decision
 
-### Create
-1. Land the change on a branch that descends from tag `v<N>`; CI (`ci.yml` / `ota.yml`) must be green on it.
-2. Push a branch named `ota/v<N>/<K>` at that commit, where `K` is the next update number for `v<N>` (1 for the
-   first; the tooling refuses a number that already exists and the client never goes backwards). This push *is* the
-   publication request.
+Where phones download releases from while the source repository stays private (see section 6). Nothing in this branch creates a
+repository, requests a credential or changes visibility.
 
-### Validate (automatic, before anything can be published)
-`ota-validate` + `ota-publish` run: unit tests; the end-to-end device simulation; classification (APK-required aborts
-the job); an export of the *base* pack from `v<N>` and a byte comparison with the pack inside the shipped Windows
-zip / Android APK (import products only have to exist, everything else must match); `--export-patch` of the update
-commit against it; manifest generation from the pack's own directory; RSA signature; `verify_bundle.py` (signature,
-size/SHA-256, `files[]` against an independent PCK parser, compatibility fields, protected paths, channel
-consistency and generation). Any failure stops the job with a message; nothing is pushed.
+## 15. Evidence levels (updated as work lands)
 
-### Publish
-If `OTA_CHANNEL_REPO` and `OTA_PUBLISH_TOKEN` exist, the job pushes the bundle (payload folders and `channel.json`
-in one fast-forward commit) to the channel repository. Otherwise it stops after uploading the bundle as a CI artifact.
-It never creates a tag or a GitHub Release and never changes "Latest".
-
-### Apply (on the phone, automatic)
-Main menu, about 15 s after launch and at most every 6 h: download -> verify -> stage as *pending* (footer: "update K
-downloaded - restart to apply"). The next launch verifies again, backs up the saves, mounts it and shows "update K".
-After the main menu has been up for 10 s the update is confirmed healthy and becomes the rollback target.
-
-### Verify (what to look at)
-- Main menu footer: `Purgatory Dungeon v<N> · update <K>`.
-- `adb logcat -s godot` at startup prints `BuildInfo.diagnostics()`: native version, engine, base commit, OTA status,
-  active/pending/known-good update, source commit and payload id of the update, last check and last error.
-- CI: the `ota-publish` summary prints the channel generation and the update folders pushed.
-
-### Recover / roll back
-- Automatic: a bad file, signature, wrong build or failed mount -> the next launch runs the last known-good update or the
-  native build. An update that never reaches a healthy menu is dropped after two launches.
-- Kill switch (no phone access needed): `python3 tools/ota/channel.py revoke --out <channel checkout> --key <ota key>
-  --native-version N --platform P --base-commit C --seq K`, then push the channel repo. Devices that fetch the new
-  index stop using update K at their next launch and fall back to the previous known-good update or the native build.
-  Publishing a *fixed* update K+1 is the normal follow-up. Replayed older indexes are refused (generation check).
-- On the device: launch with `PURGATORY_NO_OTA=1` / `--no-ota` to skip OTA for that launch. Installing the next APK makes
-  every older update unusable (different base commit) and it is deleted at the next start.
-- Known limitation: `channel.json` has no expiry. A device that has never seen a revocation could be served an older
-  signed index by an attacker who can break TLS to raw.githubusercontent.com. A future format version can add
-  `expires_utc`; today the exposure is limited to re-offering an update that was once signed by us.
-
-### Protocol notes found while building it
-- `ProjectSettings.load_resource_pack()` returns true for a truncated pack, so size and SHA-256 are always checked first.
-- Godot's importer is not byte-deterministic (about 14% of imported files differ between two imports of one commit), so
-  the update build seeds the update tree with the base import cache; pack paths read `godot/...` because the project
-  uses a visible project-data directory.
-- Both `ota_trust.pem` and `ota_channel.json` are exported through `include_filter`; the client reads them from the base pack
-  and they are protected paths, so an update can never replace the trust anchor or the endpoint.
+Levels: implemented / unit-tested / integration-e2e-tested (local server, real packaged game on desktop) / CI-proven /
+emulator-proven / physical-device-proven. Physical-device proof is claimed only after the owner tests.
