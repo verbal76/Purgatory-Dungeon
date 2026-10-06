@@ -5,7 +5,9 @@
                     [--sha SHA] [--godot GODOT_BINARY]
 
 Checks the executable and Godot PCK are there, the PCK really contains the studio splash (scene,
-script, the canonical logo) and the generated build_info.json for the right version, that no tests,
+script, the canonical logo) and the generated build_info.json for the right version (with the native runtime
+identity runtime_id / runtime_fingerprint / ota_channel, docs/OTA.md v7; no first-generation OTA files or key
+material may ship), that no tests,
 archive material, fixtures or notes were exported, and (with --godot) that the PCK boots headless
 through the splash into the main menu with no script errors. Prints SHA-256s. Exit 1 on any problem.
 """
@@ -99,28 +101,30 @@ def check_names(names, read, what, version, require_logo, release, sha, problems
         norm = n if n.startswith("res://") else "res://" + n   # APK assets carry no res:// prefix
         if norm.startswith(FORBIDDEN_PREFIXES) or any(x in n.lower() for x in FORBIDDEN_SUBSTR) or n.endswith(".md"):
             problems.append(f"the {what} contains a file that must not ship: {n}")
-    # OTA client present -> the build must carry the PUBLIC trust anchor and the channel config, and no key material.
-    if has("scripts/ota/ota_core"):
-        pem_name = next((n for n in names if n.endswith("ota_trust.pem") and "/" not in n.replace("res://", "")), "")
-        if not pem_name:
-            problems.append(f"the {what} contains the OTA client but no ota_trust.pem (CI writes it before export)")
-        else:
-            pem = read(pem_name).decode("utf-8", "replace")
-            if "-----BEGIN PUBLIC KEY-----" not in pem:
-                problems.append("ota_trust.pem is not a PEM public key")
-            if "PRIVATE" in pem:
-                problems.append("ota_trust.pem contains PRIVATE key material")
-            notes.append("OTA trust anchor present (public key only)")
-        if not has("ota_channel.json"):
-            problems.append(f"the {what} does not contain ota_channel.json")
-        for n in names:
-            low = n.lower()
-            if low.endswith((".key", ".p12", ".jks", ".keystore")) or "ota-signing" in low or "ota_signing" in low:
-                problems.append(f"the {what} contains key material: {n}")
+    # OTA (docs/OTA.md v7): the client is scripts/boot/ota_core.gd and its public key is compiled into
+    # scripts/boot/ota_config.gd, so a package carries no trust-anchor file, no channel file and no key material.
+    if has("scripts/boot/ota_core"):
+        notes.append("OTA client (scripts/boot/ota_core) is packed")
+    for n in names:
+        low = n.lower().replace("res://", "")
+        if low.endswith("ota_trust.pem") or low.endswith("ota_channel.json") or low.startswith("scripts/ota/"):
+            problems.append(f"the {what} contains a first-generation OTA file that v7 removed: {n}")
+        if low.endswith((".key", ".p12", ".jks", ".keystore")) or "ota-signing" in low or "ota_signing" in low:
+            problems.append(f"the {what} contains key material: {n}")
+        elif low.endswith((".pem", ".txt", ".json", ".cfg")):
+            try:
+                if b"PRIVATE KEY-----" in read(n)[:1_000_000]:
+                    problems.append(f"the {what} contains PRIVATE key material: {n}")
+            except Exception:  # noqa: BLE001
+                pass
     bi_name = next((n for n in names if n.endswith("build_info.json")), "")
     if bi_name:
         try:
             bi = json.loads(read(bi_name).decode("utf-8"))
+            for field, pattern in (("runtime_id", r"[a-z]+-godot-[0-9]+\.[0-9]+\.[0-9]+-r[1-9][0-9]*"),
+                                   ("runtime_fingerprint", r"[0-9a-f]{64}"), ("ota_channel", r"[a-z][a-z0-9-]{0,31}")):
+                if not isinstance(bi.get(field), str) or not re.fullmatch(pattern, bi[field]):
+                    problems.append(f"build_info.json must carry a valid {field} (native runtime identity, docs/OTA.md section 3); got {bi.get(field)!r}")
             if int(bi.get("public_version", bi.get("version", -1))) != version:
                 problems.append(f"build_info.json is for v{bi.get('public_version', bi.get('version'))}, expected v{version}")
             if release and not bi.get("release", False):
