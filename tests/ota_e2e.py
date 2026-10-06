@@ -294,6 +294,10 @@ class Ota:
         self.seq, self.ota_id, self.tag, self.pck_path = seq, ota_id, tag, pck_path
         self.manifest_bytes, self.sig_bytes, self.variant = manifest_bytes, sig_bytes, variant
         self.manifest = json.loads(manifest_bytes)
+        self.native_version = self.manifest["native_version"]
+        self.app_minor = self.manifest["app_minor"]
+        self.owner_version = "v%d.%d" % (self.native_version, self.app_minor)    # what the owner sees: v7.1 = first OTA on the v7 APK
+        self.ota_label = "#%06d" % seq                                           # the OTA update id as shown in diagnostics
         self.asset = f"purgatory-{ota_id}.pck"
 
     def assets(self):
@@ -353,8 +357,9 @@ class Chain:
         open(cfg, "w", encoding="utf-8").write(new)
 
     # -- OTAs
-    def make_ota(self, seq, variant=None, channel=CHANNEL):
-        """Builds, signs and returns OTA <seq>. Every seq exports a fresh patch (its own probe variant) from the kept tree."""
+    def make_ota(self, seq, variant=None, channel=CHANNEL, app_minor=None):
+        """Builds, signs and returns OTA <seq> (app_minor defaults to seq: in this driver OTA N is the Nth OTA on the baseline, so it
+        runs as v<native>.N). Every seq exports a fresh patch (its own probe variant) from the kept tree."""
         ota_id = "%s-%06d" % (channel, seq)
         tag = "ota-" + ota_id
         variant = seq if variant is None else variant
@@ -375,7 +380,7 @@ class Chain:
         asset = os.path.join(d, f"purgatory-{ota_id}.pck")
         shutil.copyfile(pck, asset)
         manifest = os.path.join(d, "manifest.json")
-        return self._manifest_and_sign(d, asset, files, seq, tag, channel, variant, ota_id, manifest)
+        return self._manifest_and_sign(d, asset, files, seq, tag, channel, variant, ota_id, manifest, app_minor=app_minor or seq)
 
     def _ota_commit(self, seq):
         """The commit an OTA is 'published from'. It must differ from the baseline commit (an OTA whose source is the commit the app
@@ -387,11 +392,11 @@ class Chain:
             shas[seq] = git(self.src, "rev-parse", "HEAD")
         return shas[seq]
 
-    def _manifest_and_sign(self, d, asset, files, seq, tag, channel, variant, ota_id, manifest, site_base="http://127.0.0.1:0"):
+    def _manifest_and_sign(self, d, asset, files, seq, tag, channel, variant, ota_id, manifest, site_base="http://127.0.0.1:0", app_minor=1):
         self.site_base = getattr(self, "site_base", site_base)
         url = f"{self.site_base}/releases/download/{tag}/purgatory-{ota_id}.pck"
         r = sh([self.godot, "--headless", "--path", self.toolproj, "-s", "res://tools/ota_make_manifest.gd", "--",
-                f"pck={asset}", f"out={manifest}", f"seq={seq}", f"sha={self._ota_commit(seq)}", f"url={url}", f"files={files}",
+                f"pck={asset}", f"out={manifest}", f"seq={seq}", f"app_minor={app_minor}", f"sha={self._ota_commit(seq)}", f"url={url}", f"files={files}",
                 f"build_info={self.build_info}", f"channel={channel}", "platform=android", "created_at=2026-10-06T00:00:00Z",
                 "run_id=e2e", "run_number=1", "run_attempt=1", "run_url="], timeout=300)
         if "MANIFEST OK" not in r.stdout:
@@ -523,7 +528,7 @@ class Ctx:
     def point_to(self, ota, **over):
         doc = {"channel": CHANNEL, "ota_id": ota.ota_id, "seq": ota.seq, "runtime_id": ota.manifest["runtime_id"],
                "manifest_url": self.site.url(ota.tag, "manifest.json"), "signature_url": self.site.url(ota.tag, "manifest.json.sig"),
-               "published_at": "2026-10-06T00:00:00Z"}
+               "published_at": "2026-10-06T00:00:00Z", "native_version": ota.native_version, "app_minor": ota.app_minor}
         doc.update(over)
         self.site.set_pointer(doc)
 
@@ -550,7 +555,7 @@ class Ctx:
     def probe(self, dev, mode="plain", secs=None, pointer=None, extra=(), timeout=240):
         user = [mode] + ([str(secs)] if secs is not None else []) + self.otaflags(dev, pointer, extra)
         r = self._run([self.godot, "--headless", "--main-pack", self.chain.base_pck, "--script", PROBE, "--"] + user, timeout)
-        for key in ("PROBE_BOOT", "PROBE_RAW", "PROBE_PATCHED", "PROBE_VARIANT", "PROBE_DIAG"):
+        for key in ("PROBE_BOOT", "PROBE_RAW", "PROBE_PATCHED", "PROBE_VARIANT", "PROBE_FOOTER", "PROBE_DIAG"):
             m = re.search(r"^%s=(.*)$" % key, r["raw"], re.M)
             r[key] = m.group(1).strip() if m else None
         r["patched"] = (r["PROBE_PATCHED"] or "").lower() == "true"
@@ -561,6 +566,28 @@ class Ctx:
 # ================================================================================================ scenarios
 
 SCENARIOS = []
+
+
+def check_identity(c, r, ota, label):
+    """What the owner and an engineer SEE (docs/OTA.md section 10). (a) native APK version, (b) owner-facing running version
+    v<native>.<minor>, (c) the OTA update id #<seq> with the runtime identity: never conflated. `ota` None = the embedded baseline."""
+    native = c.chain.bi["public_version"]
+    diag = r["PROBE_DIAG"] or ""
+    footer = r["PROBE_FOOTER"] or ""
+    ws = lambda text: re.sub(r"\s+", " ", text)   # noqa: E731  (wording is tolerant about whitespace)
+    d = ws(diag)
+    check("Native APK: v%d" % native in d, "[%s] diagnostics name the native APK 'Native APK: v%d'" % (label, native))
+    check(c.chain.bi["runtime_id"] in d, "[%s] diagnostics show the runtime id %s" % (label, c.chain.bi["runtime_id"]))
+    check(c.chain.bi["runtime_fingerprint"] in d, "[%s] diagnostics show the runtime fingerprint" % label)
+    if ota is None:
+        check("Application layer: v%d" % native in d and not re.search(r"Application layer: v%d\.\d" % native, d), "[%s] baseline: 'Application layer: v%d' (no decimal)" % (label, native))
+        check("OTA: none" in d, "[%s] baseline: 'OTA: none'" % label)
+        check("v%d" % native in footer and not re.search(r"v%d\.\d" % native, footer), "[%s] the footer shows v%d without a minor (%s)" % (label, native, footer))
+    else:
+        check("Application layer: %s" % ota.owner_version in d, "[%s] 'Application layer: %s' (the owner-facing running version)" % (label, ota.owner_version))
+        check(re.search(r"OTA: %s\b" % ota.ota_label, d) is not None, "[%s] 'OTA: %s (%s)' (the update id)" % (label, ota.ota_label, ota.ota_id))
+        check(ota.owner_version in footer, "[%s] BuildInfo.display_string() shows %s (%s)" % (label, ota.owner_version, footer))
+        check("Purgatory Dungeon %s" % ota.owner_version in d, "[%s] the first diagnostics line is 'Purgatory Dungeon %s'" % (label, ota.owner_version))
 
 
 def scenario(fn):
@@ -583,6 +610,7 @@ def no_network_start(c):
     r = c.probe(d, "plain", pointer=c.dead)
     check(r["PROBE_BOOT"] == "present" and not r["script_errors"], "the Boot autoload is present and no script errors on a start without network")
     check(not r["patched"], "no OTA stored: the embedded baseline runs")
+    check_identity(c, r, None, "baseline")
     g = c.game(d, c.dead)
     check(not g["script_errors"] and not g["timed_out"], "the real game starts and ends its check offline without script errors (%.0fs)" % g["secs"])
     check(not d.state.all_known(), "offline check leaves the OTA state empty (%s)" % sorted(d.state.all_known()))
@@ -604,6 +632,7 @@ def check_stage_apply_promote(c):
     check(not r["script_errors"], "no script errors with the OTA mounted")
     r = c.probe(d, "stay", 9, pointer=c.dead)
     check(r["patched"], "the OTA runs on its second start")
+    check_identity(c, r, ota, "running %s" % ota.owner_version)
     check(ota.ota_id in d.state.ids("current"), "ready + 5 s of running promotes PENDING to CURRENT (state: %s)" % d.state.raw())
     r = c.probe(d, "plain", pointer=c.dead)
     check(r["patched"], "the confirmed OTA mounts at every cold start, offline")
@@ -625,10 +654,13 @@ def supersede_and_rollback(c):
     check(o2.ota_id in d.state.staged(), "OTA 2 is staged next to the running OTA 1")
     r = c.probe(d, "stay", 9, pointer=c.dead)
     check(r["patched"] and r["variant"] == o2.variant, "OTA 2 supersedes OTA 1 (variant %s)" % r["variant"])
+    check_identity(c, r, o2, "running %s" % o2.owner_version)
+    check(o2.app_minor == o1.app_minor + 1 and o2.native_version == o1.native_version, "the second OTA of the generation is v%d.%d, not a new APK number" % (o2.native_version, o2.app_minor))
     check(o2.ota_id in d.state.ids("current") and o1.ota_id in d.state.ids("previous"), "OTA 2 is CURRENT and OTA 1 PREVIOUS (state: %s)" % d.state.raw())
     c.probe(d, "plain", pointer=c.dead, extra=["--ota-action=rollback"])
     r = c.probe(d, "plain", pointer=c.dead)
     check(r["patched"] and r["variant"] == o1.variant, "after a rollback OTA 1 runs again (variant %s)" % r["variant"])
+    check_identity(c, r, o1, "after rollback to %s" % o1.owner_version)
     check(o2.ota_id in d.state.ids("bad"), "the rolled-back OTA is blacklisted (bad: %s)" % sorted(d.state.ids("bad")))
     before = len([x for x in c.site.requests(o2.asset) if x["method"] == "GET"])
     c.game(d, c.pointer)
@@ -811,11 +843,15 @@ def main():
         if a.build_only:
             check(ctx.otas[1].manifest["base_source_sha"] == chain.bi["commit"], "manifest base_source_sha is the baseline commit")
             check(ctx.otas[1].manifest["runtime_id"] == chain.bi["runtime_id"], "manifest runtime_id is the baseline's")
-            check(ctx.otas[2].manifest["seq"] == 2 and ctx.otas[2].manifest["game_version"].endswith(".2.0"), "OTA 2 manifest identity")
+            nv = chain.bi["public_version"]
+            for n in (1, 2):
+                m = ctx.otas[n].manifest
+                check((m["seq"], m["app_minor"], m["native_version"], m["game_version"]) == (n, n, nv, "%d.%d" % (nv, n)),
+                      "OTA %d manifest identity: seq %d, app_minor %d, game_version %d.%d (owner-facing v%d.%d)" % (n, n, n, nv, n, nv, n))
             r = sh([godot, "--headless", "--path", chain.toolproj, "-s", "res://tools/ota_inspect_pack.gd", "--",
                     f"manifest={os.path.join(work, 'ota-1', 'manifest.json')}", f"sig={os.path.join(work, 'ota-1', 'manifest.json.sig')}",
                     f"pck={ctx.otas[1].pck_path}", f"build_info={chain.build_info}", f"files={os.path.join(work, 'ota-1', 'files.json')}",
-                    f"pubkey={chain.pub}", "platform=android"] + (["self_identity=1"] if a.standin else []), timeout=300)
+                    f"pubkey={chain.pub}", "platform=android", "expect_minor=1"] + (["self_identity=1"] if a.standin else []), timeout=300)
             check("INSPECT OK" in r.stdout, "the inspector accepts OTA 1 (%s)" % (r.stdout.strip().splitlines() or ["?"])[-1])
         else:
             wanted = [s for s in SCENARIOS if not a.only or s.__name__ in a.only.split(",")]

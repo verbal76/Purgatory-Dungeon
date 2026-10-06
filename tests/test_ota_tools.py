@@ -938,12 +938,12 @@ class TestManifestTools(unittest.TestCase):
         if not cls.godot:
             notice("Godot 4.6 not found ($GODOT): skipping the manifest maker / inspector tests")
             raise unittest.SkipTest("no godot")
-        cls.real_core = os.path.isfile(os.path.join(ROOT, "scripts", "boot", "ota_core.gd"))
+        cls.real_core = os.path.isfile(os.path.join(ROOT, "scripts", "boot", "ota_core.gd")) and not os.environ.get("OTA_TEST_STANDIN")
         if not cls.real_core:
             notice("scripts/boot/ota_core.gd does not exist yet: the manifest tools run against the tests/ota_standin stand-in client")
         cls.tmp = tempfile.mkdtemp(prefix="ota-manifest-")
         cls.proj = os.path.join(cls.tmp, "proj")
-        tool_project.assemble(cls.proj, ROOT, standin=True)
+        tool_project.assemble(cls.proj, ROOT, standin=True, prefer_standin=bool(os.environ.get("OTA_TEST_STANDIN")))
         write(os.path.join(cls.proj, "print_rt.gd"),
               'extends SceneTree\nfunc _init():\n\tvar cfg: Script = load("res://scripts/boot/ota_config.gd")\n'
               '\tprint("RUNTIME_ID=", cfg.runtime_id("android"))\n\tprint("CHANNEL=", cfg.get_script_constant_map().get("CHANNEL", ""))\n\tquit()\n')
@@ -982,7 +982,7 @@ class TestManifestTools(unittest.TestCase):
         return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
     def mm(self, **over):
-        a = {"pck": self.patch, "out": self.w("manifest.json"), "seq": 3, "sha": SRC40, "files": self.files, "build_info": self.bi,
+        a = {"pck": self.patch, "out": self.w("manifest.json"), "seq": 3, "app_minor": 2, "sha": SRC40, "files": self.files, "build_info": self.bi,
              "url": "https://github.com/o/r/releases/download/ota-dev-000003/purgatory-dev-000003.pck", "platform": "android",
              "created_at": "2026-10-06T00:00:00Z", "run_id": "11", "run_number": "12", "run_attempt": "1", "run_url": "https://example.test/run/11"}
         a.update({k: v for k, v in over.items() if v is not None})
@@ -997,7 +997,7 @@ class TestManifestTools(unittest.TestCase):
 
     def inspect(self, manifest=None, sig=None, pck=None, **over):
         a = {"manifest": manifest or self.w("manifest.json"), "sig": sig or self.w("manifest.json.sig"), "pck": pck or self.patch,
-             "build_info": self.bi, "files": self.files, "pubkey": self.pub, "platform": "android", "expect_source_sha": SRC40}
+             "build_info": self.bi, "files": self.files, "pubkey": self.pub, "platform": "android", "expect_source_sha": SRC40, "expect_minor": 2}
         a.update({k: v for k, v in over.items() if v is not None})
         for k in [k for k, v in over.items() if v is None]:
             a.pop(k, None)
@@ -1028,7 +1028,9 @@ class TestManifestTools(unittest.TestCase):
         self.assertEqual((m["channel"], m["ota_id"], m["seq"]), (self.channel, f"{self.channel}-000003", 3))
         self.assertEqual((m["source_sha"], m["base_source_sha"]), (SRC40, BASE40))
         self.assertEqual((m["runtime_id"], m["runtime_fingerprint"]), (self.rid, FP64))
-        self.assertEqual(m["game_version"], f"{self.version}.3.0")
+        self.assertEqual((m["seq"], m["app_minor"]), (3, 2), "seq is the internal channel sequence, app_minor the owner-facing minor")
+        self.assertEqual(m["game_version"], f"{self.version}.2", "game_version = <native_version>.<app_minor>, two parts, never derived from seq")
+        self.assertRegex(m["game_version"], r"^\d+\.\d+$")
         self.assertEqual((m["native_version"], m["platform"], m["payload_kind"]), (self.version, "android", "patch"))
         self.assertEqual(m["pck_size"], os.path.getsize(self.patch))
         self.assertEqual(m["pck_sha256"], otalib.sha256_file(self.patch))
@@ -1039,7 +1041,7 @@ class TestManifestTools(unittest.TestCase):
         self.assertEqual(m["build_run"], {"id": "11", "number": "12", "attempt": "1", "url": "https://example.test/run/11"})
         self.assertEqual(m["files"], [{"op": "add", "path": "data/d.json"}, {"op": "replace", "path": "scripts/a.gdc"}, {"op": "remove", "path": "scripts/b.gdc"}])
         self.assertEqual(set(m), {"schema", "channel", "ota_id", "seq", "source_sha", "runtime_id", "runtime_fingerprint", "minimum_bootstrap_version",
-                                  "game_version", "save_schema", "min_save_schema", "pck_url", "pck_sha256", "pck_size", "created_at", "build_run",
+                                  "game_version", "app_minor", "save_schema", "min_save_schema", "pck_url", "pck_sha256", "pck_size", "created_at", "build_run",
                                   "payload_kind", "base_source_sha", "platform", "native_version", "files"}, "exactly the fields of docs/OTA.md section 5")
 
     def test_manifest_is_deterministic_and_sorted(self):
@@ -1070,6 +1072,10 @@ class TestManifestTools(unittest.TestCase):
             ("files=", dict(files=self.w("missing.json"))),
             ("https", dict(url="http://example.com/x.pck")),
             ("positive integer", dict(seq=0)),
+            ("app_minor", dict(app_minor=0)),
+            ("app_minor", dict(app_minor="x")),
+            ("app_minor", dict(app_minor="1.5")),
+            ("missing argument", dict(app_minor=None)),
             ("not found", dict(pck=self.w("missing.pck"))),
             ("unknown: pass build_info", dict(build_info=None)),
             ("missing argument", dict(out="")),
@@ -1186,8 +1192,12 @@ class TestManifestTools(unittest.TestCase):
 
     def test_game_version_and_source_identity(self):
         self.forge(lambda m: m.update(game_version="9.9.9"))
-        self.failed(self.inspect(), r"game_version 9\.9\.9 is not <native_version>\.<seq>\.0")
-        self.forge(lambda m: m.update(native_version=self.version + 1, game_version=f"{self.version + 1}.3.0"))
+        self.failed(self.inspect(), r"game_version 9\.9\.9 is not <native_version>\.<app_minor>")
+        self.forge(lambda m: m.update(game_version=f"{self.version}.3"))      # derived from seq instead of app_minor
+        self.failed(self.inspect(), r"game_version .* is not <native_version>\.<app_minor>")
+        self.forge(lambda m: m.update(game_version=f"{self.version}.2.0"))    # the old three-part form
+        self.failed(self.inspect(), r"game_version .* is not <native_version>\.<app_minor>")
+        self.forge(lambda m: m.update(native_version=self.version + 1, game_version=f"{self.version + 1}.2"))
         self.failed(self.inspect(build_info=None, self_identity=None, runtime_id=self.rid, runtime_fingerprint=FP64, base_sha=BASE40, channel=self.channel),
                     r"native_version \d+ != VERSION")
         self.forge(lambda m: m.update(payload_kind="full"))
@@ -1199,6 +1209,20 @@ class TestManifestTools(unittest.TestCase):
         self.forge(lambda m: m.update(save_schema=m["save_schema"] + 5))
         r = self.inspect()
         self.failed(r, r"save_schema")
+
+    def test_app_minor_is_required_whole_and_checked_against_the_publisher(self):
+        self.good()
+        self.assertIn("INSPECT OK", self.inspect().stdout)
+        self.failed(self.inspect(expect_minor=3), r"app_minor 2 != the expected 3")
+        self.failed(self.inspect(expect_minor="x"), r"app_minor 2 != the expected x")
+        self.forge(lambda m: m.pop("app_minor"))
+        self.failed(self.inspect(expect_minor=None), r"app_minor must be a whole number")
+        for bad in (0, -1, 1.5, "2", None, True):
+            self.forge(lambda m, b=bad: m.update(app_minor=b, game_version=f"{self.version}.2"))
+            self.failed(self.inspect(expect_minor=None), r"app_minor|game_version")
+        self.forge(lambda m: m.update(app_minor=5, game_version=f"{self.version}.5"))
+        self.assertIn("INSPECT OK", self.inspect(expect_minor=5).stdout, "any whole minor is fine as long as it is the one the publisher assigned")
+        self.failed(self.inspect(expect_minor=2), r"app_minor 5 != the expected 2")
 
     def test_ota_id_must_match_channel_and_seq(self):
         self.forge(lambda m: m.update(ota_id="dev-000009"))
@@ -1290,21 +1314,86 @@ class TestPublishGates(TmpCase):
         self.assertEqual(tool("publish_gates.py", "pointer-decision", "--current-seq", "4", "--new-seq", "5").returncode, 0)
 
     def test_pointer_document(self):
-        d = gates.pointer_document("dev", "dev-000003", 3, "android-godot-4.6.0-r1", "https://h/m.json", "https://h/m.sig", "2026-10-06T00:00:00Z")
-        self.assertEqual(set(d), {"channel", "ota_id", "seq", "runtime_id", "manifest_url", "signature_url", "published_at"})
+        d = gates.pointer_document("dev", "dev-000003", 3, "android-godot-4.6.0-r1", "https://h/m.json", "https://h/m.sig", "2026-10-06T00:00:00Z",
+                                   native_version=7, app_minor=2)
+        self.assertEqual(set(d), {"channel", "ota_id", "seq", "runtime_id", "manifest_url", "signature_url", "published_at", "native_version", "app_minor"})
+        self.assertEqual((d["native_version"], d["app_minor"]), (7, 2))
         self.assertEqual(gates.parse_pointer(otalib.canonical_json(d))["seq"], 3)
-        for bad in (dict(ota_id="dev-000004"), dict(channel="Bad"), dict(manifest_url="http://h/m.json"), dict(signature_url="ftp://x")):
-            args = dict(channel="dev", ota_id="dev-000003", seq=3, runtime_id="r", manifest_url="https://h/m", signature_url="https://h/s")
+        for bad in (dict(ota_id="dev-000004"), dict(channel="Bad"), dict(manifest_url="http://h/m.json"), dict(signature_url="ftp://x"),
+                    dict(app_minor=0), dict(app_minor=-1), dict(native_version=0), dict(app_minor=True), dict(native_version="7")):
+            args = dict(channel="dev", ota_id="dev-000003", seq=3, runtime_id="r", manifest_url="https://h/m", signature_url="https://h/s",
+                        native_version=7, app_minor=1)
             args.update(bad)
             with self.assertRaises(otalib.OtaError, msg=bad):
                 gates.pointer_document(**args)
-        for bad in (b"not json", b"[]", json.dumps(dict(d, seq="3")).encode(), json.dumps({k: v for k, v in d.items() if k != "ota_id"}).encode()):
+        for bad in (b"not json", b"[]", json.dumps(dict(d, seq="3")).encode(), json.dumps({k: v for k, v in d.items() if k != "ota_id"}).encode(),
+                    json.dumps({k: v for k, v in d.items() if k != "app_minor"}).encode(), json.dumps(dict(d, app_minor=0)).encode(),
+                    json.dumps(dict(d, native_version=1.5)).encode()):
             with self.assertRaises(otalib.OtaError):
                 gates.parse_pointer(bad)
         r = tool("publish_gates.py", "make-pointer", "--channel", "dev", "--ota-id", "dev-000003", "--seq", "3", "--runtime-id", "r",
-                 "--manifest-url", "https://h/m", "--signature-url", "https://h/s", "--out", self.p("latest.json"))
+                 "--manifest-url", "https://h/m", "--signature-url", "https://h/s", "--native-version", "7", "--app-minor", "2",
+                 "--out", self.p("latest.json"))
         self.assertEqual(r.returncode, 0, out(r))
         self.assertEqual(jload(self.p("latest.json"))["ota_id"], "dev-000003")
+        self.assertEqual((jload(self.p("latest.json"))["native_version"], jload(self.p("latest.json"))["app_minor"]), (7, 2))
+
+    # --- the owner-facing minor (v7.1, v7.2 ...) is assigned from the live pointer
+    def ptr(self, native, minor, seq):
+        return gates.pointer_document("dev", f"dev-{seq:06d}", seq, "r", "https://h/m", "https://h/s", "2026-10-06T00:00:00Z",
+                                      native_version=native, app_minor=minor)
+
+    def test_minor_continuity(self):
+        self.assertEqual(gates.next_minor(None, 7, 1), 1, "the first OTA on the v7 APK is v7.1")
+        self.assertEqual(gates.owner_version(7, 1), "v7.1")
+        self.assertEqual(gates.next_minor(self.ptr(7, 1, 1), 7, 2), 2, "the second is v7.2")
+        self.assertEqual(gates.next_minor(self.ptr(7, 2, 2), 7, 3), 3)
+        self.assertEqual(gates.next_minor(self.ptr(7, 9, 12), 7, 40), 10, "seq jumps (internal sequence) never change the minor arithmetic")
+        self.assertEqual(gates.next_minor(self.ptr(7, 4, 9), 8, 10), 1, "a different native generation (v8 APK) resets to 1: v8.1")
+        self.assertEqual(gates.owner_version(8, 1), "v8.1")
+        self.assertEqual(gates.next_minor(self.ptr(7, 4, 9), 8), 1)
+        # stale / duplicate publications are refused
+        for pointer_seq in (5, 6):
+            with self.assertRaises(otalib.OtaError, msg=pointer_seq):
+                gates.next_minor(self.ptr(7, 3, pointer_seq), 7, 5)
+        with self.assertRaises(otalib.OtaError):
+            gates.next_minor(self.ptr(7, 1, 1), 7, 1)
+        # an OTA for an OLDER native generation must not replace the pointer of a newer one
+        with self.assertRaises(otalib.OtaError) as cm:
+            gates.next_minor(self.ptr(8, 1, 3), 7, 4)
+        self.assertIn("older APK v7", str(cm.exception))
+        for bad in (0, -1, "7", None):
+            with self.assertRaises(otalib.OtaError):
+                gates.next_minor(None, bad)
+        # two OTAs of one generation never share a minor, whatever the interleaving
+        pointer, seen = None, []
+        for seq in range(1, 8):
+            m = gates.next_minor(pointer, 7, seq)
+            self.assertNotIn(m, seen)
+            seen.append(m)
+            pointer = self.ptr(7, m, seq)
+        self.assertEqual(seen, [1, 2, 3, 4, 5, 6, 7])
+        # the owner-facing string is always <whole>.<whole>: the OTA path can never produce a bare vN (a real-APK number)
+        for native in range(1, 12):
+            for p in (None, self.ptr(native, 3, 4), self.ptr(max(1, native - 1), 3, 4)):
+                self.assertRegex(gates.owner_version(native, gates.next_minor(p, native, 9)), r"^v\d+\.[1-9]\d*$")
+
+    def test_next_minor_cli(self):
+        write(self.p("latest.json"), otalib.canonical_json(self.ptr(7, 2, 2)))
+        r = tool("publish_gates.py", "next-minor", "--native-version", "7", "--new-seq", "3", "--current", self.p("latest.json"))
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertIn("app_minor=3", r.stdout)
+        self.assertIn("owner_version=v7.3", r.stdout)
+        r = tool("publish_gates.py", "next-minor", "--native-version", "8", "--new-seq", "3", "--current", self.p("latest.json"))
+        self.assertIn("owner_version=v8.1", r.stdout)
+        r = tool("publish_gates.py", "next-minor", "--native-version", "7", "--new-seq", "1")
+        self.assertIn("owner_version=v7.1", r.stdout, "no pointer file = the first OTA")
+        r = tool("publish_gates.py", "next-minor", "--native-version", "7", "--new-seq", "2", "--current", self.p("latest.json"))
+        self.assertEqual(r.returncode, 1, "re-publishing an already-published seq keeps failing")
+        self.assertIn("forward", r.stderr)
+        write(self.p("bad.json"), b'{"channel": "dev"}')
+        r = tool("publish_gates.py", "next-minor", "--native-version", "7", "--current", self.p("bad.json"))
+        self.assertEqual(r.returncode, 1, "a pointer without app_minor is not guessed at")
 
     # --- anonymous reachability (a private host fails here)
     def serve(self, handler_body):
@@ -1377,7 +1466,8 @@ class TestPublishGates(TmpCase):
         self.assertEqual(tool("publish_gates.py", "check-anonymous", "--expect", "nonsense").returncode, 1)
 
     def test_pointer_confirmation(self):
-        doc = {"v": gates.pointer_document("dev", "dev-000004", 4, "r", "https://h/m", "https://h/s", "2026-10-06T00:00:00Z")}
+        doc = {"v": gates.pointer_document("dev", "dev-000004", 4, "r", "https://h/m", "https://h/s", "2026-10-06T00:00:00Z",
+                                           native_version=7, app_minor=3)}
 
         def body(h):
             data = otalib.canonical_json(doc["v"])
@@ -1392,9 +1482,13 @@ class TestPublishGates(TmpCase):
         self.assertIn("nocache=", H.seen[0]["path"], "the confirmation bypasses caches")
         with self.assertRaises(otalib.OtaError) as cm:
             gates.pointer_confirm(base + "/latest.json", "dev", "dev-000005", retries=2, sleep=nosleep)
-        self.assertIn("serves dev/dev-000004, expected dev/dev-000005", str(cm.exception))
+        self.assertIn("serves dev/dev-000004 (app_minor 3), expected dev/dev-000005", str(cm.exception))
         with self.assertRaises(otalib.OtaError):
             gates.pointer_confirm(base + "/latest.json", "stable", "dev-000004", retries=1, sleep=nosleep)
+        self.assertEqual(gates.pointer_confirm(base + "/latest.json", "dev", "dev-000004", retries=1, sleep=nosleep, expect_minor=3)["app_minor"], 3)
+        with self.assertRaises(otalib.OtaError) as cm:
+            gates.pointer_confirm(base + "/latest.json", "dev", "dev-000004", retries=1, sleep=nosleep, expect_minor=4)
+        self.assertIn("app_minor 4", str(cm.exception))
         self.assertEqual(tool("publish_gates.py", "pointer-confirm", "--url", base + "/latest.json", "--channel", "dev", "--expect-id", "dev-000009",
                               "--retries", "1").returncode, 1)
 
@@ -1472,7 +1566,7 @@ class TestPublishGates(TmpCase):
 
     # --- receipt
     def full_receipt(self, **over):
-        facts = dict(channel="dev", ota_id="dev-000003", seq=3, source_sha=SRC40, base_source_sha=BASE40, native_base_tag="v7",
+        facts = dict(channel="dev", ota_id="dev-000003", seq=3, native_version=7, app_minor=2, source_sha=SRC40, base_source_sha=BASE40, native_base_tag="v7",
                      runtime_id="android-godot-4.6.0-r1", runtime_fingerprint=FP64, pck_sha256="1" * 64, pck_size=123,
                      manifest_sha256="2" * 64, signature_sha256="3" * 64, release_host="o/r",
                      urls={"pck": "https://h/p", "manifest": "https://h/m", "signature": "https://h/s", "pointer": "https://h/l"},
@@ -1484,8 +1578,17 @@ class TestPublishGates(TmpCase):
         r = gates.make_receipt(True, True, True, "", **self.full_receipt())
         self.assertEqual(set(r), set(gates.RECEIPT_KEYS))
         self.assertEqual(gates.validate_receipt(r), "")
-        for key in ("source_sha", "runtime_id", "runtime_fingerprint", "ota_id", "pck_sha256", "manifest_sha256", "published", "pointer_moved"):
+        for key in ("source_sha", "runtime_id", "runtime_fingerprint", "ota_id", "pck_sha256", "manifest_sha256", "published", "pointer_moved",
+                    "native_version", "app_minor", "owner_version", "seq"):
             self.assertIn(key, r)
+        self.assertEqual((r["native_version"], r["app_minor"], r["owner_version"], r["seq"], r["ota_id"]), (7, 2, "v7.2", 3, "dev-000003"),
+                         "the three identities stay separate: native APK 7, owner-facing v7.2, OTA update dev-000003 / #000003")
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(True, True, True, "", **self.full_receipt(owner_version="v7.3"))
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(True, True, True, "", **self.full_receipt(app_minor=None))
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(True, True, True, "", **self.full_receipt(native_version=None))
         # unpublished: needs a reason, may lack everything else
         u = gates.make_receipt(False, False, False, "no OTA signing key is available", channel="dev", source_sha=SRC40)
         self.assertEqual((u["published"], u["pointer_moved"], u["release_created"], u["reason"]), (False, False, False, "no OTA signing key is available"))
@@ -1519,12 +1622,14 @@ class TestPublishGates(TmpCase):
         self.assertEqual(r.returncode, 1, "a published receipt without facts is refused")
         self.assertFalse(os.path.exists(self.p("r2.json")))
         r = tool("publish_gates.py", "receipt", "--out", self.p("r3.json"), "--published", "1", "--pointer-moved", "1", "--release-created", "1",
-                 "--channel", "dev", "--ota-id", "dev-000003", "--seq", "3", "--source-sha", SRC40, "--runtime-id", "android-godot-4.6.0-r1",
+                 "--channel", "dev", "--ota-id", "dev-000003", "--seq", "3", "--native-version", "7", "--app-minor", "2",
+                 "--source-sha", SRC40, "--runtime-id", "android-godot-4.6.0-r1",
                  "--runtime-fingerprint", FP64, "--pck-sha256", "1" * 64, "--pck-size", "9", "--manifest-sha256", "2" * 64,
                  "--signature-sha256", "3" * 64, "--pck-url", "https://h/p", "--manifest-url", "https://h/m", "--signature-url", "https://h/s",
                  "--pointer-url", "https://h/l")
         self.assertEqual(r.returncode, 0, out(r))
         self.assertTrue(jload(self.p("r3.json"))["published"])
+        self.assertEqual((jload(self.p("r3.json"))["owner_version"], jload(self.p("r3.json"))["app_minor"]), ("v7.2", 2))
 
     def test_branch_cli(self):
         sha = "c" * 40
@@ -1967,7 +2072,7 @@ class TestPublishWorkflow(unittest.TestCase):
 
     def test_steps_run_in_the_documented_order(self):
         order = ["name: 01 Pin the exact commit", "name: 02a Resolve the release host", "name: 02b Resolve identity", "name: 03 Native baseline",
-                 "name: 04 Classify", "name: 05 Runtime gate", "uses: ./.github/workflows/ota-tests.yml", "name: 07 Build the payload",
+                 "name: 04 Classify", "name: 05 Runtime gate", "uses: ./.github/workflows/ota-tests.yml", "name: 07 Build the payload", "name: 07b Assign app_minor",
                  "name: 08 Build the manifest", "name: 09 Signing key", "name: 10 The key's public half", "name: 11 Sign",
                  "name: 12 Inspect", "name: 13 Create the immutable release", "name: 14 Re-download", "name: 15 Verify the published objects are ANONYMOUSLY",
                  "name: 16 Advance the channel pointer", "name: 17 Publication receipt"]
@@ -2079,6 +2184,41 @@ class TestPublishWorkflow(unittest.TestCase):
         self.assertNotRegex(self.y, r'TAG="?v[0-9]')
         # tags are built only from the OTA id
         self.assertIn("tag=ota-$id", self.y)
+
+    def test_owner_facing_versioning(self):
+        """Whole numbers are real APKs, decimals are OTAs: the workflow assigns v<native>.<minor> from the live pointer and can
+        never produce a bare v<N> release (or a v8) for an OTA."""
+        minor = self.pos("name: 07b Assign app_minor")
+        self.assertLess(self.pos("name: 07 Build the payload"), minor)
+        self.assertLess(minor, self.pos("name: 08 Build the manifest"))
+        step = self.y[minor:self.pos("name: 08 Build the manifest")]
+        for needle in ("publish_gates.py next-minor", '--native-version "$NATIVE_VERSION"', '--new-seq "$SEQ"', "ota-channel-$CHANNEL", "livepointer",
+                       'echo "APP_MINOR=', 'echo "OWNER_VERSION='):
+            self.assertIn(needle, step, needle)
+        manifest = self.y[self.pos("name: 08 Build the manifest"):self.pos("name: 09 Signing key")]
+        self.assertIn('app_minor="$APP_MINOR"', manifest)
+        self.assertGreaterEqual(self.y.count('expect_minor="$APP_MINOR"'), 2, "both inspections check the assigned minor")
+        step16 = self.y[self.pos("name: 16 Advance the channel pointer"):self.pos("name: 17 Publication receipt")]
+        for needle in ('--native-version "$NATIVE_VERSION" --app-minor "$APP_MINOR"', '--expect-minor "$APP_MINOR"', "next-minor"):
+            self.assertIn(needle, step16, needle)
+        self.assertIn('--native-version "$NATIVE_VERSION" --app-minor "${APP_MINOR:-0}"', self.y[self.pos("name: 17 Publication receipt"):])
+        # release naming: "Purgatory Dungeon v7.K (OTA #000001)", notes carry the identities as separate lines
+        step13 = self.y[self.pos("name: 13 Create"):self.pos("name: 14 Re-download")]
+        self.assertIn('title="Purgatory Dungeon ${OWNER_VERSION} (OTA #$(printf \'%06d\' "$SEQ"))"', step13)
+        for line in ('"Native APK: v${NATIVE_VERSION}"', '"Owner-facing running version: ${OWNER_VERSION}"', '"OTA update id: #$(printf \'%06d\' "$SEQ")"',
+                     '"Native runtime: ${RUNTIME_ID} / ${RUNTIME_FINGERPRINT}"'):
+            self.assertIn(line, step13, line)
+        self.assertNotRegex(step13, r'"Native APK: v[^"]*\$\{OWNER_VERSION\}', "each identity on its own line")
+        self.assertNotIn("update ${SEQ}", self.y)
+        self.assertNotIn("· update", self.y)
+        for m in re.finditer(r"--title\s+\"?([^\n]*)", self.y):
+            self.assertNotRegex(m.group(1), r"^\"?Purgatory Dungeon v[0-9]+\"?\s", "an OTA release is never titled like an APK release (Purgatory Dungeon v<N>)")
+        self.assertNotRegex(self.y, r"Purgatory Dungeon v[0-9]+(?![0-9.])[\"']", "no literal 'Purgatory Dungeon vN' title")
+        self.assertNotRegex(self.y, r"NATIVE_VERSION\s*\+|\$\(\(\s*NATIVE_VERSION|native_version\s*\+\s*1", "the OTA workflow never increments the native generation (v8 needs a real APK)")
+        self.assertNotIn("VERSION\" >", self.y.replace("OWNER_VERSION", "").replace("NATIVE_VERSION", ""), "the workflow never writes a VERSION file")
+        self.assertNotIn("release_tool.py set", self.y)
+        # native version comes only from the shipped baseline's build_info (public_version) via publish_gates baseline
+        self.assertIn("native_version: ${{ steps.base.outputs.native_version }}", self.y)
 
     def test_least_privilege(self):
         self.assertRegex(self.y, r"(?m)^permissions:\n  contents: read\n")
@@ -2206,6 +2346,21 @@ class TestHygiene(unittest.TestCase):
                 if rx.search(line):
                     hits.append(f"{f}:{i}: {line.strip()[:100]}")
         self.assertEqual(hits, [], "first-generation OTA names must not survive v7:\n" + "\n".join(hits[:25]))
+
+    def test_no_old_version_scheme_in_the_tooling(self):
+        """game_version is '<native>.<app_minor>' and releases are 'Purgatory Dungeon v7.K (OTA #...)': the three-part form derived
+        from seq and the 'update N' title must not survive anywhere in the tooling."""
+        rx = re.compile(r"· update|update \$\{?SEQ|<seq>\.0|<native_version>\.<seq>|%d\.%d\.0|\.\{seq\}\.0|seq\}\.0")
+        hits = []
+        for f in self.tracked():
+            if not f.startswith(self.OWNED) or f in self.SELF or f.endswith((".png", ".pck", ".uid")) or f.startswith("tools/ota/fixtures/"):
+                continue
+            try:
+                text = rt(os.path.join(ROOT, f))
+            except (UnicodeDecodeError, OSError):
+                continue
+            hits += [f"{f}:{i}: {l.strip()[:100]}" for i, l in enumerate(text.splitlines(), 1) if rx.search(l)]
+        self.assertEqual(hits, [], "old version scheme:\n" + "\n".join(hits))
 
     def test_the_first_generation_tooling_is_gone(self):
         for gone in ("tools/ota/make_bundle.py", "tools/ota/channel.py", "tools/ota/verify_bundle.py", "tools/ota/ota_rules.json", "tools/ota/build_ota.sh"):

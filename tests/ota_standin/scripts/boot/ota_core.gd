@@ -67,7 +67,7 @@ func check_manifest(manifest_bytes: PackedByteArray, sig_b64: String) -> Array:
 func validate_manifest(m: Dictionary) -> String:
 	for k in ["schema", "channel", "ota_id", "seq", "source_sha", "runtime_id", "runtime_fingerprint", "minimum_bootstrap_version",
 			"game_version", "save_schema", "min_save_schema", "pck_url", "pck_sha256", "pck_size", "created_at", "build_run",
-			"payload_kind", "base_source_sha", "platform", "native_version", "files"]:
+			"payload_kind", "base_source_sha", "platform", "native_version", "app_minor", "files"]:
 		if not m.has(k):
 			return "manifest field missing: " + k
 	if int(m["schema"]) != 1:
@@ -84,6 +84,8 @@ func validate_manifest(m: Dictionary) -> String:
 		return "needs a newer bootstrap"
 	if str(m["ota_id"]) != "%s-%06d" % [m["channel"], int(m["seq"])]:
 		return "ota_id does not match channel/seq"
+	if int(m["app_minor"]) < 1 or str(m["game_version"]) != "%d.%d" % [int(m["native_version"]), int(m["app_minor"])]:
+		return "game_version must be <native_version>.<app_minor>"
 	if str(m["payload_kind"]) != "patch":
 		return "unsupported payload kind"
 	if int(m["pck_size"]) <= 0 or str(m["pck_sha256"]).length() != 64:
