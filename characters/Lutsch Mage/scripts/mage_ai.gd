@@ -696,6 +696,8 @@ func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -
 		_hp_bar_root.visible = true
 
 	# ── Re-enable ─────────────────────────────────────────────────────────────
+	if anim_player != null:
+		anim_player.active = true   # EnemyManager._park() deactivates the mixer of a parked enemy
 	add_to_group("enemy")    # a parked enemy sits outside the groups (see EnemyManager._park)
 	add_to_group("enemies")
 	visible = true

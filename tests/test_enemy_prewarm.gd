@@ -86,7 +86,7 @@ func _ready() -> void:
 			elif e.global_position.y > -100.0:
 				all_parked = false
 				why = "not parked below the level (%s y=%.1f)" % [e.name, e.global_position.y]
-			elif e.anim_player != null and e.anim_player.is_playing():
+			elif e.anim_player != null and (e.anim_player.is_playing() or e.anim_player.active):
 				all_parked = false
 				why = "animation still playing (%s)" % e.name
 	_check(all_parked, "every pooled enemy is parked (hidden, dead, collision-less, no groups, idle, below the level) " + why)

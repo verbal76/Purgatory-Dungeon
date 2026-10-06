@@ -791,6 +791,7 @@ func _park(enemy: Node3D) -> void:
 	var ap : Variant = enemy.get("anim_player")
 	if ap is AnimationPlayer:
 		(ap as AnimationPlayer).stop()
+		(ap as AnimationPlayer).active = false   # an inactive mixer is skipped by the engine's per-frame animation pass
 	enemy.remove_from_group("enemy")
 	enemy.remove_from_group("enemies")
 
