@@ -194,9 +194,9 @@ func _ready() -> void:
 const LOAD_SLICE_US : int = 10000
 ## Per-frame population budget (microseconds) behind the loading screen / once the player has control.
 const STAGE_BUDGET_LOADING_US : int = 10000
-const STAGE_BUDGET_PLAY_US : int = 3500
+const STAGE_BUDGET_PLAY_US : int = 2500
 ## The player's neighbourhood: modules whose box centre is within this many metres (XZ) of the spawn.
-const NEAR_RADIUS : float = 32.0
+const NEAR_RADIUS : float = 40.0
 
 signal entry_ready      # the neighbourhood is complete and the first enemy wave exists: safe to hand over
 signal entry_complete   # every background stage has finished
