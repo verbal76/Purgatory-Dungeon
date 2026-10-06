@@ -228,8 +228,9 @@ final state, or `busy`/`inactive`/`disabled` when nothing started), `last_error(
 Authorization is explicit: the workflow runs only for a pushed branch named `ota/<channel>/<full 40-hex sha>` whose head commit
 **is** that SHA (a moving target cannot publish). In order: pin the exact SHA; **public-repository gate** (an anonymous API read of
 `$GITHUB_REPOSITORY` must say `private: false`, and the repository must equal `REPO` in `ota_config.gd`); resolve identity; classify
-against the native baseline (APK-required => stop); runtime gate (`ota_runtime.py --check` and fingerprint == the baseline's); run the
-full test suite on that SHA; build the baseline pack and compare it with the shipped native build; export the patch; assign `app_minor`
+against the native baseline (APK-required => stop); runtime gate (`ota_runtime.py --check` and fingerprint == the baseline's); the
+full test suite on that SHA (run in the publication, or reused when a verified green result of the same suite on exactly that SHA
+exists: section 11a); build the baseline pack and compare it with the shipped native build; export the patch; assign `app_minor`
 from the live pointer; build the manifest; sign (after the key-match check); inspect with the client's own verification code; allowlist
 and secret-scan the files; create the immutable release; re-download the published artifacts and verify them again anonymously; **only
 then** advance the pointer (forward only) and confirm the live pointer serves the intended OTA (cache-busted polling); write a receipt
@@ -238,6 +239,62 @@ then** advance the pointer (forward only) and confirm the live pointer serves th
 not public, ends in a receipt with `published: false` and the reason.
 Permissions: top level `contents: read`; only the publishing job has `contents: write`, and the only credential is GitHub's automatic
 `${{ github.token }}` (no PAT, no extra secret besides the optional signing-key secret).
+
+## 11a. Workflow economics and the invariant map
+
+Publication is expensive on purpose in what it *checks*, not in how often it repeats the same check. The rules: every gate of section 11
+stays; a gate may be satisfied by an equally strong, GitHub-verified proof instead of being recomputed; nothing is skipped on trust.
+Measurements and estimates: docs/RELEASES.md "CI cost".
+
+**Suite reuse (step 05b, `tools/ota/proven_suite.py`).** The full headless suite (`tests/run_tests.sh`, ~15 billed minutes) is the one step
+whose result is a pure function of the commit. Step 05b asks the GitHub API (read-only, `actions: read`) for completed runs with
+`head_sha == <pinned SHA>` and accepts one only when **all** hold:
+- the run belongs to this repository (no fork); its workflow file is `ci.yml` (event `push` or `pull_request`, run conclusion `success`)
+  or `ota-publish.yml` (event `push`; an earlier attempt that failed *after* its green suite: the job decides);
+- it is completed, attempt 1 (a re-run is never trusted), not the current run, not older than 30 days;
+- the required job exists exactly once, belongs to that run and SHA, is attempt 1, concluded `success`, and has no failed step;
+- the suite step AND the **Exact-SHA attestation** step both concluded `success`, in that order. The attestation step (in `ci.yml` and
+  `ota-tests.yml`) runs only after the suite passed and only when `proven_suite.py same-tree` proved that the tree the suite ran on is
+  the tree of the commit named by the run. For a `pull_request` run, which tests a synthetic merge commit, that holds exactly when the
+  head already contains the base tip (the API's `pull_requests[]` field is the *current* state of the PR, not the state at run time, so
+  it is deliberately not used).
+
+Anything else (missing step, skipped attestation, different tree, cancelled, red, re-run, wrong SHA, workflow or event, API error, rate
+limit, unexpected shape, exception) prints `reuse=0` and step 06 runs the suite exactly as before. Only a verified result skips the
+`tests` job, and `publish` runs only after `tests` succeeded **or** was skipped with `suite_reuse == '1'` (and `prepare` succeeded and
+the host gate said proceed; `tests/test_ota_workflows.py` checks those conditions against a truth table). The receipt records
+`suite.mode` (`own-run` | `reused`) and the source run. The trust model is unchanged: the workflow files are part of the reviewed commit
+and publication is authorised by a human pushing `ota/<channel>/<sha>`.
+
+**Invariant -> enforcing step** (step numbers of `ota-publish.yml`).
+
+| Invariant | Enforced by |
+|---|---|
+| Exact SHA integrity | 01 (`parse-branch`: the branch names the full SHA, `github.sha` equals it, the checkout HEAD equals it); publish job "Exact commit" (HEAD == SHA == `github.sha`); `ota-tests.yml` "Exact commit"; payload built with `--head-sha "$SHA"`; reuse additionally needs `head_sha` equality and the exact-tree attestation |
+| Public host, baked REPO | 02a (`repo-gate`: anonymous API says `private: false`, REPO == this repository) |
+| Native/OTA boundary | 04 (`classify.py`, boundary at the base); repeated inside `ota_build_payload.sh`; `payload_check.py` (protected paths); client-code inspection 12 and 14 |
+| Native compatibility (runtime id + fingerprint) | 05 (`ota_runtime.py --check`, `same-runtime`); the manifest and the client check it again (12, 14) |
+| Byte compatibility with the shipped APK | 03 (published release + APK, anonymous download, `baseline` identity, sha256 recorded); 03b (the second download must have the **same sha256** as 03, else stop); 07 (`native_check.py compare`: the rebuilt `base.pck` must reproduce the shipped APK) |
+| Full suite on the exact SHA | 06 (`ota-tests.yml`, own run) **or** 05b (verified reuse, above); never neither |
+| Signing key verified | 09 (`keys.sh`, never printed), 10 (`key-match`: public half == `PUBLIC_KEY_PEM` compiled into the app) |
+| Exact manifest bytes signed | 11 (`openssl dgst -sha256 -sign` over the `manifest.json` written by 08); 14 `cmp` of the downloaded manifest, signature and pack with the signed local files; 15 sha256 + size of each |
+| Client-equivalent verification | 12 (before upload) and 14 (after anonymous download): `ota_inspect_pack.gd`, the app's own verification code; 15 `verify-anonymous` with the compiled-in key |
+| Immutable release, never Latest | 13 (abort if the release or the tag exists, `artifact_gates.py immutable`, `--latest=false`, name allowlist, secret scan) |
+| Anonymous availability before the pointer moves | 14 (credential-less download), 15 (`check-anonymous` + `verify-anonymous`, no token in the step) |
+| Forward-only publication | 07b and 16 (`next-minor` from the live pointer, re-checked at 16), 16 `pointer-decision` |
+| Pointer is the last write and is confirmed live | 16 (upload, then credential-less `pointer-confirm`, cache-busted); the tests assert that nothing writes to a release after it |
+| Rollback / revocation | the client (`scripts/boot`, sections 7-8) and channel revocation; untouched by the pipeline changes |
+| Trustworthy receipt | 17 (`published` only if the job succeeded, the pointer moved and was confirmed; `anonymous_read_verified`; **`suite.mode` + source run**) |
+| Serialised publication | `concurrency: ota-publish`, `cancel-in-progress: false` (global, a superset of per channel, because the channel cannot be extracted in an expression) |
+| Least privilege | `contents: write` on the `publish` job only; `prepare` additionally has `actions: read` (05b); the token reaches only steps 02b, 03, 05b (read) and 09, 13, 16; the signing secret only step 09 |
+
+Other economics changes, each with a test in `tests/test_ota_workflows.py`: `ci.yml`'s `android` job now `needs` the full suite (an APK is
+built and signed only after the suite is green) and no longer repeats a `TEST_FILTER` subset of the same suite on the same commit; every
+job has a short `timeout-minutes` (the default is 6 hours); receipt artifacts expire after 14 days; `tests/run_tests.sh` prints a per-stage
+timing summary and supports an opt-in `TEST_JOBS=N` (repository variable `CI_TEST_JOBS`, read by `ci.yml` only; default sequential) that
+runs N Godot stages at once on the 4-vCPU runner. Caches: an `actions/cache` entry created on an `ota/**` branch (or a PR merge ref)
+can only be restored by that same ref or from the default branch, so the Godot cache of `ota-publish.yml` / `ota-tests.yml` cannot hit
+across publications; the install it would save is 10-22 s, so it was left alone.
 
 ## 12. Intentional differences from Mote
 
@@ -292,5 +349,6 @@ State at branch `v7-ota` head `17d29c1` (2026-10-06); nothing is published:
 | Publisher gates (public-repo, REPO == repo, next seq / `app_minor`, forward-only pointer, immutability, allowlist, secret scan, anonymous verification, receipt) and workflow static properties (token scope, trigger, no Latest) | unit-tested; workflow never executed on GitHub |
 | Android APK builds, passes `verify_apk` (INTERNET permission, runtime identity fields, no legacy OTA files), Windows export + package verification, full headless suite | CI-proven (PR #6, runs 56-58) |
 | First real publication: `ota/dev/6dd77be…` -> immutable release `ota-dev-000001` ("Purgatory Dungeon v7.1 (OTA #000001)", not Latest), pointer `ota-channel-dev`, receipt; anonymous re-download of manifest, signature and pack (size + SHA-256 + signature with the compiled-in public key verified independently) | CI-proven (OTA publish run 37463060653, 2026-10-06) |
+| Workflow economics: suite-reuse decision (`proven_suite.py`; fixtures recorded from real runs plus mutations), exact-tree attestation, job-condition truth table, ordering / permission / secret / concurrency checks of the three workflows, local bash and expression lint, receipt `suite` field | unit-tested (`tests/test_ota_workflows.py`); NOT yet executed on GitHub (one-run confirmation plan: docs/RELEASES.md "CI cost") |
 | Redirect of release downloads to the objects CDN as seen by a phone, device mount/health/rollback of the real v7.1 on Android | NOT proven (physical device pending) |
 | Real Android file layout, `user://` pack mounting, HTTPS from a phone, touch-drag in the overlay, the "Applying update" panel | NOT proven (emulator / physical device pending) |
