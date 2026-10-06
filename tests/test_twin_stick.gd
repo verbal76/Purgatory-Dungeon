@@ -163,7 +163,8 @@ func _settings_tests() -> void:
 	_check(TouchControls.scheme_from("") == "twin" and TouchControls.scheme_from(null) == "twin" and TouchControls.scheme_from("Classic") == "classic" and TouchControls.scheme_from("garbage") == "twin", "scheme_from normalises stored values")
 	SettingsManager.update_setting(TouchControls.KEY_SCHEME, "twin")
 	# Aim Smoothing: default, persisted, clamped, tolerant of older settings files without the key
-	_check(float(SettingsManager.gameplay_settings.get(TouchControls.KEY_AIM_SMOOTH, -1.0)) == 60.0, "Aim Smoothing defaults to 60 in the settings")
+	SettingsManager.gameplay_settings.erase(TouchControls.KEY_AIM_SMOOTH)   # an older settings file without the key
+	_check(TouchControls.DEFAULT_AIM_SMOOTH == 60.0, "the Aim Smoothing default is 60% and lives in the touch layer (no entry in SettingsManager: an OTA must not touch the guarded settings code)")
 	SettingsManager.update_setting(TouchControls.KEY_AIM_SMOOTH, 35.0)
 	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = -1.0
 	SettingsManager.load_settings()
@@ -382,6 +383,9 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 	_touch(2, kick.center, false)
 	_touch(0, s0, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(_down_actions().is_empty() and tc._owners.is_empty(), "all released (%s)" % [_down_actions()])
 
@@ -399,6 +403,9 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 	_touch(1, atk.center, false)
 	_touch(0, s0, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(_down_actions().is_empty(), "all released after the three-finger test (%s)" % [_down_actions()])
 
@@ -429,6 +436,9 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 	for i in 5:
 		_touch(i, Vector2.ZERO, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(tc._owners.is_empty() and tc._look_cmd == Vector2.ZERO and _down_actions().is_empty(), "all fingers up: no owners left")
 	# the engine's cancel path (a pointer cancelled by the OS) is a clean release too
@@ -444,6 +454,9 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 		Input.parse_input_event(cancel)
 		_flush()
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(tc._owners.is_empty() and tc._look_cmd == Vector2.ZERO and tc._atk_index == -1 and _down_actions().is_empty(), "a cancelled touch releases movement, attack and aim (%s)" % [_down_actions()])
 
@@ -532,6 +545,9 @@ func _aim_tests(tc: TouchControls, view: Vector2) -> void:
 	_touch(0, l0, false)
 	_check(tc.look_step(1.0 / 30.0) == Vector2.ZERO, "no aim command, no look motion")
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 
 
@@ -596,6 +612,9 @@ func _aim_filter_tests(tc: TouchControls, view: Vector2) -> void:
 	_check(tc._atk_engaged and tc._look_cmd != Vector2.ZERO, "crossing 0.20 engages again")
 	_touch(0, l0, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 
 	# 5) smoothing: exponential low-pass, 63% after tau, frame-rate independent
@@ -651,6 +670,9 @@ func _aim_filter_tests(tc: TouchControls, view: Vector2) -> void:
 	_check(px.distance_to(want_px) < 0.0001 and tc._aim_smoothed == tc._look_cmd, "slider 0%% is the raw path: the first step already turns at the full command")
 	_touch(0, l0, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	# 6) release / cancel / background zero the smoothed command at once (no coasting)
 	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = 100.0
@@ -678,6 +700,9 @@ func _aim_filter_tests(tc: TouchControls, view: Vector2) -> void:
 		_check(_real_motion().is_empty(), "[%s] nothing keeps turning" % how)
 		_touch(1, l0, false)
 		await get_tree().create_timer(0.25).timeout
+		await get_tree().process_frame
+		await get_tree().process_frame
+		await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 		_flush()
 	# 7) back inside the dead zone with the finger down: the smoothed tail decays to exactly zero
 	_touch(0, l0, true)
@@ -693,6 +718,9 @@ func _aim_filter_tests(tc: TouchControls, view: Vector2) -> void:
 	_check(tc._aim_smoothed == Vector2.ZERO and n < 60, "the tail ends at exactly zero (%d steps)" % n)
 	_touch(0, l0, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	# Classic ignores the setting entirely (it has no rate path)
 	_check(tc.is_twin(), "smoothing tests ran on twin-stick")
@@ -729,6 +757,9 @@ func _attack_drag_tests(tc: TouchControls, view: Vector2) -> void:
 	_check(tc._owners[0]["kind"] == TouchControls.Owner.BUTTON and tc._owners[0]["button"] == "attack", "the dragging finger is still the attack button's")
 	_touch(0, atk.center, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_attack_events.clear()
 	# the aim response curve, measured from the touch-down point
@@ -743,6 +774,9 @@ func _attack_drag_tests(tc: TouchControls, view: Vector2) -> void:
 	await _frames(4)
 	_check(_real_motion().is_empty(), "no turning after ATTACK is released")
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(not Input.is_action_pressed("attack") and _attack_events == [true, false], "attack released once after the drag (%s)" % [_attack_events])
 	# a quick tap on ATTACK still lasts long enough for polling code
@@ -750,6 +784,9 @@ func _attack_drag_tests(tc: TouchControls, view: Vector2) -> void:
 	_touch(0, atk.center, false)
 	_check(Input.is_action_pressed("attack"), "a tap on ATTACK is still stretched to MIN_PRESS_MS")
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(not Input.is_action_pressed("attack"), "...and released")
 	# same-direction wandering across the whole screen never exceeds full deflection
@@ -758,6 +795,9 @@ func _attack_drag_tests(tc: TouchControls, view: Vector2) -> void:
 	_check(tc._look_cmd.length() <= 1.0 + 0.0001 and tc._look_cmd.length() > 0.9, "a far drag is limited to full deflection (%s)" % tc._look_cmd)
 	_touch(0, Vector2.ZERO, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 
 
@@ -840,6 +880,9 @@ func _scheme_switch_tests(tc: TouchControls, view: Vector2) -> void:
 	_drag(0, s0 + Vector2(100, 0), Vector2(100, 0))
 	SettingsManager.update_setting(TouchControls.KEY_SCHEME, "classic")
 	await get_tree().create_timer(0.7).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(not tc.is_twin() and tc.scheme == "classic", "choosing Classic switches the live layer")
 	_check(_down_actions().is_empty() and tc._owners.is_empty(), "switching releases every finger and action (%s)" % [_down_actions()])
@@ -871,6 +914,9 @@ func _scheme_switch_tests(tc: TouchControls, view: Vector2) -> void:
 	_check(Input.is_action_pressed("attack") and _real_motion().is_empty(), "Classic: dragging from ATTACK does not turn the camera")
 	_touch(2, atk.center, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	# and back to twin, also while the tree is paused (Options opened from the pause menu)
 	get_tree().paused = true
@@ -934,6 +980,9 @@ func _onboarding_tests() -> void:
 	_check(ob.is_done("aim"), "...which completes the aim hint")
 	_touch(0, atk.center, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 
 	# hints never sit on a control, for both schemes, with the USE button showing, at several shapes
@@ -1098,6 +1147,9 @@ func _real_player_test(cls: String) -> void:
 	_check(_attack_events == [true], "[%s] no attack release/re-press during the drag (%s)" % [cls, _attack_events])
 	_touch(1, atk.center, false)
 	await get_tree().create_timer(0.2).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	var y6: float = player.rotation.y
 	await _frames(6)
