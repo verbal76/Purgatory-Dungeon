@@ -80,11 +80,21 @@ func _ready() -> void:
 	# Find a clear spot in the start room with open floor in some direction.
 	var dir := Vector3.ZERO
 	var target := Vector3.ZERO
+	var ref_floor := INF   # the room's floor level: the lowest first surface found around the player
+	for i in 8:
+		var fy0 := _floor_y(space, base + Vector3.FORWARD.rotated(Vector3.UP, i * PI / 4.0) * 5.0)
+		if not is_nan(fy0):
+			ref_floor = minf(ref_floor, fy0)
 	for i in 8:
 		var d := Vector3.FORWARD.rotated(Vector3.UP, i * PI / 4.0)
 		var t := base + d * 5.0
 		var fy := _floor_y(space, t)
 		if is_nan(fy):
+			continue
+		# The start room is random per run: a tall prop or obstacle on the spot makes the raw floor ray hit its top
+		# (1.7 m above the real floor in the one CI failure), which then contradicts the floor snap that ignores props.
+		# Only a spot whose first surface is the room's floor tests what these checks mean to test.
+		if fy - ref_floor > 0.3:
 			continue
 		var q := PhysicsRayQueryParameters3D.create(base + Vector3(0, 1.6, 0), t + Vector3(0, 1.0, 0))
 		q.collision_mask = 1
