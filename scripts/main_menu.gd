@@ -44,6 +44,10 @@ func _ready() -> void:
 	_add_version_label()
 	if TouchControls.is_touch_platform():
 		_fit_for_phone()
+	# The menu is built: this is the game's boot-health checkpoint for the native OTA client (scripts/boot/).
+	var boot_node: Node = get_node_or_null("/root/Boot")
+	if boot_node != null and boot_node.has_method("report_ready"):
+		boot_node.call("report_ready")
 
 
 # The dungeon picture stays the hero. A light veil + vignette sits over it (PUI), and a restrained dark gradient
@@ -91,10 +95,16 @@ func _add_version_label() -> void:
 	label.offset_right = -PUI.S5
 	label.offset_bottom = -PUI.S3
 	add_child(label)
-	# A downloaded OTA update shows "restart to apply" without leaving the menu.
-	var ota: Node = get_node_or_null("/root/OtaUpdater")
+	# A staged OTA update shows "restart to apply" without leaving the menu.
+	var ota: Node = get_node_or_null("/root/Boot")
 	if ota != null and ota.has_signal("status_changed"):
-		ota.status_changed.connect(func() -> void: label.text = BuildInfo.display_string())
+		ota.status_changed.connect(_refresh_version_label)
+
+
+func _refresh_version_label() -> void:
+	var label := get_node_or_null("VersionLabel") as Label
+	if label != null:
+		label.text = BuildInfo.display_string()
 
 
 # Enforces the desired button order in whatever VBoxContainer (or other

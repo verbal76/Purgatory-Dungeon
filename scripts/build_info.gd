@@ -45,13 +45,34 @@ static func short_commit() -> String:
 	return commit().left(7)
 
 
+## The native OTA client (autoload `Boot`, scripts/boot/): null when it is not loaded (tools, tests that run without autoloads).
+static func _boot() -> Node:
+	var loop: MainLoop = Engine.get_main_loop()
+	if loop is SceneTree:
+		return (loop as SceneTree).root.get_node_or_null("Boot")
+	return null
+
+
+## " · update N" while an OTA update is running; "" when OTA is inert or the embedded game runs (release footer unchanged).
+static func _ota_suffix() -> String:
+	var b: Node = _boot()
+	return str(b.call("footer_suffix")) if b != null and b.has_method("footer_suffix") else ""
+
+
+static func _ota_lines() -> PackedStringArray:
+	var b: Node = _boot()
+	if b == null or not b.has_method("diagnostics_text"):
+		return PackedStringArray()
+	return PackedStringArray(str(b.call("diagnostics_text")).split("\n"))
+
+
 ## Short line for the menu: "Purgatory Dungeon v2" or the explicit development-build form.
 static func display_string() -> String:
 	var v := public_version()
 	if is_release_build():
-		return "%s v%d%s" % [PRODUCT_NAME, v, OtaIdentity.footer_suffix()]
+		return "%s v%d%s" % [PRODUCT_NAME, v, _ota_suffix()]
 	var tail := " · " + short_commit() if commit() != "" else ""
-	return "%s · development build after v%d%s%s" % [PRODUCT_NAME, v, tail, OtaIdentity.footer_suffix()]
+	return "%s · development build after v%d%s%s" % [PRODUCT_NAME, v, tail, _ota_suffix()]
 
 
 ## Multi-line engineering diagnostics (printed at startup; shown by tooling/logs).
@@ -65,5 +86,5 @@ static func diagnostics() -> String:
 	lines.append("Built (UTC): %s" % str(info.get("built_utc", "n/a")))
 	lines.append("Engine: Godot %s" % Engine.get_version_info().get("string", "?"))
 	lines.append("Platform: %s" % OS.get_name())
-	lines.append_array(OtaIdentity.diagnostic_lines())
+	lines.append_array(_ota_lines())
 	return "\n".join(lines)
