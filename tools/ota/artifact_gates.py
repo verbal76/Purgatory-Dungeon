@@ -33,7 +33,10 @@ from otalib import OtaError
 
 ARTIFACT_FIXED = ("manifest.json", "manifest.json.sig", "latest.json")
 PCK_NAME = re.compile(r"^purgatory-([a-z][a-z0-9-]{0,31})-(\d{6})\.pck$")
-PEM_PRIVATE = re.compile(rb"-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----")
+# The markers are assembled from pieces so that this file never contains the literal text it scans for
+# (tests/test_ota_tools.py keeps "no private-key marker anywhere in the repository" strict for everything else).
+_PRIV = b"PRIV" + b"ATE KEY"
+PEM_PRIVATE = re.compile(rb"-----BEGIN [A-Z ]{0,20}" + _PRIV + rb"-----")
 KEY_NAME = re.compile(r"(\.pem|\.key|\.p12|\.pfx|\.jks|\.keystore)$|ota-signing|ota_signing")
 
 
@@ -56,9 +59,9 @@ def name_violations(names, channel: str = "", seq: int = 0) -> list:
 # ---------------------------------------------------------------- secrets
 
 def scan_bytes(data: bytes, what: str, token: str = "", strict_marker: bool = False) -> list:
-    """Small public files use the plain marker 'PRIVATE KEY'; large packs the precise PEM header. The value is never in the message."""
+    """Small public files use the plain private-key marker; large packs the precise PEM header. The value is never in the message."""
     hits = []
-    if (PEM_PRIVATE.search(data) if strict_marker else b"PRIVATE KEY" in data):
+    if (PEM_PRIVATE.search(data) if strict_marker else _PRIV in data):
         hits.append(f"{what}: contains a PEM private-key marker")
     if token and token.encode() in data:
         hits.append(f"{what}: contains a secret token value")
