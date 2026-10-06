@@ -124,17 +124,30 @@ the repository (CI key store: the private draft release "OTA signing key (do not
 
 ## 6. Distribution and channel
 
-- Each OTA is an **immutable GitHub Release** `ota-<channel>-<seq:06d>` titled "Purgatory Dungeon v7.K (OTA #<seq:06d>)" (never Latest), holding `purgatory-<ota_id>.pck`, `manifest.json`,
-  `manifest.json.sig`. It is never edited after publication; a tag that already exists aborts the job.
-- The **channel pointer** is the mutable release `ota-channel-<channel>` whose asset `latest.json` is
-  `{channel, ota_id, seq, runtime_id, native_version, app_minor, manifest_url, signature_url, published_at}` (`native_version`/`app_minor`
-  feed the next OTA's `app_minor`; clients tolerate extra keys). It only moves forward. Moving it is the
-  moment an OTA becomes visible to devices.
+Transport = **GitHub Pages deployed from the private source repository's own Actions run** (automatic credentials only: no PAT, no
+second repository). The Pages site is public but contains only `ota/` files and a harmless root page; the source stays private.
+Site layout, under `https://verbal76.github.io/Purgatory-Dungeon/` (`BASE_URL` in `ota_config.gd` is `.../ota`):
+
+```
+/ota/<channel>/latest.json                      mutable pointer
+/ota/<channel>/index.json                       publisher-only list of the retained OTAs (name, size, SHA-256); clients never read it
+/ota/<channel>/<ota_id>/purgatory-<ota_id>.pck  immutable once published
+/ota/<channel>/<ota_id>/manifest.json
+/ota/<channel>/<ota_id>/manifest.json.sig
+```
+- The **pointer** `latest.json` is `{channel, ota_id, seq, runtime_id, native_version, app_minor, manifest_url, signature_url, published_at}`
+  (`native_version`/`app_minor` feed the next OTA's `app_minor`; clients tolerate extra keys). It only moves forward. Moving it is the
+  moment an OTA becomes visible to devices. The pointer is unsigned, so the client only follows asset URLs inside the same
+  `.../ota/<channel>/` directory; the manifest it points to is signed.
+- An OTA directory is never edited after publication; re-publishing an existing `ota_id` or seq is refused. The newest 3 OTAs per
+  channel are retained on the site (older ones are dropped; devices only ever need the pointer's OTA).
+- A Pages deployment replaces the whole site, so each publication **carries forward**: the publisher reads the live site anonymously
+  (`index.json`, then every retained file, verifying size and SHA-256), adds the new OTA, and deploys. Two deployments keep the old
+  "artifacts first, pointer last" order: phase 1 publishes the new OTA directory with the pointer unchanged and verifies it anonymously;
+  phase 2 publishes the new pointer and confirms it live. CDN caching can delay a deployment by minutes; the publisher polls with
+  backoff, and the client adds `?t=<time>` to the pointer request.
 - The installed app follows the channel baked into `ota_config.gd` (`dev` for owner testing; a later `stable` is a second
-  pointer, not a second code path).
-- **The release host is the separate PUBLIC transport repository `verbal76/Purgatory-Dungeon-OTA`** (`REPO` in `ota_config.gd`,
-  `OTA_RELEASE_REPO` in CI; the publish job refuses unless the two are equal). The source repository stays private. See section 14
-  for the trust boundary.
+  pointer directory, not a second code path).
 
 ## 7. Client behaviour (native layer, `scripts/boot/`)
 
@@ -194,12 +207,19 @@ The main menu footer shows the owner-facing running version: `Purgatory Dungeon 
 Authorization is explicit: the workflow runs only for a pushed branch named `ota/<channel>/<full 40-hex sha>` whose head commit
 **is** that SHA (a moving target cannot publish). In order: pin the exact SHA; resolve identity; classify against the native
 baseline (APK-required => stop); runtime gate (`ota_runtime.py --check` and fingerprint == the baseline's); run the full test
-suite on that SHA; build the baseline pack and compare it with the shipped native build; export the patch; build the manifest;
-sign (after the key-match check); inspect with the client's own verification code; create the immutable release; re-download the
-published artifacts and verify them again; verify they are anonymously reachable; **only then** advance the pointer (forward only)
-and confirm the live pointer serves the intended OTA; write a receipt (source SHA, runtime, OTA id, hashes, URLs, `published`,
-`pointer_moved`; native version, `app_minor`, owner-facing version). Any failure before the pointer moves leaves nothing new live. A missing signing key or unconfigured host ends in
-a receipt with `published: false`.
+suite on that SHA; build the baseline pack and compare it with the shipped native build; export the patch; assign `app_minor` from
+the live pointer; build the manifest; sign (after the key-match check); inspect with the client's own verification code; assemble the
+site (live content carried forward + the new OTA; allowlist, secret scan, immutability, size cap); **deploy phase 1** (Pages, new files,
+pointer unchanged); verify the new files anonymously (size, SHA-256, signature with the app's public key); **deploy phase 2** (new
+pointer, forward only); confirm the live pointer serves the intended OTA and re-verify; write a receipt (source SHA, runtime, OTA id,
+hashes, URLs, native version, `app_minor`, owner-facing version, `anonymous_read_verified`, `published`). Any failure before
+phase 2 leaves devices unaffected. A missing signing key, or GitHub Pages not configured, ends in a green run with a receipt
+`published: false` and the reason. Permissions: top level `contents: read`; only the two deploy jobs have `pages: write` and
+`id-token: write` (environment `github-pages`). The workflow refuses unless the base URL it derives from `GITHUB_REPOSITORY` equals
+`BASE_URL` in `ota_config.gd`.
+
+One-time repository settings (not credentials): Settings > Pages > Source = GitHub Actions; Settings > Environments > github-pages >
+Deployment branches and tags must allow `ota/**` (the default allows only the default branch, which rejects the deploy).
 
 ## 12. Intentional differences from Mote
 
@@ -208,7 +228,8 @@ a receipt with `published: false`.
 3. Manifest adds `runtime_fingerprint`, `payload_kind`, `base_source_sha`, `platform`, `native_version`, `files`; the runtime ID
    is accompanied by a content fingerprint that the device also checks.
 4. Publication is triggered by an explicit SHA-named branch, not by pushes to a development branch.
-5. The release host may be a different repository from the (private) source repository.
+5. Distribution is GitHub Pages of the private source repository (Mote publishes to its own public repository's Releases with the same
+   automatic token); the source stays private and only `ota/` content is public.
 6. Signing private key custody: CI key store/secret, not committed.
 
 ## 13. v6 -> v7 and recovery of the shipped baseline
@@ -217,23 +238,21 @@ v6 (`release/v6`, `a9168e1`), v5 and the validated checkpoint are never modified
 at its release commit); v7.1 is the first OTA after it. Rolling back the *app* means installing the v6 APK over v7 only if the version code is allowed to go down,
 which Android refuses; the supported rollback of an OTA is the in-app rollback to PREVIOUS / embedded baseline.
 
-## 14. Distribution repository and trust boundary
+## 14. Distribution site and trust boundary
 
-`verbal76/Purgatory-Dungeon-OTA` is **transport only**. Phones download from it anonymously, so it is public, and it may hold
-only: the immutable release per OTA (`purgatory-<channel>-<seq:06d>.pck`, `manifest.json`, `manifest.json.sig`), the mutable
-pointer release `ota-channel-<channel>` (`latest.json`), and harmless text (`README.md`, `LICENSE`, `docs/*.md`; template:
-`ota/public-host/README.md`). It never holds source code, workflow files, signing keys, credentials, private development artifacts
-or secrets; the publish job refuses to publish if the host's tree or release assets contain anything else.
+The Pages site of `verbal76/Purgatory-Dungeon` is **transport only**. Phones download from it anonymously. It may hold only the files of
+section 6 plus a harmless root page (`index.html`, `.nojekyll`); it never holds source code, workflow files, signing keys,
+credentials, private development artifacts or secrets. The publish job assembles the site from an allowlist, scans it for private-key
+markers, and refuses anything else. The source repository, its Releases and its Actions artifacts remain private.
 
 Trust does **not** come from the host. A device accepts an update only if (1) the manifest signature verifies with the RSA public
 key compiled into the APK, (2) `runtime_id` + `runtime_fingerprint` + base commit match exactly, (3) the package size and SHA-256
 match, (4) the boundary rules hold (no protected path), and (5) it was not blacklisted. A compromised host can therefore withhold
 updates but cannot make a device run anything the private signing key did not sign.
 
-Write access: the private source repository's publish workflow writes to the host with the single Actions secret `OTA_RELEASE_TOKEN`
-(fine-grained PAT, restricted to the host repository, Contents: Read and write). The default `GITHUB_TOKEN` of the source repo
-stays read-only. With no token the workflow still builds, signs and inspects, then ends green with a receipt `published: false`.
-Reads need no credential at all, and the workflow verifies exactly that (anonymous reachability) before it moves the pointer.
+Write access: the publish workflow deploys with GitHub's automatically provided Actions credentials only (`GITHUB_TOKEN` / OIDC for
+Pages). There is no personal access token and no other repository. Reads need no credential at all, and the workflow verifies exactly
+that (anonymous reads) before it moves the pointer.
 
 ## 15. Evidence levels (updated as work lands)
 
