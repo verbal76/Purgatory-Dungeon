@@ -78,6 +78,10 @@ done
 for seed in 1 2 3 7 42 123 2024 98765; do
 	GEN_TEST_SEEDS="$seed" run "res://tests/test_dungeon_generation.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_dungeon_generation.tscn
 done
+# Torches: every module has at least one and every torch is seated on a wall (one seed per process, as above).
+for seed in 1 7 42; do
+	TORCH_TEST_SEEDS="$seed" run "res://tests/test_torch_placement.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_torch_placement.tscn
+done
 if [ "${#FAILED_STAGES[@]}" -gt 0 ]; then
 	echo "=== FAILED STAGES (${#FAILED_STAGES[@]}):"
 	printf '  %s\n' "${FAILED_STAGES[@]}"
