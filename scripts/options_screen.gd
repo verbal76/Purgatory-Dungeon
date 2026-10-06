@@ -230,6 +230,10 @@ func _slider(parent: VBoxContainer, row_label: String, key: String,
 		vl.text = "%.0f%%" % v
 		if _suppress: return
 		SettingsManager.update_setting(key, v)
+		# Accessibility: the lighting manager re-reads the setting and applies it live (no polling).
+		if key == "AmbientBrightness":
+			get_tree().call_group("lighting_manager", "refresh_brightness")
+			return
 		# Keep AudioManager's runtime state in sync for live volume changes.
 		var _am := get_node_or_null("/root/AudioManager")
 		if _am == null: return
@@ -405,6 +409,9 @@ func _build_accessibility_tab() -> void:
 	_section(t, "Difficulty", "Takes effect next run")
 	_slider(t, "Enemy Health",  "HealthSlider", 50.0, 200.0, 5.0)
 	_hint(t, "Controls how much health enemies spawn with each run.")
+	_section(t, "Visibility", "Applies immediately")
+	_slider(t, "Ambient Brightness", "AmbientBrightness", 0.0, 100.0, 5.0)
+	_hint(t, "Raises the dim background light so floors, walls and enemies stay readable. 0% is the standard dark look.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -715,7 +722,7 @@ func _load_settings() -> void:
 		"MasterSlider": 100.0, "MusicSlider": 65.0, "SFXSlider": 100.0,
 		"ShakeSlider": 50.0, "SpeedSlider": 100.0, "DamageSlider": 100.0,
 		"TouchOpacity": 70.0, "TouchScale": 100.0, "TouchLookSens": 100.0, "TouchAimSmoothing": 60.0,
-		"HealthSlider": 100.0,
+		"HealthSlider": 100.0, "AmbientBrightness": 0.0,
 	}
 	for key in _sliders.keys():
 		var v : float = SettingsManager.get_setting(key, defaults.get(key, 100.0))
