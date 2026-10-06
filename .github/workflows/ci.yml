@@ -32,34 +32,9 @@ permissions:
   contents: read
 
 jobs:
-  # The OTA trust anchor (docs/OTA.md): serialises creation of the OTA signing key (private draft release, like the
-  # Android key; first run only) and hands the PUBLIC key to the build jobs. Never prints or uploads private material.
-  ota-key:
-    if: ${{ !startsWith(github.ref, 'refs/heads/promote/') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    concurrency:
-      group: ota-signing-key          # first run creates the key; never two at once
-      cancel-in-progress: false
-    permissions:
-      contents: write                 # stores the signing key in a private draft release on the first run
-    outputs:
-      pub_b64: ${{ steps.key.outputs.pub_b64 }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: OTA signing key (public half is the device trust anchor)
-        id: key
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OTA_SIGNING_KEY_PEM_BASE64: ${{ secrets.OTA_SIGNING_KEY_PEM_BASE64 }}
-        run: |
-          source tools/ota/keys.sh "$RUNNER_TEMP/ota_trust.pem"
-          echo "pub_b64=$(base64 -w0 "$RUNNER_TEMP/ota_trust.pem")" >> "$GITHUB_OUTPUT"
-
   validate-and-export:
     # A promote tag publishes an existing artifact; it must not rebuild anything. Pushes to the
     # android-port working branch build only the Android job (the full Windows run happens on the PR).
-    needs: [ota-key]
     if: ${{ !startsWith(github.ref, 'refs/heads/promote/') && github.ref != 'refs/heads/android-port' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -111,6 +86,9 @@ jobs:
             python3 tools/release_tool.py check
           fi
 
+      - name: Native runtime lock (docs/OTA.md section 3)
+        run: python3 tools/ota_runtime.py --check
+
       - name: Validate project and run tests
         env:
           # A release build must contain the canonical studio logo (docs/RELEASES.md).
@@ -122,16 +100,6 @@ jobs:
           rel=""
           if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="--release"; fi
           python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" $rel
-
-      - name: OTA trust anchor (public key, written before export; docs/OTA.md)
-        env:
-          OTA_PUB_B64: ${{ needs.ota-key.outputs.pub_b64 }}
-        run: |
-          test -n "$OTA_PUB_B64" || { echo "the ota-key job produced no public key"; exit 1; }
-          echo "$OTA_PUB_B64" | base64 -d > ota_trust.pem
-          openssl pkey -pubin -in ota_trust.pem -noout
-          grep -q "PRIVATE" ota_trust.pem && { echo "refusing: ota_trust.pem contains private material"; exit 1; } || true
-          echo "OTA trust anchor sha256: $(openssl pkey -pubin -in ota_trust.pem -outform DER | sha256sum | cut -d' ' -f1)"
 
       - name: Export Windows build
         run: |
@@ -177,7 +145,6 @@ jobs:
   # Android APK: built, signed with the stable app key and qualified (identity, API 36 target, 16 KB
   # alignment, signature, game content) by the same scripts anyone can run (tools/android/).
   android:
-    needs: [ota-key]
     if: ${{ !startsWith(github.ref, 'refs/heads/promote/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -235,6 +202,9 @@ jobs:
           if [[ "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="v${GITHUB_REF_NAME#release/v}"; fi
           if [[ -n "$rel" ]]; then python3 tools/release_tool.py check --tag "$rel"; else python3 tools/release_tool.py check; fi
 
+      - name: Native runtime lock (docs/OTA.md section 3)
+        run: python3 tools/ota_runtime.py --check
+
       - name: Mobile input / splash / menu tests
         env:
           REQUIRE_STUDIO_LOGO: ${{ (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')) && '1' || '' }}
@@ -246,16 +216,6 @@ jobs:
           rel=""
           if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="--release"; fi
           python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" $rel
-
-      - name: OTA trust anchor (public key, written before export; docs/OTA.md)
-        env:
-          OTA_PUB_B64: ${{ needs.ota-key.outputs.pub_b64 }}
-        run: |
-          test -n "$OTA_PUB_B64" || { echo "the ota-key job produced no public key"; exit 1; }
-          echo "$OTA_PUB_B64" | base64 -d > ota_trust.pem
-          openssl pkey -pubin -in ota_trust.pem -noout
-          grep -q "PRIVATE" ota_trust.pem && { echo "refusing: ota_trust.pem contains private material"; exit 1; } || true
-          echo "OTA trust anchor sha256: $(openssl pkey -pubin -in ota_trust.pem -outform DER | sha256sum | cut -d' ' -f1)"
 
       - name: Android signing key
         env:

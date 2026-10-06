@@ -1,0 +1,9 @@
+; Stand-in project used by tests/test_ota_tools.py to run tools/ota_make_manifest.gd and tools/ota_inspect_pack.gd
+; before (or without) the real native layer. When the repository has scripts/boot/, the tests copy THAT directory over
+; this stand-in, so the same tests exercise the real OtaCore. Never exported (tests/ is not shipped).
+config_version=5
+
+[application]
+
+config/name="OtaStandIn"
+config/features=PackedStringArray("4.6")

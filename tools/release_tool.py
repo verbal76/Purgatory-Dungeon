@@ -6,7 +6,11 @@ verified against it.
   release_tool.py check [--tag vN]   verify VERSION, project.godot, export preset (and tag)
   release_tool.py set N              set the public version everywhere (VERSION, project.godot, preset)
   release_tool.py build-info OUT --commit SHA [--run-id ID] [--release]
-                                     write the build_info.json shipped inside the game
+                             [--runtime-id ID --runtime-fingerprint HEX --ota-channel NAME]
+                                     write the build_info.json shipped inside the game; it also bakes the native runtime
+                                     identity (runtime_id, runtime_fingerprint from tools/ota_runtime.py, and the OTA
+                                     channel from scripts/boot/ota_config.gd; docs/OTA.md section 3). The three
+                                     --runtime/--ota flags override the computed values (tests, base builds)
   release_tool.py next               print the next public version number
 """
 import argparse
@@ -85,7 +89,32 @@ def set_version(n: int) -> None:
     print(f"public version set to v{n}")
 
 
-def build_info(out: str, commit: str, run_id: str, release: bool) -> None:
+def runtime_identity(runtime_id: str = "", fingerprint: str = "", channel: str = "") -> dict:
+    """runtime_id / runtime_fingerprint / ota_channel for build_info.json. Computed from the tree (ota/boundary.json,
+    scripts/boot/ota_config.gd) unless all three overrides are given. Refuses to ship a build without them."""
+    if runtime_id or fingerprint or channel:
+        if not (runtime_id and fingerprint and channel):
+            sys.exit("build-info: --runtime-id, --runtime-fingerprint and --ota-channel must be given together")
+        got = {"runtime_id": runtime_id, "runtime_fingerprint": fingerprint, "ota_channel": channel}
+    else:
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import ota_runtime  # noqa: E402
+        try:
+            tree = ota_runtime.Tree(ROOT)
+            ident = ota_runtime.identity(tree, "android")
+        except ota_runtime.OtaError as e:
+            sys.exit(f"build-info: cannot compute the native runtime identity: {e}")
+        got = {k: ident[k] for k in ("runtime_id", "runtime_fingerprint", "ota_channel")}
+    if not re.fullmatch(r"[a-z]+-godot-[0-9]+\.[0-9]+\.[0-9]+-r[1-9][0-9]*", got["runtime_id"]):
+        sys.exit(f"build-info: malformed runtime_id {got['runtime_id']!r}")
+    if not re.fullmatch(r"[0-9a-f]{64}", got["runtime_fingerprint"]):
+        sys.exit("build-info: runtime_fingerprint must be 64 lowercase hex characters")
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", got["ota_channel"]):
+        sys.exit(f"build-info: malformed ota_channel {got['ota_channel']!r}")
+    return got
+
+
+def build_info(out: str, commit: str, run_id: str, release: bool, runtime: dict) -> None:
     info = {
         "product": PRODUCT,
         "public_version": read_version(),
@@ -93,6 +122,7 @@ def build_info(out: str, commit: str, run_id: str, release: bool) -> None:
         "commit": commit,
         "ci_run": run_id,
         "built_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        **runtime,
     }
     with open(out, "w", encoding="utf-8") as f:
         json.dump(info, f, indent=2)
@@ -112,6 +142,9 @@ def main() -> int:
     b.add_argument("--commit", required=True)
     b.add_argument("--run-id", default="")
     b.add_argument("--release", action="store_true")
+    b.add_argument("--runtime-id", default="")
+    b.add_argument("--runtime-fingerprint", default="")
+    b.add_argument("--ota-channel", default="")
     sub.add_parser("next")
     a = ap.parse_args()
     if a.cmd == "check":
@@ -119,7 +152,8 @@ def main() -> int:
     if a.cmd == "set":
         set_version(a.n)
     elif a.cmd == "build-info":
-        build_info(a.out, a.commit, a.run_id, a.release)
+        build_info(a.out, a.commit, a.run_id, a.release,
+                   runtime_identity(a.runtime_id, a.runtime_fingerprint, a.ota_channel))
     elif a.cmd == "next":
         print(read_version() + 1)
     return 0

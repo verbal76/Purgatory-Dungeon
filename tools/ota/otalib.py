@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Shared helpers for the OTA build tooling (docs/OTA.md). Standard library + the `openssl` CLI only.
 
-Not a command; imported by classify.py, make_bundle.py, channel.py, verify_bundle.py, native_check.py.
-  * path rules   : tools/ota/ota_rules.json is loaded and applied here (one implementation of the matching)
+Not a command; imported by classify.py, native_check.py, publish_gates.py and tools/ota_runtime.py.
+  * boundary     : ota/boundary.json is loaded and applied here (one implementation of the path matching)
   * JSON         : deterministic writer (sorted keys, 2-space indent, trailing newline) and a strict reader
   * crypto       : RSA PKCS#1 v1.5 / SHA-256 signing and verification through `openssl dgst`
                    (the private key is only ever passed to openssl by path and is never printed)
@@ -17,45 +17,82 @@ import subprocess
 import tempfile
 
 OTA_DIR = os.path.dirname(os.path.abspath(__file__))
-RULES_PATH = os.path.join(OTA_DIR, "ota_rules.json")
+REPO_ROOT = os.path.dirname(os.path.dirname(OTA_DIR))
+BOUNDARY_REL = "ota/boundary.json"
+BOUNDARY_PATH = os.path.join(REPO_ROOT, "ota", "boundary.json")
 
 PRODUCT = "purgatory-dungeon"
-FORMAT = 1
-OTA_API = 1
 PLATFORMS = ("android", "windows")
 MIN_KEY_BITS = 3072
 
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-ENGINE_RE = re.compile(r"^[0-9A-Za-z._+-]{3,64}$")
+CHANNEL_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 
 
 class OtaError(Exception):
     """A refusal with a human-readable reason (printed, exit 1, never a traceback)."""
 
 
-# ---------------------------------------------------------------- rules
+# ---------------------------------------------------------------- boundary
 
-def load_rules(path: str = "") -> dict:
-    path = path or RULES_PATH
+def parse_boundary(text: bytes, what: str = BOUNDARY_REL) -> dict:
     try:
-        with open(path, encoding="utf-8") as f:
-            rules = json.load(f)
-    except (OSError, ValueError) as e:
-        raise OtaError(f"cannot read OTA rules {path}: {e}")
-    if rules.get("format") != 1:
-        raise OtaError("ota_rules.json: unsupported format")
-    for sect in ("protected", "guarded", "not_shipped"):
+        rules = json.loads(text.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as e:
+        raise OtaError(f"cannot parse {what}: {e}")
+    if not isinstance(rules, dict) or rules.get("format") != 1:
+        raise OtaError(f"{what}: unsupported format")
+    for sect in ("payload_protected", "guarded", "not_shipped"):
         s = rules.get(sect)
         if not isinstance(s, dict):
-            raise OtaError(f"ota_rules.json: section '{sect}' missing")
+            raise OtaError(f"{what}: section '{sect}' missing")
         for key in ("exact", "prefixes", "suffixes"):
             if not isinstance(s.get(key), list) or not all(isinstance(x, str) and x for x in s[key]):
-                raise OtaError(f"ota_rules.json: {sect}.{key} must be a list of non-empty strings")
-    if not isinstance(rules.get("max_payload_bytes"), int) or rules["max_payload_bytes"] <= 0:
-        raise OtaError("ota_rules.json: max_payload_bytes missing")
+                raise OtaError(f"{what}: {sect}.{key} must be a list of non-empty strings")
+    ni = rules.get("native_inputs")
+    if not isinstance(ni, list) or not ni or not all(isinstance(x, str) and x for x in ni):
+        raise OtaError(f"{what}: native_inputs must be a non-empty list of paths/globs")
+    for key in ("max_payload_bytes", "warn_payload_bytes"):
+        if not isinstance(rules.get(key), int) or rules[key] <= 0:
+            raise OtaError(f"{what}: {key} missing")
+    eng = rules.get("engine_version_source")
+    if not isinstance(eng, dict) or not eng.get("file") or not eng.get("regex"):
+        raise OtaError(f"{what}: engine_version_source {{file, regex}} missing")
+    try:
+        if re.compile(eng["regex"], re.M).groups < 1:
+            raise OtaError(f"{what}: engine_version_source.regex needs one capture group")
+    except re.error as e:
+        raise OtaError(f"{what}: engine_version_source.regex is invalid: {e}")
+    rv = rules.get("runtime_revision_source")
+    if not isinstance(rv, dict) or not rv.get("file") or not re.fullmatch(r"[A-Z][A-Z0-9_]*", str(rv.get("constant", ""))):
+        raise OtaError(f"{what}: runtime_revision_source {{file, constant}} missing")
     return rules
+
+
+def load_boundary(path: str = "") -> dict:
+    path = path or BOUNDARY_PATH
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        raise OtaError(f"cannot read the OTA boundary {path}: {e.strerror or e}")
+    return parse_boundary(data, path)
+
+
+def glob_regex(pattern: str):
+    """'*' and '?' stay inside one path segment, '**' crosses '/'."""
+    out, i = "", 0
+    while i < len(pattern):
+        c = pattern[i]
+        if pattern.startswith("**", i):
+            out += ".*"
+            i += 2
+            continue
+        out += "[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c)
+        i += 1
+    return re.compile("^" + out + "$")
 
 
 def normalize_path(p: str) -> str:
@@ -67,9 +104,18 @@ def normalize_path(p: str) -> str:
     return p
 
 
+def native_input_match(rules: dict, path: str) -> str:
+    """The native_inputs entry that names `path` ('' if none)."""
+    path = normalize_path(path)
+    for pat in rules["native_inputs"]:
+        if glob_regex(pat).match(path):
+            return pat
+    return ""
+
+
 def path_problem(p: str) -> str:
     """Non-empty reason when a path in a pack/manifest is not a plain relative res:// path
-    (docs/OTA.md compatibility rule 5: nothing escapes res://: '..', absolute, user://)."""
+    (docs/OTA.md compatibility rule: nothing escapes res://: '..', absolute, user://)."""
     if not p:
         return "empty path"
     if "\x00" in p or "\\" in p:
@@ -112,9 +158,13 @@ def pack_names(rules: dict, path: str) -> list:
 
 
 def classify_source(rules: dict, path: str):
-    """(category, rule) for a path of the git tree: not_shipped | apk_required | guarded | safe."""
+    """(category, rule) for a path of the source tree: apk_required | not_shipped | guarded | safe.
+    Native inputs win over everything (tools/android/build_apk.sh lives under the not-shipped tools/)."""
     path = normalize_path(path)
-    for cat, sect in (("not_shipped", "not_shipped"), ("apk_required", "protected"), ("guarded", "guarded")):
+    ni = native_input_match(rules, path)
+    if ni:
+        return "apk_required", f"native input {ni}: runtime fingerprint would change"
+    for cat, sect in (("not_shipped", "not_shipped"), ("apk_required", "payload_protected"), ("guarded", "guarded")):
         why = _match(rules[sect], path)
         if why:
             return cat, why
@@ -127,9 +177,13 @@ def pack_violation(rules: dict, path: str):
     if bad:
         return "escape", bad
     for name in pack_names(rules, path):
-        why = _match(rules["protected"], name)
+        why = _match(rules["payload_protected"], name)
         if why:
             return "protected", why
+    for name in pack_names(rules, path):
+        ni = native_input_match(rules, name)
+        if ni:
+            return "protected", f"native input {ni}"
     for name in pack_names(rules, path):
         why = _match(rules["guarded"], name)
         if why:
@@ -229,6 +283,18 @@ def public_key_pem(key_path: str) -> bytes:
     return _openssl(["pkey", "-in", key_path, "-pubout"], "derive the public key")
 
 
+def public_key_der_sha256(pem: bytes) -> str:
+    """SHA-256 of the DER SubjectPublicKeyInfo of a PEM public key (the fingerprint shown in logs)."""
+    fd, path = tempfile.mkstemp(prefix="ota-pub-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(pem)
+        der = _openssl(["pkey", "-pubin", "-in", path, "-outform", "DER"], "read the public key")
+    finally:
+        os.unlink(path)
+    return hashlib.sha256(der).hexdigest()
+
+
 def check_public_key(pub_path: str) -> int:
     if not os.path.isfile(pub_path):
         raise OtaError(f"public key not found: {pub_path}")
@@ -260,7 +326,7 @@ def verify_signature(pub_path: str, data_path: str, sig: bytes) -> bool:
 
 
 def sig_encode(sig: bytes) -> bytes:
-    """manifest.sig / channel.json.sig: base64 of the raw signature, one line, no trailing newline."""
+    """manifest.json.sig: base64 of the raw signature, one line, no trailing newline."""
     return base64.b64encode(sig)
 
 
@@ -277,35 +343,3 @@ def sign_to_file(key_path: str, data_path: str, sig_path: str) -> None:
 
 def fail(msg: str):
     raise OtaError(msg)
-
-
-# ---------------------------------------------------------------- bundle directory layout
-
-UPDATE_DIR_RE = re.compile(r"^update-([1-9][0-9]*)$")
-
-
-def update_rel_dir(native_version: int, platform: str, seq: int) -> str:
-    return f"v{native_version}/{platform}/update-{seq}"
-
-
-def scan_updates(root: str) -> list:
-    """Every `<root>/v<N>/<platform>/update-<seq>/` directory as dicts (native_version, platform, seq, rel, dir)."""
-    found = []
-    try:
-        vdirs = sorted(os.listdir(root))
-    except OSError:
-        return found
-    for vd in vdirs:
-        m = re.fullmatch(r"v([1-9][0-9]*)", vd)
-        if not m or not os.path.isdir(os.path.join(root, vd)):
-            continue
-        for plat in sorted(os.listdir(os.path.join(root, vd))):
-            pdir = os.path.join(root, vd, plat)
-            if plat not in PLATFORMS or not os.path.isdir(pdir):
-                continue
-            for ud in sorted(os.listdir(pdir)):
-                um = UPDATE_DIR_RE.match(ud)
-                if um and os.path.isdir(os.path.join(pdir, ud)):
-                    found.append({"native_version": int(m.group(1)), "platform": plat, "seq": int(um.group(1)),
-                                  "rel": f"{vd}/{plat}/{ud}", "dir": os.path.join(pdir, ud)})
-    return found

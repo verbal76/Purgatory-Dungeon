@@ -1,0 +1,19 @@
+{
+  "files": [
+    "export_presets.cfg",
+    "project.godot",
+    "tools/android/build_apk.sh"
+  ],
+  "fingerprint": "c7848b5618b3ec5a52b9a833fb217f763a9f086fe87551099706a3842a33289b",
+  "godot_version": "4.6",
+  "hashes": {
+    "export_presets.cfg": "88a007ade8b3b3d8c02104c3b278d29e66e1e2a718a843c0bf5b19c5db3f5815",
+    "project.godot": "8c77fc1b8a0ffae82475b7fe5f1501dbe32a47eaa0fe42f8888b700480392497",
+    "tools/android/build_apk.sh": "66c2066a34240899c3462cd0ece03d0ed064d924511a6df1fd0d548b421e29f4"
+  },
+  "missing": [
+    "scripts/boot/*.gd"
+  ],
+  "provisional": true,
+  "runtime_revision": 1
+}

@@ -11,7 +11,10 @@ Checks (Android SDK build-tools found via ANDROID_HOME):
   * signature: apksigner verify (v2+), prints the signing certificate SHA-256 (optionally must equal
     --expect-cert, so a build can never be signed with a different key than the install line)
   * content: the game PCK inside the APK has the studio splash, the canonical logo, build_info.json
-    for this version, and nothing from tests/archive/docs (same checks as the Windows package)
+    for this version (carrying runtime_id / runtime_fingerprint / ota_channel, docs/OTA.md v7), nothing from
+    tests/archive/docs, no first-generation OTA files and no key material (same checks as the Windows package)
+  * OTA: pass --require-permission android.permission.INTERNET when the OTA client (scripts/boot/ota_core.gd) is present
+    (tools/android/build_apk.sh does)
 Prints SHA-256 of the APK. Exit 1 on any problem.
 """
 import argparse

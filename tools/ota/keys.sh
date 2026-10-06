@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Provides the OTA signing key for CI (mirrors tools/android/signing.sh) and writes the PUBLIC half to a file.
-# The matching public key is the device-side trust anchor (ota_trust.pem at the repo root, written before export).
+# The matching public key is the device-side trust anchor: PUBLIC_KEY_PEM in scripts/boot/ota_config.gd (compiled into the APK;
+# tools/ota/publish_gates.py key-match refuses to sign when the two differ). Nothing is written into the build.
 #
 # Order of preference:
 #   1. GitHub Actions secret OTA_SIGNING_KEY_PEM_BASE64 (base64 of an RSA-3072+ private key PEM): the
@@ -80,7 +81,7 @@ _ota_gh_ensure() {   # $1 = destination key file, $2 = may_create (1/0); prints 
   _ota_gen "$dest"
   nonce="$(openssl rand -hex 16)"
   gh release create "ota-signing-key" --draft --latest=false --repo "$GITHUB_REPOSITORY" --title "$_OTA_TITLE" \
-    --notes "Private, never published. Holds the OTA update signing key for Purgatory Dungeon; the matching public key is compiled into every build as ota_trust.pem. Deleting this draft makes every already-installed build ignore all future updates until a new APK ships. Move the key into the Actions secret OTA_SIGNING_KEY_PEM_BASE64 at any time; the secret takes precedence. (creation nonce $nonce)" \
+    --notes "Private, never published. Holds the OTA update signing key for Purgatory Dungeon; the matching public key is compiled into every APK (scripts/boot/ota_config.gd). Deleting this draft makes every already-installed build ignore all future updates until a new APK ships. Move the key into the Actions secret OTA_SIGNING_KEY_PEM_BASE64 at any time; the secret takes precedence. (creation nonce $nonce)" \
     "$dest#ota-signing.key" >/dev/null
   # Race check: lowest release id wins; a loser removes its own draft and adopts the winner's key.
   mine="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq "[.[]|select(.draft and .name==\"$_OTA_TITLE\" and ((.body // \"\")|contains(\"$nonce\")))|.id][0] // empty")"
