@@ -77,6 +77,8 @@ Every release build must contain the canonical Hot Attic Games logo
 |---|---|---|---|
 | v1 | `073e34b9f2976f2336aedb6311bd2da33282eb17` | First recovered Windows build (CI run 37143051773), delivered for the owner's first Windows playtest | historical |
 | v2 | `ef24eb4cf184dbc61f0d11f7d8b81aca2ab1a88c` | Stabilization round 2 build (CI run 37152299390) | Latest at the time this convention was adopted |
+| v6 | `a9168e16ceac23b0dbb00d3f34f12ff3be070901` | Mage aim fix, typography, twin-stick controls; last native APK without the OTA-capable runtime | rollback baseline for v7; never modified |
+| v7 | (the `release/v7` release commit; see its release notes) | First OTA-capable native APK: signed OTA client + runtime lock, `v7.K` versioning, separate right thumbstick removed (Attack-drag aims) | no OTA published with it; first OTA will be v7.1 |
 
 Why the sequence starts here: the repository had no GitHub Releases, no tags, and no APK/AAB/EXE
 files when the convention was adopted (October 2026). The only playable builds ever delivered
