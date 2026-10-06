@@ -454,10 +454,6 @@ func _build_about_tab() -> void:
 	t.add_child(title)
 	_about_values["title"] = title
 
-	_section(t, "Version")
-	for r in ABOUT_ROWS:
-		_about_value_row(t, r[0], r[1])
-
 	_section(t, "Updates")
 	var plate := PUI.panel("inset")
 	plate.name = "AboutStatusPlate"
@@ -493,6 +489,10 @@ func _build_about_tab() -> void:
 	_about_copied.name = "AboutCopied"
 	t.add_child(_about_copied)
 	_hint(t, "Updates download in the background and start the next time you open the game. Copy diagnostics puts the details above on the clipboard, without any personal data, so you can paste them into a bug report.")
+
+	_section(t, "Version")
+	for r in ABOUT_ROWS:
+		_about_value_row(t, r[0], r[1])
 
 	_section(t, "Technical details")
 	for r in ABOUT_TECH_ROWS:

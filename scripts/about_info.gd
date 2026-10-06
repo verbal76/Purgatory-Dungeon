@@ -133,7 +133,7 @@ static func build_model(snap: Dictionary, checking_locally: bool = false) -> Dic
 	var native: String = str(snap.get("native_version", running))
 	var ota: String = ota_label(snap)
 	var rows: Array = [
-		{"key": "version", "label": "Game version", "value": "%s v%s" % [PRODUCT, running]},
+		{"key": "version", "label": "Game version", "value": "v%s" % running},
 		{"key": "app", "label": "App version", "value": "v%s" % native},
 		{"key": "update", "label": "Update", "value": ota if ota != "" else "None (original v%s)" % native},
 	]

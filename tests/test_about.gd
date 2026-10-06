@@ -92,7 +92,7 @@ func _t_model() -> void:
 	_check(desktop["status"]["text"] == "Updates are delivered through the Android app.", "desktop: calm Android-app note (%s)" % desktop["status"]["text"])
 	_check(desktop["status"]["kind"] == AboutInfo.KIND_INFO and not desktop["can_check"], "desktop: informational, Check disabled")
 	_check(_row(desktop, "update") == "None (original v7)", "desktop: no OTA row text (%s)" % _row(desktop, "update"))
-	_check(_row(desktop, "version") == "Purgatory Dungeon v7" and _row(desktop, "app") == "v7", "desktop: version rows")
+	_check(_row(desktop, "version") == "v7" and _row(desktop, "app") == "v7", "desktop: version rows")
 	# An Android build whose client is off (not a CI-built APK).
 	var inert_android: Dictionary = AboutInfo.build_model(snap({"client": false, "state": "inactive", "platform": "android"}))
 	_check(inert_android["status"]["text"] == "Updates are not available in this build." and not inert_android["can_check"], "android without a client: not available, no check")
@@ -101,7 +101,7 @@ func _t_model() -> void:
 	var cur: Dictionary = AboutInfo.build_model(snap())
 	_check(cur["status"]["text"] == "You are up to date" and cur["status"]["kind"] == AboutInfo.KIND_OK and cur["can_check"], "current: up to date, check allowed")
 	_check(_row(cur, "update") == "v7.2 (OTA #000002)", "current: OTA label (%s)" % _row(cur, "update"))
-	_check(_row(cur, "version") == "Purgatory Dungeon v7.2" and _row(cur, "app") == "v7", "current: game 7.2 on app v7")
+	_check(_row(cur, "version") == "v7.2" and _row(cur, "app") == "v7", "current: game 7.2 on app v7")
 	_check(cur["title"] == "Purgatory Dungeon v7.2", "current: title")
 	_check(_tech(cur, "runtime") == "android-godot-4.6.0-r2" and _tech(cur, "channel") == "dev", "current: runtime and channel")
 	_check(_tech(cur, "fingerprint") == "abcdef012345…" and not _tech(cur, "fingerprint").contains(FP), "current: fingerprint shortened (%s)" % _tech(cur, "fingerprint"))
