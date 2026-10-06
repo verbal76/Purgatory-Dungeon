@@ -28,12 +28,19 @@ const FEATURE := "ota"
 ## The only platform OTA packages are built for.
 const PLATFORM := "android"
 
-## !!! PLACEHOLDER PUBLIC KEY !!! The integrator pastes the real RSA-3072 public key here
-## (`openssl rsa -pubout`). The matching private key lives outside the repository (CI key
-## store). While this placeholder is in place no manifest can verify, so nothing is ever
-## mounted: that is the safe failure. Tests inject their own keys through OtaCore's constructor.
+## The OTA trust anchor: the RSA-3072 PUBLIC key whose private half signs every manifest. The private key
+## never enters the repository (CI key store, see tools/ota/keys.sh); changing this key is a native change
+## (bump RUNTIME_REVISION). Tests inject their own keys through OtaCore's constructor.
 const PUBLIC_KEY_PEM := """-----BEGIN PUBLIC KEY-----
-PLACEHOLDER-REPLACE-WITH-THE-REAL-OTA-PUBLIC-KEY-BEFORE-THE-FIRST-OTA-APK
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAzymBAOQvSCSFc4ntkXLE
+SKvCCnMMKuH2slU7ImLg0eKEV4P0d2hyOLBsME2bje0fc8NRLesMAdsSehuLo5Ms
+wMRkYOy3EBYQoHyqliMDN0TpgpQy8BhjkkimpzDTcKQ7hEOl9HpRqMLgH26dkn4a
+31bQTuXm13EI9Q4qncENVULTlh/oAc4E0hxx3uBpREIxC2FSK8PeBNIA6vI7zcIE
+5g/aYGa9qgyR0bs6TKakHnW8lUiE7mFlOz3+RIUyd/ZPNLWrMHYJyvP2xnFDUtk9
+HSlll4+500o685/rbw/m7ZdnbUzkEX/l2ohlEPeCXJeP7vxO24m7RZb9RNKP0qU2
+r9aUh23a73YLjJ7cCcyfWhleUKCN5GEcqh3LOmch06Xztt4GJuTDcHOaDYtlGbOg
+N34DmQgjbOJRPRF/5Oaqjy6kjbK8fhfCuOgripVt2AOWxK1MjzrJKYGqGxDHV6ww
+vXBLN0KOWFBUEIWtTCri9HSdl7FgndltihCmvHt6MN3dAgMBAAE=
 -----END PUBLIC KEY-----
 """
 

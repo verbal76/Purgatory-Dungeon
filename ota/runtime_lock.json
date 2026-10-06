@@ -2,18 +2,26 @@
   "files": [
     "export_presets.cfg",
     "project.godot",
+    "scripts/boot/boot.gd",
+    "scripts/boot/diagnostics_overlay.gd",
+    "scripts/boot/ota_config.gd",
+    "scripts/boot/ota_core.gd",
+    "scripts/boot/ota_protected.gd",
+    "scripts/boot/ota_updater.gd",
     "tools/android/build_apk.sh"
   ],
-  "fingerprint": "c7848b5618b3ec5a52b9a833fb217f763a9f086fe87551099706a3842a33289b",
+  "fingerprint": "34261c92ba17b28e96adf7af77cc4ce9cfaebc4c30988a90bd9ee489ae193241",
   "godot_version": "4.6",
   "hashes": {
-    "export_presets.cfg": "88a007ade8b3b3d8c02104c3b278d29e66e1e2a718a843c0bf5b19c5db3f5815",
-    "project.godot": "8c77fc1b8a0ffae82475b7fe5f1501dbe32a47eaa0fe42f8888b700480392497",
-    "tools/android/build_apk.sh": "66c2066a34240899c3462cd0ece03d0ed064d924511a6df1fd0d548b421e29f4"
+    "export_presets.cfg": "265440f91deadaeddd09499adc006246a6643a5b9c29b66f67207f3b51dcd02b",
+    "project.godot": "218b3afc2287ab719b577a667512842c57e2899f7fef488998802222d16474be",
+    "scripts/boot/boot.gd": "2ffc7e6fa9712b942bc7c3ead3b1a1f00191e8a116af09db8833b7454412f8c9",
+    "scripts/boot/diagnostics_overlay.gd": "4bb8c1be1511581a17c40afdf30ad023349168a61479bb8b15d31ac7784ab7e3",
+    "scripts/boot/ota_config.gd": "dcd7614d98fb901fbee35bbe53f7284e2e9393677c6f32e2064a1c7bfed5332e",
+    "scripts/boot/ota_core.gd": "02abd6955b9e419f0984f7bb2abf99c3c1644bb1adb1af300aa22f31a7892c46",
+    "scripts/boot/ota_protected.gd": "779299ba7920fc9015ccc4de41941086a5be6a443d3818f8c22f22bd0882f1b4",
+    "scripts/boot/ota_updater.gd": "5a277f095330c69df499e7fc02ed23f10700a328a4d3ce5991470558f774d81e",
+    "tools/android/build_apk.sh": "a813c5d1c8d08031a17d8f6c388100afc9b13e40ad4bc6a457c0e2c56981cd9e"
   },
-  "missing": [
-    "scripts/boot/*.gd"
-  ],
-  "provisional": true,
   "runtime_revision": 1
 }

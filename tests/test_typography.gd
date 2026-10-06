@@ -15,7 +15,7 @@ var _checks: int = 0
 var _strings: int = 0
 
 const SCAN_DIRS := ["res://scripts", "res://autoloads", "res://scenes"]
-const SCAN_SKIP := ["res://scripts/ota"]   # updater internals are never shown in the UI
+const SCAN_SKIP: Array[String] = []
 const FONT_KEYS := ["display_black", "display_bold", "display_semi", "body_regular", "body_semi", "body_bold"]
 
 # Functional symbols the UI is allowed to use. Each one must render in every font through the chain.
