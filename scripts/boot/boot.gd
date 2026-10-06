@@ -106,7 +106,9 @@ func _init() -> void:
 		channel = Config.CHANNEL
 	inert_reason = _inert_reason(no_ota)
 	if inert_reason != "":
-		print("[OTA] inactive: ", inert_reason)
+		# Silent on desktop builds that never had a client; loud where one was expected.
+		if no_ota or OS.has_feature(Config.FEATURE) or (hooks_allowed and _args.has("ota-enable")):
+			print("[OTA] inactive: ", inert_reason)
 		return
 	var pem: String = Config.PUBLIC_KEY_PEM
 	if hooks_allowed and _args.has("ota-pubkey") and FileAccess.file_exists(str(_args["ota-pubkey"])):
@@ -247,6 +249,10 @@ func _become_healthy() -> void:
 		_tick.start()
 		auto_check("start")
 	status_changed.emit()
+	# Developer / end-to-end hook: report and quit when no check is running (disabled, --ota-no-autocheck, inert).
+	if hooks_allowed and _args.has("ota-quit-after-check") and not (updater != null and updater.busy):
+		print("OTA_IDENTITY_JSON " + JSON.stringify(identity()))
+		get_tree().quit()
 
 
 ## SAVE_SCHEMA of the game that is mounted NOW (embedded or OTA); 0 when unreadable.
@@ -420,6 +426,11 @@ func _compat_text() -> String:
 	if c == "":
 		return "not checked yet"
 	return "compatible" if c == "compatible" else "NOT compatible: " + c
+
+
+## Alias of diagnostics_text() (docs/OTA.md section 10 calls it Boot.diagnostics()).
+func diagnostics() -> String:
+	return diagnostics_text()
 
 
 func diagnostics_text() -> String:

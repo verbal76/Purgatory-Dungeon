@@ -1259,6 +1259,7 @@ func _t_boot_node() -> void:
 		real._input(ev)
 		_check(not real._overlay.is_open(), "F9 again closes it (toggle)")
 		_check(real.status_word() == "inactive", "inert Boot reports status 'inactive'")
+		_check(real.diagnostics() == real.diagnostics_text(), "diagnostics() is the same text as diagnostics_text()")
 		real._overlay.queue_free()
 		real._overlay = null
 		real._ready_at_ms = -1
