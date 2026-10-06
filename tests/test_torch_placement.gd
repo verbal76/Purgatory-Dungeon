@@ -50,13 +50,23 @@ func _build(seed_value: int) -> Dictionary:
 	return {"root": root, "gen": gen, "result": result}
 
 
-## A torch node is a direct child of a module that owns both an OmniLight3D and a FlameMesh.
+## A torch node is a direct child of a module that owns an OmniLight3D and a flame: either its own
+## FlameMesh child (torch scenes) or, for the code-built torch, an instance of the generator's
+## shared MultiMesh flame batches (the torch carries the meta "flame_batched").
 func _torch_nodes_of(mod: Node3D) -> Array[Node3D]:
 	var out: Array[Node3D] = []
 	for c in mod.get_children():
-		if c is Node3D and c.get_node_or_null("OmniLight3D") is OmniLight3D and c.get_node_or_null("FlameMesh") is MeshInstance3D:
+		if not (c is Node3D) or not (c.get_node_or_null("OmniLight3D") is OmniLight3D):
+			continue
+		if c.get_node_or_null("FlameMesh") is MeshInstance3D or c.has_meta("flame_batched"):
 			out.append(c)
 	return out
+
+
+## World positions of every flame instance. The headless (dummy) renderer does not keep MultiMesh
+## transforms, so the generator records them in torch_flame_positions.
+func _batched_flame_positions(gen: Node) -> PackedVector3Array:
+	return gen.torch_flame_positions
 
 
 ## Distance from p to the nearest surface along the five world axes (up included). Returns
@@ -107,6 +117,8 @@ func _validate(seed_value: int, built: Dictionary) -> void:
 	var registered_ids := {}
 	for t in gen.registered_torches:
 		registered_ids[t.get_instance_id()] = true
+	var flame_pos := _batched_flame_positions(gen)
+	var batched_torches := 0
 	var scene_modules := 0
 	for mod in gen.placed_modules:
 		var torches := _torch_nodes_of(mod)
@@ -118,17 +130,29 @@ func _validate(seed_value: int, built: Dictionary) -> void:
 			total_torches += 1
 			if not registered_ids.has(t.get_instance_id()):
 				unregistered += 1
-			var flame := t.get_node("FlameMesh") as Node3D
 			var light := t.get_node("OmniLight3D") as Node3D
-			if flame.global_position.distance_to(light.global_position) > 0.001:
-				unregistered += 1000   # light and flame must stay together
-			var m := _surface_gap(space, flame.global_position)
+			var flame_p: Vector3 = light.global_position
+			if t.has_meta("flame_batched"):
+				batched_torches += 1
+				var found := false
+				for fp in flame_pos:
+					if fp.distance_to(light.global_position) <= 0.001:
+						found = true
+						break
+				if not found:
+					unregistered += 1000   # light and flame must stay together
+
+			else:
+				flame_p = (t.get_node("FlameMesh") as Node3D).global_position
+				if flame_p.distance_to(light.global_position) > 0.001:
+					unregistered += 1000
+			var m := _surface_gap(space, flame_p)
 			var g: float = m["gap"]
 			gaps.append(g if g != INF else RAY_LEN)
-			var desc := "%s torch@%s gap=%s (+x/-x/-z/+z/up: %s) rot_y=%.1f" % [mod.scene_file_path.get_file(), str(flame.global_position), "none" if g == INF else "%.2f" % g, m["dirs"], rad_to_deg(mod.global_rotation.y)]
+			var desc := "%s torch@%s gap=%s (+x/-x/-z/+z/up: %s) rot_y=%.1f" % [mod.scene_file_path.get_file(), str(flame_p), "none" if g == INF else "%.2f" % g, m["dirs"], rad_to_deg(mod.global_rotation.y)]
 			if g > SEAT_TOLERANCE:
 				floating.append(desc)
-			heights.append(flame.global_position.y)
+			heights.append(flame_p.y)
 			if m["up"] < SPHERE_R:
 				buried.append(desc + " (sphere pokes through the ceiling)")
 			elif m["back"]:
@@ -155,6 +179,12 @@ func _validate(seed_value: int, built: Dictionary) -> void:
 	_check(buried.size() <= limit, tag + "no torch buried in solid geometry (%d of %d, allowed %d)" % [buried.size(), total_torches, limit])
 	_check(gen.registered_torches.size() == total_torches, tag + "registered_torches (%d) == torch nodes in modules (%d)" % [gen.registered_torches.size(), total_torches])
 	_check(unregistered == 0, tag + "every torch node is registered and its light sits on its flame (%d)" % unregistered)
+	_check(flame_pos.size() == batched_torches, tag + "one batched flame per code-built torch (%d flames, %d torches)" % [flame_pos.size(), batched_torches])
+	var mm_total := 0
+	for b in gen.torch_flame_batches:
+		mm_total += ((b as MultiMeshInstance3D).multimesh as MultiMesh).instance_count
+	_check(gen.torch_flame_count == flame_pos.size() and mm_total == flame_pos.size(), tag + "torch_flame_count and the MultiMesh instance counts match (%d / %d / %d)" % [gen.torch_flame_count, mm_total, flame_pos.size()])
+	_check(gen.torch_flame_batches.size() <= 120, tag + "flames are few batches, not one node per torch (%d batches)" % gen.torch_flame_batches.size())
 
 
 func _ready() -> void:
