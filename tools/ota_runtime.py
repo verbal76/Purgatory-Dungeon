@@ -9,6 +9,7 @@ fingerprints them and compares the result with the committed ota/runtime_lock.js
   ota_runtime.py --check            exit 1 if the native layer changed without a bump (CI gate; also tests/run_tests.sh)
   ota_runtime.py --bump             increment RUNTIME_REVISION in scripts/boot/ota_config.gd and relock (a new APK is needed)
   ota_runtime.py --print [--json]   show runtime id, revision, engine and fingerprint (--platform android|windows)
+  ota_runtime.py --engine           print the engine version from ci.yml's GODOT_RELEASE (e.g. 4.6)
   ota_runtime.py --relock           rewrite the lock WITHOUT bumping (only before any APK with this revision exists)
   ota_runtime.py --relock --provisional [--revision N]
                                     lock while an input is still missing (the lock is flagged and --check refuses it)
@@ -225,6 +226,7 @@ def main(argv=None) -> int:
     mode.add_argument("--bump", action="store_true")
     mode.add_argument("--print", dest="show", action="store_true")
     mode.add_argument("--relock", action="store_true")
+    mode.add_argument("--engine", action="store_true", help="print GODOT_RELEASE's version (e.g. 4.6); needs no native layer")
     ap.add_argument("--json", action="store_true", help="with --print: machine-readable output")
     ap.add_argument("--platform", default="android", choices=otalib.PLATFORMS)
     ap.add_argument("--root", default=DEFAULT_ROOT)
@@ -235,6 +237,9 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     try:
         tree = Tree(a.root, a.boundary, a.config)
+        if a.engine:
+            print(tree.godot_release())
+            return 0
         if a.show:
             ident = identity(tree, a.platform)
             if a.json:
