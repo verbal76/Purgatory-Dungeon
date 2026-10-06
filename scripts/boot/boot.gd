@@ -317,8 +317,39 @@ func _on_update_finished(result: String) -> void:
 
 # --- identity, status and diagnostics ----------------------------------------------------------
 
+## The NATIVE APK version as a whole number (build_info.public_version, else the project's config/version): 7.
+func native_version_int() -> int:
+	var v: Variant = native_info.get("public_version", ProjectSettings.get_setting("application/config/version", "0"))
+	return int(v) if (v is int or v is float) else int(str(v))
+
+
 func native_version() -> String:
-	return str(native_info.get("public_version", ProjectSettings.get_setting("application/config/version", "?")))
+	return str(native_version_int())
+
+
+## The OWNER-FACING running version: "7" on the embedded baseline (also when OTA is inert or not active),
+## "7.K" (the active manifest's game_version) while OTA K-of-this-APK runs. Not the OTA id, not the seq.
+func running_version() -> String:
+	if ota_enabled and not core.active.is_empty() and str(core.active.get("game_version", "")) != "":
+		return str(core.active["game_version"])
+	return native_version()
+
+
+## The application layer minor: K while OTA v7.K runs, 0 on the baseline.
+func app_minor() -> int:
+	if ota_enabled and not core.active.is_empty():
+		return int(core.active.get("app_minor", 0))
+	return 0
+
+
+## Owner-facing version of the OTA staged for the next start ("" when none is waiting).
+func staged_version() -> String:
+	if not ota_enabled:
+		return ""
+	var pend: Dictionary = core.slot("pending")
+	if pend.is_empty() or pend.get("ota_id", "") == core.active.get("ota_id", ""):
+		return ""
+	return str(pend.get("game_version", ""))
 
 
 ## Machine-readable snapshot (printed by --ota-quit-after-check for end-to-end runs). No secrets.
@@ -327,7 +358,9 @@ func identity() -> Dictionary:
 	return {
 		"ota_enabled": ota_enabled,
 		"inert_reason": inert_reason,
-		"native_version": native_version(),
+		"native_version": native_version_int(),
+		"running_version": running_version(),
+		"app_minor": app_minor(),
 		"runtime_id": runtime_id,
 		"runtime_fingerprint": str(native_info.get("runtime_fingerprint", "")),
 		"baseline_source_sha": str(native_info.get("commit", "")),
@@ -348,19 +381,14 @@ func identity() -> Dictionary:
 	}
 
 
-## " · update 3" when an OTA is running, plus the staged one waiting for a restart. "" when OTA is inert
-## or the embedded baseline runs with nothing staged (the release footer must stay unchanged then).
+## What follows the version in the menu footer: " · v7.2 ready, restart to apply" while a newer OTA is staged and
+## waiting, else "". The running version itself is running_version() (BuildInfo.display_string() prints it), so an
+## inert client or a baseline run leaves the release footer exactly "Purgatory Dungeon v7".
 func footer_suffix() -> String:
-	if not ota_enabled:
+	var sv: String = staged_version()
+	if sv == "":
 		return ""
-	var s := ""
-	var act_seq: int = int(core.active.get("seq", 0))
-	if act_seq > 0:
-		s += " · update %d" % act_seq
-	var pend: Dictionary = core.slot("pending")
-	if not pend.is_empty() and int(pend.get("seq", 0)) != act_seq:
-		s += " · restart to apply update %d" % int(pend.get("seq", 0))
-	return s
+	return " · v%s ready, restart to apply" % sv
 
 
 ## The update client's state as one word: unchecked | checking | offline | up_to_date | available | downloading |
@@ -379,10 +407,10 @@ func ota_status() -> String:
 		return "OTA disabled: running the embedded baseline (Re-enable OTA to resume updates)"
 	var pend: Dictionary = core.slot("pending")
 	if not pend.is_empty() and pend.get("ota_id", "") != core.active.get("ota_id", ""):
-		return "Update downloaded: %s runs after the app restarts" % pend["ota_id"]
+		return "Update downloaded: v%s (%s) runs after the app restarts" % [str(pend.get("game_version", "?")), pend["ota_id"]]
 	var rdy: Dictionary = core.slot("ready")
 	if not rdy.is_empty():
-		return "Update downloaded: %s (press Activate on restart)" % rdy["ota_id"]
+		return "Update downloaded: v%s (%s), press Activate on restart" % [str(rdy.get("game_version", "?")), rdy["ota_id"]]
 	var st: String = updater.status if updater != null else "unchecked"
 	var rid: String = str(updater.remote.get("ota_id", "?")) if updater != null else "?"
 	match st:
@@ -411,7 +439,7 @@ func _slot_text(name: String) -> String:
 	var m: Dictionary = core.slot(name)
 	if m.is_empty():
 		return "none"
-	return "%s (game %s, source %s)" % [str(m.get("ota_id", "?")), str(m.get("game_version", "?")), str(m.get("source_sha", "")).left(12)]
+	return "v%s (%s, source %s)" % [str(m.get("game_version", "?")), str(m.get("ota_id", "?")), str(m.get("source_sha", "")).left(12)]
 
 
 func _event_text(kind: String) -> String:
@@ -435,10 +463,17 @@ func diagnostics() -> String:
 
 func diagnostics_text() -> String:
 	var L: Array[String] = []
-	L.append("PURGATORY DUNGEON OTA DIAGNOSTICS")
+	var act0: Dictionary = core.active if ota_enabled else {}
+	L.append("Purgatory Dungeon v%s" % running_version())
+	L.append("Native APK: v%s" % native_version())
+	L.append("Application layer: v%s" % running_version())
+	if act0.is_empty():
+		L.append("OTA: none (embedded baseline)")
+	else:
+		L.append("OTA: #%06d (%s)" % [int(act0.get("seq", 0)), str(act0.get("ota_id", ""))])
+	L.append("Runtime: %s  fingerprint %s" % [runtime_id, str(native_info.get("runtime_fingerprint", "none"))])
 	L.append("")
 	L.append("Native")
-	L.append("  Version: %s" % native_version())
 	L.append("  Godot: %s" % Config.engine_version())
 	L.append("  Platform: %s" % platform)
 	L.append("  Bootstrap: v%d" % Config.BOOTSTRAP_VERSION)
@@ -456,7 +491,7 @@ func diagnostics_text() -> String:
 		L.append("  This run healthy: %s" % ("yes" if healthy else "not yet"))
 		return "\n".join(L)
 	var act: Dictionary = core.active
-	L.append("  Running: %s" % (("OTA %s (seq %d, source %s)" % [str(act["ota_id"]), int(act.get("seq", 0)), str(act.get("source_sha", "")).left(12)]) if not act.is_empty() else "embedded baseline"))
+	L.append("  Running: %s" % (("OTA v%s (%s, #%06d, source %s)" % [str(act.get("game_version", "?")), str(act["ota_id"]), int(act.get("seq", 0)), str(act.get("source_sha", "")).left(12)]) if not act.is_empty() else "embedded baseline (v%s)" % native_version()))
 	if not act.is_empty():
 		L.append("  Running package SHA-256: %s" % str(act.get("pck_sha256", "")))
 	L.append("  Latest on channel: %s" % (("%s (checked %s)" % [str(updater.remote.get("ota_id", "?")), updater.checked_at]) if updater != null and not updater.remote.is_empty() else "not checked yet"))
@@ -497,7 +532,7 @@ func _show_panel() -> void:
 	scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_panel.add_child(scrim)
 	var label: Label = Label.new()
-	label.text = "Applying update"
+	label.text = "Applying update v%s" % running_version()
 	label.set_anchors_preset(Control.PRESET_FULL_RECT)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
