@@ -132,10 +132,9 @@ the repository (CI key store: the private draft release "OTA signing key (do not
   moment an OTA becomes visible to devices.
 - The installed app follows the channel baked into `ota_config.gd` (`dev` for owner testing; a later `stable` is a second
   pointer, not a second code path).
-- **The release host is a configuration value (`REPO` in `ota_config.gd`, `OTA_RELEASE_REPO` in CI).** Devices download
-  anonymously, so the host repository's releases must be publicly readable. The source repository is private: this is the one
-  open owner decision (section 14). Until it is decided the pipeline is complete and proven against a local server that mirrors
-  the Releases layout, and the publish job refuses to advance a pointer that is not anonymously reachable.
+- **The release host is the separate PUBLIC transport repository `verbal76/Purgatory-Dungeon-OTA`** (`REPO` in `ota_config.gd`,
+  `OTA_RELEASE_REPO` in CI; the publish job refuses unless the two are equal). The source repository stays private. See section 14
+  for the trust boundary.
 
 ## 7. Client behaviour (native layer, `scripts/boot/`)
 
@@ -218,10 +217,23 @@ v6 (`release/v6`, `a9168e1`), v5 and the validated checkpoint are never modified
 at its release commit); v7.1 is the first OTA after it. Rolling back the *app* means installing the v6 APK over v7 only if the version code is allowed to go down,
 which Android refuses; the supported rollback of an OTA is the in-app rollback to PREVIOUS / embedded baseline.
 
-## 14. Open owner decision
+## 14. Distribution repository and trust boundary
 
-Where phones download releases from while the source repository stays private (see section 6). Nothing in this branch creates a
-repository, requests a credential or changes visibility.
+`verbal76/Purgatory-Dungeon-OTA` is **transport only**. Phones download from it anonymously, so it is public, and it may hold
+only: the immutable release per OTA (`purgatory-<channel>-<seq:06d>.pck`, `manifest.json`, `manifest.json.sig`), the mutable
+pointer release `ota-channel-<channel>` (`latest.json`), and harmless text (`README.md`, `LICENSE`, `docs/*.md`; template:
+`ota/public-host/README.md`). It never holds source code, workflow files, signing keys, credentials, private development artifacts
+or secrets; the publish job refuses to publish if the host's tree or release assets contain anything else.
+
+Trust does **not** come from the host. A device accepts an update only if (1) the manifest signature verifies with the RSA public
+key compiled into the APK, (2) `runtime_id` + `runtime_fingerprint` + base commit match exactly, (3) the package size and SHA-256
+match, (4) the boundary rules hold (no protected path), and (5) it was not blacklisted. A compromised host can therefore withhold
+updates but cannot make a device run anything the private signing key did not sign.
+
+Write access: the private source repository's publish workflow writes to the host with the single Actions secret `OTA_RELEASE_TOKEN`
+(fine-grained PAT, restricted to the host repository, Contents: Read and write). The default `GITHUB_TOKEN` of the source repo
+stays read-only. With no token the workflow still builds, signs and inspects, then ends green with a receipt `published: false`.
+Reads need no credential at all, and the workflow verifies exactly that (anonymous reachability) before it moves the pointer.
 
 ## 15. Evidence levels (updated as work lands)
 
