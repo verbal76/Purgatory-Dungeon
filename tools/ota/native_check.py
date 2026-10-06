@@ -13,7 +13,8 @@ file for file (otherwise the patch silently omits files that differ and the devi
              android  the APK. Godot's gradle export stores either one PCK under assets/ (found by its GDPC
                       magic) or the project's files loose under assets/ (res://x -> assets/x; this project keeps its
                       import data in godot/ rather than .godot/, so godot/imported/... -> assets/godot/imported/...).
-                      Both layouts are handled.
+                      Godot 4.6 additionally writes assets/assets.sparsepck, a sparse-bundle directory of those loose files (flag 4):
+                      it defines which assets are the game, and is cross-checked against the loose bytes. All layouts are handled.
 compare lists, per file of base.pck, differences (content differs / missing in the native build) = errors and
 files only the native build has = warnings. --allow names paths that are expected to differ (build_info.json is
 stamped per build and is never part of a patch). --tolerate names import products (godot/imported/, godot/exported/):
@@ -53,7 +54,7 @@ class PckSource:
 
 
 class ApkSource:
-    """Loose files under assets/ of an APK."""
+    """Loose files under assets/ of an APK (this is where Godot 4.6's gradle export puts the project)."""
 
     def __init__(self, zf, desc):
         self.zf = zf
@@ -85,6 +86,30 @@ class ApkSource:
         return None if m is None else self.zf.read(m)
 
 
+class SparseApkSource(ApkSource):
+    """Godot 4.5+ gradle export: assets/assets.sparsepck is a sparse-bundle DIRECTORY (path, size, md5) of the loose files under
+    assets/. The directory defines which files are the game (the rest of assets/, e.g. dexopt/ and the pack itself, is not); the bytes
+    compared are always the loose files', and the directory must agree with them (an APK that contradicts its own directory is refused)."""
+
+    def __init__(self, zf, desc, pck):
+        super().__init__(zf, desc)
+        self.pck = pck
+        self.listed = {e.path: e for e in pck.entries if not e.removal}
+
+    def names(self):
+        return set(self.listed)
+
+    def check_directory(self):
+        problems = []
+        for name, e in sorted(self.listed.items()):
+            got = ApkSource.md5(self, name)
+            if got is None:
+                problems.append(f"the sparse directory lists {name} but the APK has no such asset")
+            elif got != e.md5:
+                problems.append(f"{name}: the APK asset's md5 differs from its sparse directory entry")
+        return problems
+
+
 def open_native(platform: str, path: str, tmp: str):
     if platform == "windows":
         if os.path.isdir(path):
@@ -110,7 +135,14 @@ def open_native(platform: str, path: str, tmp: str):
                 with z.open(i) as fh:
                     if fh.read(4) == pcklib.MAGIC:
                         z.extract(i, tmp)
-                        return PckSource(os.path.join(tmp, i.filename))
+                        pk = pcklib.read_pck(os.path.join(tmp, i.filename), allow_sparse=True)
+                        if not pk.sparse:
+                            return PckSource(os.path.join(tmp, i.filename))
+                        src = SparseApkSource(z, f"{path} ({i.filename}, sparse-bundle directory of {len(pk.entries)} files)", pk)
+                        bad = src.check_directory()
+                        if bad:
+                            raise OtaError("the APK contradicts its own sparse directory: " + "; ".join(bad[:5]))
+                        return src
         src = ApkSource(z, path)
         if not src.members:
             raise OtaError(f"{path} holds neither a PCK nor loose files under assets/")
