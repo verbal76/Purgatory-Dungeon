@@ -915,6 +915,83 @@ class TestNativeCheck(TmpCase):
         r = self.check("extract", "--platform", "android", "--native", apk, "--path", "build_info.json", "--out", self.p("bi.json"))
         self.assertEqual(rb(self.p("bi.json")), b'{"apk":1}')
 
+    @staticmethod
+    def sparse_pck(files, flags=6):
+        """A Godot 4.5+/4.6 sparse-bundle directory (assets/assets.sparsepck of the gradle export): header flags 6, file_base 0, offsets 0,
+        no data - only path, size and md5 of files that live loose beside it."""
+        hdr = struct.pack("<4sIIIIIQQ", b"GDPC", 3, 4, 6, 0, flags, 0, 104)
+        hdr += b"\0" * (104 - len(hdr))
+        d = bytearray(struct.pack("<I", len(files)))
+        for path, data in files.items():
+            raw = path.encode()
+            raw += b"\0" * (-len(raw) % 4)
+            d += struct.pack("<I", len(raw)) + raw + struct.pack("<QQ", 0, len(data)) + hashlib.md5(data).digest() + struct.pack("<I", 0)
+        return bytes(hdr + d)
+
+    def sparse_apk(self, files, listed=None, loose=None):
+        apk = self.p("sparse.apk")
+        with zipfile.ZipFile(apk, "w") as z:
+            z.writestr("classes.dex", b"dex")
+            z.writestr("assets/dexopt/baseline.prof", b"prof" * 40)
+            z.writestr("assets/_cl_", b"x" * 120)
+            z.writestr("assets/assets.sparsepck", self.sparse_pck(listed if listed is not None else files))
+            for path, data in (loose if loose is not None else files).items():
+                z.writestr("assets/" + path, data)
+        return apk
+
+    def test_android_sparse_bundle_layout(self):
+        """Godot 4.6's gradle export: loose files under assets/ plus assets/assets.sparsepck, a directory with the files' md5s."""
+        files = {"scripts/a.gdc": b"A1", "godot/imported/t.ctex": b"IMG", "build_info.json": b'{"apk":1}', "data/c.json": b"C1"}
+        base = pck_of(self.p("base.pck"), dict(files, **{"build_info.json": b"{}"}))
+        apk = self.sparse_apk(files)
+        r = self.check("compare", "--platform", "android", "--base-pck", base, "--native", apk, "--allow", "build_info.json")
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertIn("sparse-bundle directory of 4 files", r.stdout)
+        self.assertNotIn("dexopt", r.stdout, "files outside the sparse directory are not part of the game")
+        self.assertNotIn("_cl_", r.stdout)
+        r = self.check("extract", "--platform", "android", "--native", apk, "--path", "build_info.json", "--out", self.p("bi.json"))
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertEqual(rb(self.p("bi.json")), b'{"apk":1}')
+        # a different script is an error, a different import product is tolerated by prefix
+        changed = dict(files, **{"scripts/a.gdc": b"A2", "godot/imported/t.ctex": b"IMG2"})
+        apk = self.sparse_apk(changed)
+        r = self.check("compare", "--platform", "android", "--base-pck", base, "--native", apk, "--allow", "build_info.json",
+                       "--tolerate", "godot/imported/")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("content differs from the native build: scripts/a.gdc", r.stdout)
+        self.assertNotIn("content differs from the native build: godot/imported", r.stdout)
+        self.assertIn("1 byte-different but tolerated import product", r.stdout)
+        # a game file listed in the directory but absent from the APK
+        apk = self.sparse_apk(files, loose={k: v for k, v in files.items() if k != "data/c.json"})
+        r = self.check("compare", "--platform", "android", "--base-pck", base, "--native", apk, "--allow", "build_info.json")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("contradicts its own sparse directory", r.stderr)
+        # an asset the directory does not list is not a game file
+        apk = self.sparse_apk(files, loose=dict(files, **{"extra.txt": b"x"}))
+        r = self.check("compare", "--platform", "android", "--base-pck", base, "--native", apk, "--allow", "build_info.json")
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertNotIn("extra.txt", r.stdout)
+        # the APK's bytes contradict the directory's md5
+        apk = self.sparse_apk(files, listed=dict(files, **{"scripts/a.gdc": b"A9"}))
+        r = self.check("compare", "--platform", "android", "--base-pck", base, "--native", apk, "--allow", "build_info.json")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("md5 differs from its sparse directory entry", r.stderr)
+
+    def test_a_sparse_pack_is_never_a_payload_or_base(self):
+        sp = write(self.p("assets.sparsepck"), self.sparse_pck({"a": b"1"}))
+        with self.assertRaises(pcklib.PckError) as cm:
+            pcklib.read_pck(sp)
+        self.assertIn("sparse-bundle", str(cm.exception))
+        pk = pcklib.read_pck(sp, allow_sparse=True)
+        self.assertTrue(pk.sparse)
+        self.assertEqual([(e.path, e.size) for e in pk.entries], [("a", 1)])
+        with self.assertRaises(pcklib.PckError):
+            pcklib.read_entry(pk, pk.entries[0])
+        self.assertEqual(tool("payload_check.py", sp, "--base", pck_of(self.p("b.pck"), {"a": b"0"}), "--files-out", self.p("f.json")).returncode, 1)
+        write(self.p("unknown.pck"), self.sparse_pck({"a": b"1"}, flags=0x16))
+        with self.assertRaises(pcklib.PckError):
+            pcklib.read_pck(self.p("unknown.pck"), allow_sparse=True)
+
     def test_android_single_pck_asset(self):
         base = pck_of(self.p("base.pck"), self.FILES)
         apk = self.p("app.apk")
@@ -1285,6 +1362,64 @@ class TestPublishGates(TmpCase):
             tags.append(gates.RELEASE_TAG.format(channel="dev", seq=n))
         self.assertEqual(seqs, [1, 2, 3, 4, 5])
 
+    def test_native_base_tag_is_derived_from_version(self):
+        self.assertEqual(gates.native_base_tag("7\n"), {"tag": "v7", "version": 7})
+        self.assertEqual(gates.native_base_tag(" 12 ", ""), {"tag": "v12", "version": 12})
+        self.assertEqual(gates.native_base_tag("7", "v7")["tag"], "v7", "an agreeing override is fine")
+        self.assertEqual(gates.native_base_tag("7", "  ")["tag"], "v7", "an empty variable means not set")
+        for bad_override in ("v6", "v8", "7", "V7", "v7.1", "latest"):
+            with self.assertRaises(otalib.OtaError, msg=bad_override) as cm:
+                gates.native_base_tag("7", bad_override)
+            self.assertIn("OTA_NATIVE_BASE_TAG", str(cm.exception))
+        for bad_version in ("", "0", "-1", "7.1", "v7", "seven", "07", "7 8"):
+            with self.assertRaises(otalib.OtaError, msg=bad_version):
+                gates.native_base_tag(bad_version)
+        vf = write(self.p("VERSION"), b"7\n")
+        r = tool("publish_gates.py", "base-tag", "--version-file", vf)
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertEqual(r.stdout.split(), ["tag=v7", "version=7"])
+        self.assertEqual(tool("publish_gates.py", "base-tag", "--version-file", vf, "--var", "v8").returncode, 1)
+        self.assertEqual(tool("publish_gates.py", "base-tag", "--version-file", vf, "--var", "v7").returncode, 0)
+        real = os.path.join(ROOT, "VERSION")
+        if os.path.isfile(real):
+            r = tool("publish_gates.py", "base-tag", "--version-file", real)
+            self.assertEqual(r.returncode, 0, out(r))
+            self.assertTrue(r.stdout.startswith("tag=v"))
+
+    def test_native_release_must_be_published_and_carry_the_apk(self):
+        good = {"tag_name": "v7", "name": "Purgatory Dungeon v7", "draft": False, "prerelease": False,
+                "assets": [{"name": "Purgatory-Dungeon-v7.apk", "size": 330051232, "state": "uploaded"},
+                           {"name": "Purgatory-Dungeon-v7-Windows.zip", "size": 5, "state": "uploaded"}]}
+        self.assertEqual(gates.native_release_problems(good, "v7"), [])
+
+        def broken(**kw):
+            d = json.loads(json.dumps(good))
+            d.update(kw)
+            return d
+        cases = {
+            "draft": broken(draft=True), "prerelease": broken(prerelease=True), "title": broken(name="Purgatory Dungeon v7.1 (OTA #000001)"),
+            "other tag": broken(tag_name="v6"), "no assets": broken(assets=[]),
+            "other apk": broken(assets=[{"name": "Purgatory-Dungeon-v6.apk", "size": 5, "state": "uploaded"}]),
+            "empty apk": broken(assets=[{"name": "Purgatory-Dungeon-v7.apk", "size": 0, "state": "uploaded"}]),
+            "not uploaded": broken(assets=[{"name": "Purgatory-Dungeon-v7.apk", "size": 5, "state": "starter"}]),
+            "twice": broken(assets=good["assets"][:1] * 2), "missing flags": {"tag_name": "v7", "name": "Purgatory Dungeon v7", "assets": good["assets"]},
+        }
+        for label, rel in cases.items():
+            self.assertTrue(gates.native_release_problems(rel, "v7"), label)
+        self.assertTrue(gates.native_release_problems([], "v7"))
+        jf = write(self.p("rel.json"), json.dumps(good).encode())
+        self.assertEqual(tool("publish_gates.py", "native-release", "--json", jf, "--tag", "v7").returncode, 0)
+        jb = write(self.p("rel_bad.json"), json.dumps(cases["draft"]).encode())
+        r = tool("publish_gates.py", "native-release", "--json", jb, "--tag", "v7")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("draft", r.stderr)
+        # the APK's own build_info must agree with the tag it was found under
+        info = {"commit": "a" * 40, "runtime_id": "android-godot-4.6.0-r1", "runtime_fingerprint": "b" * 64, "ota_channel": "dev", "public_version": 7}
+        self.assertEqual(gates.baseline_identity(info, "dev", 7)["native_version"], 7)
+        with self.assertRaises(otalib.OtaError) as cm:
+            gates.baseline_identity(info, "dev", 8)
+        self.assertIn("public_version 7", str(cm.exception))
+
     def test_source_repo_gate(self):
         """The release host is always this repository; when the app's baked REPO is known it must be the same repository."""
         self.assertEqual(gates.check_source_repo("verbal76/Purgatory-Dungeon"), "verbal76/Purgatory-Dungeon")
@@ -1350,6 +1485,26 @@ class TestPublishGates(TmpCase):
         self.assertEqual(gates.check_public("me/src", "http://127.0.0.1:9", retries=1, sleep=nosleep)[:len(gates.NOT_PUBLIC_REASON)], gates.NOT_PUBLIC_REASON,
                          "an unreachable API is a refusal, never a pass")
 
+        # a rate-limited API falls back to the repository's own page (200 = public, 404 = private); no fallback for other failures of a 404
+        def limited(h):
+            h.send_response(403)
+            h.send_header("Content-Length", "0")
+            h.end_headers()
+
+        def web_page(h):
+            code = 200 if h.path == "/me/src" else 404
+            h.send_response(code)
+            h.send_header("Content-Length", "0")
+            h.end_headers()
+        _, _, api_base = self.serve(limited)
+        _, W, web_base = self.serve(web_page)
+        self.assertEqual(gates.check_public("me/src", api_base, retries=2, delay=0, sleep=nosleep, web=web_base), "", "public per the web page")
+        self.assertTrue(W.seen and all(h["auth"] is None for h in W.seen))
+        self.assertTrue(gates.check_public("me/other", api_base, retries=1, sleep=nosleep, web=web_base).startswith(gates.NOT_PUBLIC_REASON), "web 404 = private")
+        self.assertTrue(gates.check_public("me/src", api_base, retries=1, sleep=nosleep).startswith(gates.NOT_PUBLIC_REASON), "no web fallback for a custom api")
+        state.update(mode="private", calls=0)
+        self.assertTrue(gates.check_public("me/src", base, retries=1, sleep=nosleep, web=web_base).startswith(gates.NOT_PUBLIC_REASON),
+                        "an API 404 is final: the web page is never consulted to overrule it")
         # CLI: ok=1 / ok=0 + reason (exit 0 so the job can write its published:false receipt), exit 1 when REPO disagrees
         cfg = write(self.p("ota_config.gd"), b'const REPO := "me/src"\n')
         state.update(mode="public", calls=0)
@@ -2411,7 +2566,7 @@ class TestPublishWorkflow(unittest.TestCase):
     def test_branch_name_and_sha_gate_comes_first(self):
         first_gate = self.pos("python3 tools/ota/publish_gates.py parse-branch")
         self.assertLess(first_gate, self.pos("name: 02a"))
-        self.assertLess(first_gate, self.pos("gh release download"))
+        self.assertLess(first_gate, self.pos("releases/tags/"))
         self.assertIn('"$REF_NAME" "$EVENT_SHA"', self.y)
         self.assertIn("REF_NAME: ${{ github.ref_name }}", self.y)
         self.assertIn("EVENT_SHA: ${{ github.sha }}", self.y)
@@ -2421,7 +2576,8 @@ class TestPublishWorkflow(unittest.TestCase):
             self.assertNotIn("github.head_ref", m.group(1))
 
     def test_steps_run_in_the_documented_order(self):
-        order = ["name: 01 Pin the exact commit", "name: 02a Gate the host", "name: 02b Resolve identity", "name: 03 Native baseline",
+        order = ["name: 01 Pin the exact commit", "name: 02a Gate the host", "name: 02b Resolve identity", "name: 02c Native baseline tag",
+                 "name: 03 Native baseline",
                  "name: 04 Classify", "name: 05 Runtime gate", "uses: ./.github/workflows/ota-tests.yml", "name: 07 Build the payload", "name: 07b Assign app_minor",
                  "name: 08 Build the manifest", "name: 09 Signing key", "name: 10 The key's public half", "name: 11 Sign",
                  "name: 12 Inspect", "name: 13 Create the immutable release", "name: 14 Re-download", "name: 15 Verify the published objects are ANONYMOUSLY",
@@ -2438,7 +2594,8 @@ class TestPublishWorkflow(unittest.TestCase):
         self.assertIn("publish_gates.py same-runtime", self.y)
         self.assertIn("publish_gates.py baseline", self.y)
         self.assertIn("OTA_NATIVE_BASE_TAG", self.y)
-        self.assertIn("gh release download", self.y)
+        self.assertIn('releases/tags/$OTA_NATIVE_BASE_TAG"', self.y)
+        self.assertIn("publish_gates.py native-release", self.y)
         self.assertIn("tools/ota_build_payload.sh", self.y)
         self.assertIn("--native-artifact", self.y, "the byte comparison with the shipped APK is part of the build")
         self.assertIn("ota_make_manifest.gd", self.y)
@@ -2627,10 +2784,36 @@ class TestPublishWorkflow(unittest.TestCase):
             # the prepare job is contents: read; its two token steps only read releases of this repository
             self.assertEqual(holders["prepare"], ["02b", "03"])
             self.assertNotIn("tests", holders)
-            self.assertEqual(set(self.d["env"]), {"OTA_NATIVE_BASE_TAG", "OTA_ACCEPT_GUARDED"}, "workflow-wide env holds plain variables only, never a token or secret")
+            self.assertEqual(set(self.d["env"]), {"OTA_NATIVE_BASE_TAG_OVERRIDE", "OTA_ACCEPT_GUARDED"}, "workflow-wide env holds plain variables only, never a token or secret")
             self.assertNotIn("secrets", str(self.d["env"]) + str(self.d.get("defaults")))
-        self.assertIn("OTA_NATIVE_BASE_TAG: ${{ vars.OTA_NATIVE_BASE_TAG }}", self.y)
+        self.assertIn("OTA_NATIVE_BASE_TAG_OVERRIDE: ${{ vars.OTA_NATIVE_BASE_TAG }}", self.y)
         self.assertNotIn("OTA_RELEASE_REPO", self.y)
+
+    def test_native_baseline_is_derived_not_configured(self):
+        """The owner creates nothing: the baseline tag is v<VERSION> of the pinned commit; the repository variable is only an optional,
+        agreeing override. The release must be published and carry its APK, which is downloaded anonymously."""
+        self.assertEqual(sorted(set(re.findall(r"vars\.([A-Za-z0-9_]+)", self.y))), ["OTA_ACCEPT_GUARDED", "OTA_NATIVE_BASE_TAG"], "the only variables, both optional")
+        for needle in ("set the repository variable", "required)", "(required)"):
+            self.lacks(needle)
+        nbt = self.pos("name: 02c Native baseline tag")
+        base = self.pos("name: 03 Native baseline")
+        self.assertLess(self.pos("name: 02a Gate the host"), nbt)
+        self.assertLess(nbt, base)
+        step = self.y[nbt:base]
+        self.assertIn('publish_gates.py base-tag --version-file VERSION --var "$OTA_NATIVE_BASE_TAG_OVERRIDE"', step)
+        self.assertIn("id: nbt", step)
+        self.assertIn('OTA_NATIVE_BASE_TAG=', step)
+        self.assertNotIn("GH_TOKEN", step)
+        step03 = self.y[base:self.pos("name: 04 Classify")]
+        self.assertLess(step03.index("releases/tags/"), step03.index("native-release"))
+        self.assertLess(step03.index("native-release"), step03.index("curl -fsSL"), "the release is validated before its APK is fetched")
+        self.assertNotIn("gh release view", step03, "REST, not GraphQL: gh release view --json needs the GraphQL API")
+        self.assertIn("--expect-native-version", step03)
+        self.assertNotIn("gh release download", step03, "the baseline bytes are fetched anonymously, like a phone")
+        self.assertIn('"$DL_BASE/$OTA_NATIVE_BASE_TAG/$apk"', step03)
+        self.assertIn("native_tag: ${{ steps.nbt.outputs.tag }}", self.y)
+        self.assertIn("OTA_NATIVE_BASE_TAG: ${{ needs.prepare.outputs.native_tag }}", self.y, "the publish job uses the derived tag")
+        self.assertNotRegex(self.y, r"(?m)^\s*OTA_NATIVE_BASE_TAG: \$\{\{ vars\.", "the variable is never used directly")
 
     def test_receipt(self):
         step = self.y[self.pos("name: 17 Publication receipt"):]
