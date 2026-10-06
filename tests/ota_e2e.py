@@ -380,11 +380,21 @@ class Chain:
         manifest = os.path.join(d, "manifest.json")
         return self._manifest_and_sign(d, asset, files, seq, tag, channel, variant, ota_id, manifest)
 
+    def _ota_commit(self, seq):
+        """The commit an OTA is 'published from'. It must differ from the baseline commit (an OTA whose source is the commit the app
+        was built from is, correctly, reported as 'up to date'), so each seq gets its own commit in the throwaway worktree."""
+        shas = self.__dict__.setdefault("_ota_shas", {})
+        if seq not in shas:
+            git(self.src, "-c", "commit.gpgsign=false", "-c", "user.name=e2e", "-c", "user.email=e2e@invalid", "commit", "-q", "--allow-empty",
+                "-m", "e2e: source commit of OTA %d" % seq)
+            shas[seq] = git(self.src, "rev-parse", "HEAD")
+        return shas[seq]
+
     def _manifest_and_sign(self, d, asset, files, seq, tag, channel, variant, ota_id, manifest, site_base="http://127.0.0.1:0"):
         self.site_base = getattr(self, "site_base", site_base)
         url = f"{self.site_base}/releases/download/{tag}/purgatory-{ota_id}.pck"
         r = sh([self.godot, "--headless", "--path", self.toolproj, "-s", "res://tools/ota_make_manifest.gd", "--",
-                f"pck={asset}", f"out={manifest}", f"seq={seq}", f"sha={git(self.src, 'rev-parse', 'HEAD')}", f"url={url}", f"files={files}",
+                f"pck={asset}", f"out={manifest}", f"seq={seq}", f"sha={self._ota_commit(seq)}", f"url={url}", f"files={files}",
                 f"build_info={self.build_info}", f"channel={channel}", "platform=android", "created_at=2026-10-06T00:00:00Z",
                 "run_id=e2e", "run_number=1", "run_attempt=1", "run_url="], timeout=300)
         if "MANIFEST OK" not in r.stdout:
