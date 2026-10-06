@@ -252,3 +252,16 @@ at all, and the workflow verifies exactly that (anonymous reads) before it moves
 
 Levels: implemented / unit-tested / integration-e2e-tested (local server, real packaged game on desktop) / CI-proven /
 emulator-proven / physical-device-proven. Physical-device proof is claimed only after the owner tests.
+
+State at branch `v7-ota` head `17d29c1` (2026-10-06); nothing is published:
+
+| Property | Level |
+|---|---|
+| Manifest validation, signature, hash/size, runtime id + fingerprint, base commit, boundary rules, `app_minor`/`game_version`, URL anchoring | unit-tested (`tests/test_ota_core`, 592 checks) |
+| State machine: stage, activate, health promotion, rollback, blacklist, crash-loop abandonment, save backup/schema guard, diagnostics/footer wording | unit-tested + integration-e2e-tested |
+| Real packaged game, real RSA-3072 signature, real PCK patch, local server mirroring the Releases layout (incl. 302 CDN hop, stale pointer, truncated/hanging/wrong-hash downloads, foreign hosts, tampered manifests): 221 checks, 0 failures | integration-e2e-tested (desktop, Windows preset) |
+| Save slots byte-identical through every OTA scenario | integration-e2e-tested |
+| Publisher gates (public-repo, REPO == repo, next seq / `app_minor`, forward-only pointer, immutability, allowlist, secret scan, anonymous verification, receipt) and workflow static properties (token scope, trigger, no Latest) | unit-tested; workflow never executed on GitHub |
+| Android APK builds, passes `verify_apk` (INTERNET permission, runtime identity fields, no legacy OTA files), Windows export + package verification, full headless suite | CI-proven (PR #6, runs 56-58) |
+| Real GitHub Releases publication, redirect to the objects CDN, anonymous reads of real release assets | NOT proven (needs an authorized publication) |
+| Real Android file layout, `user://` pack mounting, HTTPS from a phone, touch-drag in the overlay, the "Applying update" panel | NOT proven (emulator / physical device pending) |
