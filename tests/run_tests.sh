@@ -168,6 +168,8 @@ for seed in 7 42; do
 done
 # ... and in the real main scene with the real minimap (map key shows every room, closing hides them again).
 run "res://tests/test_module_visibility_main.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_module_visibility_main.tscn
+# Floor seams: no gap or lip in the floor of any module scene or at any doorway of six generated dungeons.
+run "res://tests/test_floor_seams.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_floor_seams.tscn
 _par_flush all
 echo "=== stage timing: ${#STAGE_TIMES[@]} Godot stages, $(printf '%s\n' ${STAGE_TIMES[@]+"${STAGE_TIMES[@]}"} | awk '{s+=$1} END {print s+0}')s in stages, $SECONDS s total; slowest 12:"
 printf '%s\n' ${STAGE_TIMES[@]+"${STAGE_TIMES[@]}"} | sort -rn | head -12 | sed 's/^/  /'
