@@ -157,6 +157,7 @@ func _ready() -> void:
 		_check(_any_action_down() == [pair[1]], "button %s presses only its action (%s)" % [pair[0], _any_action_down()])
 		_touch(2, b.center, false)
 		await get_tree().create_timer(0.12).timeout
+		await _frames(2)   # the deferred release (MIN_PRESS_MS) runs in the layer's _process: a frame hitch must not skip it
 		_flush()
 		_check(not Input.is_action_pressed(pair[1]), "button %s releases %s" % [pair[0], pair[1]])
 	# A very short tap still lasts long enough for polling gameplay code to see it.
