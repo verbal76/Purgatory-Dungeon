@@ -250,6 +250,7 @@ func _boot_population(active_player: Node3D, spawn_origin: Vector3) -> void:
 	var lm := get_node_or_null("LightingManager")
 	if lm and lm.has_method("setup_environment"):
 		lm.setup_environment()
+	_boot_torch_light_budget()   # before the dimming manager: it hands its energy changes to the budget
 	_boot_torch_dimming_manager()
 	GameClock.start_run()
 	GameClock.run_ended.connect(_on_run_ended)
@@ -583,6 +584,37 @@ func _push_generation_settings_into_child() -> void:
 # ══════════════════════════════════════════════════════════════
 #  HARDCORE TORCH DIMMING
 # ══════════════════════════════════════════════════════════════
+
+# Render-cost setup that runs once the level exists: (1) the module materials go back to the opaque
+# pass (see scripts/dungeon_render_tuning.gd), (2) one light budget for the level: only the torches
+# nearest to the camera keep their OmniLight3D on (flame spheres stay for all of them), see
+# scripts/torch_light_budget.gd.
+func _boot_torch_light_budget() -> void:
+	var tuning = load("res://scripts/dungeon_render_tuning.gd")
+	if tuning != null and dungeon_generation_function != null:
+		tuning.apply_to_modules(dungeon_generation_function.placed_modules)
+	var script := load("res://scripts/torch_light_budget.gd")
+	if script == null:
+		push_warning("TorchLightBudget: script not found - every torch light stays on.")
+		return
+	var mgr := Node.new()
+	mgr.name = "TorchLightBudget"
+	mgr.set_script(script)
+	add_child(mgr)
+	var torches : Array = dungeon_generation_function.registered_torches \
+		if dungeon_generation_function != null else []
+	if mgr.has_method("boot"):
+		mgr.boot(torches)
+	# rooms far from the camera are hidden (render nodes only), see scripts/module_visibility.gd
+	var vis_script = load("res://scripts/module_visibility.gd")
+	if vis_script != null and dungeon_generation_function != null:
+		var vis := Node.new()
+		vis.name = "ModuleVisibility"
+		vis.set_script(vis_script)
+		add_child(vis)
+		vis.boot(dungeon_generation_function.placed_modules, dungeon_generation_function.torch_flame_batches,
+				dungeon_generation_function.torch_flame_bounds)
+
 
 func _boot_torch_dimming_manager() -> void:
 	if not has_node("/root/GlobalRunData"):

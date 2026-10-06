@@ -102,6 +102,24 @@ var torch_skipped_by_scene : Dictionary = {}   # module scene file name -> skipp
 var torch_pass_ms       : float = 0.0          # duration of _place_all_torches()
 var _torch_ray : PhysicsRayQueryParameters3D = null
 
+# ── Torch flames (batched) ────────────────────────────────────────────────────
+# The glowing flame spheres are NOT one MeshInstance3D per torch any more (a default SphereMesh is
+# 4224 triangles, and ~740 of them were the bulk of every frame's triangles and a fifth to a third
+# of its draw calls on a phone). Each torch keeps its OmniLight3D node; the flames are drawn by a
+# few MultiMeshInstance3D batches (one per 48 m grid cell, so frustum culling still works) that share
+# ONE low-poly sphere mesh and ONE material. Flame and light stay at the same spot (torch root).
+const _FLAME_RADIUS   : float = 0.18   # matches torch.tscn
+const _FLAME_SEGMENTS : int   = 12     # 12 x 6 = ~120 triangles (default would be 64 x 32)
+const _FLAME_RINGS    : int   = 6
+const _FLAME_CELL     : float = 48.0   # metres per batch cell
+const FLAME_BATCH_PREFIX : String = "TorchFlames"
+var torch_flame_batches : Array[MultiMeshInstance3D] = []   # the batches (see _build_flame_batches)
+var torch_flame_count   : int = 0                           # flame instances over all batches
+var torch_flame_bounds  : Array[AABB] = []                  # world bounds of each batch (parallel to torch_flame_batches)
+var torch_flame_positions : PackedVector3Array = PackedVector3Array()   # world position of every flame instance
+var _flame_mesh : SphereMesh = null
+var _flame_material : StandardMaterial3D = null
+
 # ── Internal generation state ─────────────────────────────────────────────────
 var _main_root: Node3D
 var _starter_module: PackedScene
@@ -441,6 +459,7 @@ func _reset_generation_state() -> void:
 	registered_torches.clear()
 	_grid.clear()
 	_point_grid_count = -1
+	_free_flame_batches()
 	counted_piece_total      = 0
 	enemy_spawn_marker_total = 0
 	waypoint_total           = 0
@@ -981,6 +1000,7 @@ func _place_all_torches() -> void:
 		if placed == 0 and has_geometry:
 			if _spawn_auto_torch(mod, space):
 				torch_auto_count += 1
+	_build_flame_batches()
 	torch_pass_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 	print("Torches: ", registered_torches.size(), " placed (", torch_auto_count,
 		  " automatic one-per-module, ", torch_skipped_count, " skipped: no wall in reach) in ",
@@ -1156,7 +1176,8 @@ func _is_pending_delete(n: Node) -> bool:
 	return false
 
 
-# Builds a minimal torch node in code when no torch_scene is assigned.
+# Builds a minimal torch node in code when no torch_scene is assigned: just the OmniLight3D (the
+# flame sphere is drawn by the shared MultiMesh batches, see _build_flame_batches).
 # TorchDimmingManager finds the OmniLight3D via its recursive search.
 func _build_torch_node() -> Node3D:
 	var root := Node3D.new()
@@ -1177,25 +1198,76 @@ func _build_torch_node() -> Node3D:
 	light.distance_fade_length  = 10.0
 	root.add_child(light)
 
-	# Small emissive sphere as a placeholder flame visual.
-	var mi  := MeshInstance3D.new()
-	mi.name  = "FlameMesh"
-	mi.position = Vector3(0.0, 1.5, 0.0)
-	var sph := SphereMesh.new()
-	sph.radius = 0.18
-	sph.height = 0.36
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode               = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color               = Color(1.0, 0.7, 0.2, 1.0)
-	mat.emission_enabled           = true
-	mat.emission                   = Color(1.0, 0.55, 0.1)
-	mat.emission_energy_multiplier = 1.5
-	sph.material = mat
-	mi.mesh   = sph
-	mi.layers = 2   # Layer 2 — excluded from minimap camera (cull_mask = 1)
-	root.add_child(mi)
+	# The flame is not a node of the torch: see _build_flame_batches().
+	root.set_meta("flame_batched", true)
 
 	return root
+
+
+# Draws the flame of every code-built torch (meta "flame_batched") through MultiMesh batches: one
+# shared low-poly sphere + one shared emissive material, instances grouped per grid cell. The flames
+# keep layer 2 (the minimap camera only renders layer 1) and cast no shadows, like before.
+func _build_flame_batches() -> void:
+	_free_flame_batches()
+	if _flame_mesh == null:
+		_flame_material = StandardMaterial3D.new()
+		_flame_material.shading_mode               = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_flame_material.albedo_color               = Color(1.0, 0.7, 0.2, 1.0)
+		_flame_material.emission_enabled           = true
+		_flame_material.emission                   = Color(1.0, 0.55, 0.1)
+		_flame_material.emission_energy_multiplier = 1.5
+		_flame_mesh = SphereMesh.new()
+		_flame_mesh.radius          = _FLAME_RADIUS
+		_flame_mesh.height          = _FLAME_RADIUS * 2.0
+		_flame_mesh.radial_segments = _FLAME_SEGMENTS
+		_flame_mesh.rings           = _FLAME_RINGS
+		_flame_mesh.material        = _flame_material
+	var cells : Dictionary = {}   # Vector2i -> Array[Vector3]
+	for t in registered_torches:
+		if not is_instance_valid(t) or not t.has_meta("flame_batched"):
+			continue
+		var p : Vector3 = t.global_position
+		var key := Vector2i(int(floor(p.x / _FLAME_CELL)), int(floor(p.z / _FLAME_CELL)))
+		if not cells.has(key):
+			cells[key] = []
+		(cells[key] as Array).append(p)
+	var keys : Array = cells.keys()
+	keys.sort()   # deterministic node order
+	for key in keys:
+		var points : Array = cells[key]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = _flame_mesh
+		mm.instance_count = points.size()
+		for i in points.size():
+			mm.set_instance_transform(i, Transform3D(Basis.IDENTITY, points[i]))
+			torch_flame_positions.append(points[i])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.name = "%s_%d_%d" % [FLAME_BATCH_PREFIX, key.x, key.y]
+		mmi.multimesh = mm
+		mmi.layers = 2   # layer 2: excluded from the minimap camera (cull_mask = 1)
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mmi.top_level = true   # instance transforms are world positions
+		add_child(mmi)
+		mmi.global_transform = Transform3D.IDENTITY
+		var bounds := AABB(points[0], Vector3.ZERO)
+		for pt in points:
+			bounds = bounds.expand(pt)
+		torch_flame_bounds.append(bounds)
+		torch_flame_batches.append(mmi)
+		torch_flame_count += points.size()
+
+
+func _free_flame_batches() -> void:
+	for b in torch_flame_batches:
+		if is_instance_valid(b):
+			if b.get_parent() != null:
+				b.get_parent().remove_child(b)
+			b.queue_free()
+	torch_flame_batches.clear()
+	torch_flame_bounds.clear()
+	torch_flame_positions.clear()
+	torch_flame_count = 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
