@@ -22,7 +22,15 @@ extends Node
 ##   PERF_SETTLE=3          frames to let render after moving (shader / light-list warm up)
 ##   PERF_VIEWS=spawn,mid_room,corridor,big_room,busiest   viewpoints to visit
 ##   PERF_ENEMIES=0         0 (default) hides enemies so layouts are comparable, 1 keeps them
-##   PERF_ABLATE=0          1 also measures frame time with lights / flames / props hidden (first view)
+##   PERF_ABLATE=0          1 also measures frame time with lights / flames / props hidden (first view,
+##                          plus the views named in PERF_ABLATE_VIEWS=a,b)
+##   PERF_SWEEP=0           1 also sweeps "nearest K torch lights on" (K=0..all) on the same views as PERF_ABLATE
+##   PERF_ROUNDS=2          ablation / sweep states are measured this many times, interleaved; best frame kept
+##   PERF_DIST_FRAMES=0     N > 0: sample N extra frames per viewpoint and report the frame-time distribution
+##                          (median / p95 / p99 / max, frames over 33 and 100 ms) and the first frames after the move
+##   PERF_SOAK=0            N > 0: after the viewpoints, walk the player through the level for N seconds with
+##                          the game running (use with PERF_ENEMIES=1, best headless) and report the frame-time
+##                          distribution plus what the slowest frames contained (node creation, allocation, script / physics time)
 ##   PERF_OUT=path          also write the JSON summary to this file
 ## The last output line starts with PERFJSON and holds everything as JSON.
 
@@ -62,6 +70,7 @@ func _env_s(key: String, default_value: String) -> String:
 
 func _ready() -> void:
 	_headless = DisplayServer.get_name() == "headless"
+	Engine.max_fps = 0   # headless frames otherwise idle up to a ~145 fps cap: wall time would hide the CPU cost
 	var seed_value := _env_i("PERF_SEED", 12345)
 	GlobalRunData.character_class = "barbarian"
 	GlobalRunData.seed_hash = seed_value
@@ -101,16 +110,21 @@ func _ready() -> void:
 	var wanted := _env_s("PERF_VIEWS", "spawn,mid_room,corridor,big_room,busiest").split(",", false)
 	var out_views: Dictionary = {}
 	var first := true
+	var ablate_views := _env_s("PERF_ABLATE_VIEWS", "").split(",", false)
 	for name in wanted:
 		if not views.has(name):
 			continue
 		await _move_to(views[name])
 		out_views[name] = await _measure_view(name, views[name])
-		if first and _env_i("PERF_ABLATE", 0) == 1 and not _headless:
-			_results["ablation_view"] = name
-			_results["ablation"] = await _ablate()
+		if _env_i("PERF_ABLATE", 0) == 1 and not _headless and (first or name in ablate_views):
+			_results["ablation_" + name] = await _ablate()
+		if _env_i("PERF_SWEEP", 0) == 1 and not _headless and (first or name in ablate_views):
+			_results["sweep_" + name] = await _sweep_lights()
 		first = false
 	_results["views"] = out_views
+	var soak_s := _env_i("PERF_SOAK", 0)
+	if soak_s > 0:
+		_results["soak"] = await _soak(float(soak_s))
 	_results["script_cost"] = await _script_cost()
 	_print_summary()
 	var json := JSON.stringify(_results)
@@ -158,7 +172,7 @@ func _light_category(l: Node) -> String:
 	var p := l.get_parent()
 	if p == null:
 		return "orphan"
-	if p.get_node_or_null("FlameMesh") != null or str(p.name).begins_with("Torch"):
+	if p.has_meta("flame_batched") or p.get_node_or_null("FlameMesh") != null or str(p.name).begins_with("Torch"):
 		return "torch"
 	var cur: Node = p
 	while cur != null and cur != _main and cur != get_tree().root:
@@ -375,7 +389,7 @@ func _longest_dir(eye: Vector3) -> Vector3:
 		var dir := Vector3(cos(ang), 0.0, sin(ang))
 		var q := PhysicsRayQueryParameters3D.create(eye, eye + dir * 60.0)
 		q.collision_mask = 1
-		var hit := space.intersect_ray(q)
+		var hit := PhysicsUtil.ray_world(space, q)   # level geometry only: props / chests must not steer the view
 		var l := 60.0 if hit.is_empty() else eye.distance_to(hit["position"])
 		if l > best_len + 0.01:
 			best_len = l
@@ -394,7 +408,15 @@ func _move_to(d: Dictionary) -> void:
 		_cam.global_transform = Transform3D(Basis.looking_at(dir, Vector3.UP), eye)
 	d["eye"] = eye
 	d["dir"] = dir
+	var t_move := Time.get_ticks_msec()
+	var first_frames: Array = []
 	for i in _env_i("PERF_SETTLE", 3):
+		var tf := Time.get_ticks_usec()
+		await _render_frame()
+		first_frames.append(snappedf(float(Time.get_ticks_usec() - tf) / 1000.0, 0.1))
+	d["first_frames_ms"] = first_frames
+	# Systems that follow the camera in real time (light budget fades) need about 0.8 s to settle.
+	while Time.get_ticks_msec() - t_move < 800:
 		await _render_frame()
 
 
@@ -420,6 +442,23 @@ func _frustum_outside(planes: Array, a: AABB) -> bool:
 		if pl.distance_to(v) > 0.0:
 			return true
 	return false
+
+
+func _dist(ft: Array) -> Dictionary:
+	var a: Array = ft.duplicate()
+	a.sort()
+	var n := a.size()
+	if n == 0:
+		return {}
+	var o33 := 0
+	var o100 := 0
+	for v in a:
+		if v > 33.4:
+			o33 += 1
+		if v > 100.0:
+			o100 += 1
+	return {"n": n, "median": snappedf(a[n / 2], 0.01), "p95": snappedf(a[mini(int(n * 0.95), n - 1)], 0.01),
+		"p99": snappedf(a[mini(int(n * 0.99), n - 1)], 0.01), "max": snappedf(a[n - 1], 0.01), "over_33ms": o33, "over_100ms": o100}
 
 
 func _measure_view(name: String, d: Dictionary) -> Dictionary:
@@ -453,6 +492,16 @@ func _measure_view(name: String, d: Dictionary) -> Dictionary:
 	}
 	res.merge(_light_overlap())
 	res["nodes"] = get_tree().get_node_count()
+	var dist_n := _env_i("PERF_DIST_FRAMES", 0)
+	if dist_n > 0:
+		var samples: Array = []
+		for i in dist_n:
+			var t := Time.get_ticks_usec()
+			await _render_frame()
+			samples.append(float(Time.get_ticks_usec() - t) / 1000.0)
+		res["frame_dist_ms"] = _dist(samples)
+	if d.has("first_frames_ms"):
+		res["first_frames_ms_after_move"] = d["first_frames_ms"]
 	return res
 
 
@@ -506,11 +555,19 @@ func _light_overlap() -> Dictionary:
 		if gi.visibility_range_end > 0.0 and cpos.distance_to(a.get_center()) > gi.visibility_range_end + 0.0:
 			continue
 		var cat := _mesh_category(gi)
-		var ce: Array = cats.get(cat, [0, 0, 0])
+		var ce: Array = cats.get(cat, [0, 0, 0, {}])
 		ce[0] += 1
 		if gi is MeshInstance3D:
 			ce[1] += _mesh_tris((gi as MeshInstance3D).mesh)
 			ce[2] += (gi as MeshInstance3D).mesh.get_surface_count()
+			for si in (gi as MeshInstance3D).mesh.get_surface_count():
+				var mat: Material = (gi as MeshInstance3D).get_active_material(si)
+				var mk := "none"
+				if mat is BaseMaterial3D:
+					mk = "T" + str((mat as BaseMaterial3D).transparency)   # 0 opaque, 1 alpha, 2 scissor, 3 hash, 4 alpha+depth prepass
+				elif mat != null:
+					mk = "shader"
+				ce[3][mk] = int(ce[3].get(mk, 0)) + 1
 		elif gi is MultiMeshInstance3D and (gi as MultiMeshInstance3D).multimesh != null:
 			var mm := (gi as MultiMeshInstance3D).multimesh
 			ce[1] += _mesh_tris(mm.mesh) * mm.visible_instance_count if mm.visible_instance_count >= 0 else _mesh_tris(mm.mesh) * mm.instance_count
@@ -594,14 +651,15 @@ func _mesh_category(n: Node) -> String:
 	return "other"
 
 
-func _median_frame(frames: int) -> float:
-	var ft: Array[float] = []
+## Fastest of `frames` frames: the minimum is the most robust software-render number when other
+## processes share the CPU.
+func _best_frame(frames: int) -> float:
+	var best := INF
 	for i in frames:
 		var t := Time.get_ticks_usec()
 		await _render_frame()
-		ft.append(float(Time.get_ticks_usec() - t) / 1000.0)
-	ft.sort()
-	return ft[ft.size() / 2]
+		best = minf(best, float(Time.get_ticks_usec() - t) / 1000.0)
+	return best
 
 
 func _info() -> Array:
@@ -637,6 +695,18 @@ func _ablate() -> Dictionary:
 	var cpos := _cam.global_position
 	torch_omni.sort_custom(func(a, b): return cpos.distance_squared_to((a as Node3D).global_position) < cpos.distance_squared_to((b as Node3D).global_position))
 	var far_torch_lights: Array = torch_omni.slice(12)
+	# architecture materials (unique): flipped between the alpha pass (4) and opaque (0)
+	var arch_mats: Dictionary = {}
+	if _module_set.is_empty():
+		for m in _gen.placed_modules:
+			if is_instance_valid(m):
+				_module_set[m.get_instance_id()] = true
+	for n in all:
+		if n is MeshInstance3D and (n as MeshInstance3D).mesh != null and _mesh_category(n) == "architecture":
+			for si in (n as MeshInstance3D).mesh.get_surface_count():
+				var am := (n as MeshInstance3D).get_active_material(si)
+				if am is BaseMaterial3D:
+					arch_mats[am] = (am as BaseMaterial3D).transparency
 	var low := SphereMesh.new()
 	low.radius = 0.18
 	low.height = 0.36
@@ -651,32 +721,198 @@ func _ablate() -> Dictionary:
 		["no_lights_no_flames", omni + flames, false],
 		["no_props", props, false],
 		["torch_lights_nearest12_only", far_torch_lights, false],
+		["arch_materials_flipped_0_4", [], false],
 		["flames_lowpoly_8x4", [], true],
 		["lights12_and_lowpoly_flames", far_torch_lights, true],
-		["baseline_again", [], false],
 	]
-	for st in states:
-		var nodes: Array = st[1]
-		var prev: Array = []
-		for n in nodes:
-			prev.append((n as Node3D).visible)
-			(n as Node3D).visible = false
-		var old_meshes: Dictionary = {}
-		if st[2]:
-			for f in flames:
-				if f is MeshInstance3D:
-					old_meshes[f] = (f as MeshInstance3D).mesh
-					(f as MeshInstance3D).mesh = low
-		for i in 2:
-			await _render_frame()
-		var ms := await _median_frame(frames)
-		var info := _info()
-		res[st[0]] = {"frame_ms": snappedf(ms, 0.1), "draw_calls": info[0], "objects": info[1], "primitives": info[2], "changed_nodes": nodes.size()}
-		for i in nodes.size():
-			if is_instance_valid(nodes[i]):
-				(nodes[i] as Node3D).visible = prev[i]
-		for f in old_meshes:
-			(f as MeshInstance3D).mesh = old_meshes[f]
+	var rounds := maxi(_env_i("PERF_ROUNDS", 2), 1)
+	var best_ms: Dictionary = {}
+	for r in rounds:
+		for st in states:
+			var nodes: Array = st[1]
+			var prev: Array = []
+			for n in nodes:
+				prev.append((n as Node3D).visible)
+				(n as Node3D).visible = false
+			if str(st[0]).begins_with("arch_materials_flipped"):
+				for am in arch_mats:
+					(am as BaseMaterial3D).transparency = BaseMaterial3D.TRANSPARENCY_DISABLED if int(arch_mats[am]) != 0 else BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+			var old_meshes: Dictionary = {}
+			if st[2]:
+				for f in flames:
+					if f is MeshInstance3D:
+						old_meshes[f] = (f as MeshInstance3D).mesh
+						(f as MeshInstance3D).mesh = low
+			for i in 2:
+				await _render_frame()
+			var ms := await _best_frame(frames)
+			var info := _info()
+			best_ms[st[0]] = minf(float(best_ms.get(st[0], INF)), ms)
+			res[st[0]] = {"frame_ms": snappedf(best_ms[st[0]], 0.1), "draw_calls": info[0], "objects": info[1], "primitives": info[2], "changed_nodes": nodes.size()}
+			for i in nodes.size():
+				if is_instance_valid(nodes[i]):
+					(nodes[i] as Node3D).visible = prev[i]
+			for f in old_meshes:
+				(f as MeshInstance3D).mesh = old_meshes[f]
+			if str(st[0]).begins_with("arch_materials_flipped"):
+				for am in arch_mats:
+					(am as BaseMaterial3D).transparency = int(arch_mats[am]) as BaseMaterial3D.Transparency
+	return res
+
+
+## Frame time as a function of how many torch lights (nearest to the camera) stay on. Lights are
+## only hidden and restored. Also reports the mesh/light overlap numbers for each K.
+func _sweep_lights() -> Dictionary:
+	var frames := maxi(_env_i("PERF_FRAMES", 4), 3)
+	var all: Array = []
+	_walk(get_tree().root, all)
+	var torch_omni: Array = []
+	for n in all:
+		if n is OmniLight3D and _light_category(n) == "torch" and (n as Node3D).visible:
+			torch_omni.append(n)
+	var cpos := _cam.global_position
+	torch_omni.sort_custom(func(a, b): return cpos.distance_squared_to((a as Node3D).global_position) < cpos.distance_squared_to((b as Node3D).global_position))
+	var res: Dictionary = {}
+	var rounds := maxi(_env_i("PERF_ROUNDS", 2), 1)
+	var ks: Array = [0, 1, 4, 8, 12, 16, 24, 32, 64, torch_omni.size()]
+	for r in rounds:
+		for k in ks:
+			var off: Array = torch_omni.slice(k)
+			for l in off:
+				(l as Node3D).visible = false
+			for i in 2:
+				await _render_frame()
+			var ms := await _best_frame(frames)
+			var ov := _light_overlap()
+			var key := "K=%d" % k
+			var prev_ms: float = res[key]["frame_ms"] if res.has(key) else INF
+			res[key] = {"frame_ms": snappedf(minf(prev_ms, ms), 0.1), "pairs8": ov.get("mesh_light_pairs_capped8", 0),
+				"lights_within_fade": ov.get("lights_within_fade_of_camera", 0), "over8": ov.get("meshes_over_8_lights", 0)}
+			for l in off:
+				(l as Node3D).visible = true
+	return res
+
+
+## Walks the player through the level (modules visited nearest-neighbour first, 5 m/s) with the
+## whole game running and records every frame: wall time, script and physics time, nodes created
+## (node count delta), objects and static memory delta (allocation bursts), draw calls, live enemies.
+## The slowest frames are listed with what happened in them, to attribute spikes.
+func _soak(seconds: float) -> Dictionary:
+	if _player == null or _cam == null:
+		return {}
+	if "_current_health" in _player:
+		_player._current_health = 1.0e9
+		_player.max_health = 1.0e9
+	var centres: Array = []
+	for m in _gen.placed_modules:
+		if is_instance_valid(m):
+			var a: AABB = _gen.get_module_aabb(m)
+			if a.size != Vector3.ZERO:
+				centres.append(Vector3(a.get_center().x, (m as Node3D).global_position.y, a.get_center().z))
+	var path: Array[Vector3] = []
+	var cur: Vector3 = _player.global_position
+	while not centres.is_empty() and path.size() < 400:
+		var bi := 0
+		var bd := INF
+		for i in centres.size():
+			var dd: float = cur.distance_squared_to(centres[i])
+			if dd < bd:
+				bd = dd
+				bi = i
+		cur = centres[bi]
+		path.append(cur)
+		centres.remove_at(bi)
+	var max_frames := int(seconds * 1000.0)
+	var ft := PackedFloat32Array()
+	ft.resize(max_frames)
+	var proc := PackedFloat32Array()
+	proc.resize(max_frames)
+	var phys := PackedFloat32Array()
+	phys.resize(max_frames)
+	var dnodes := PackedInt32Array()
+	dnodes.resize(max_frames)
+	var dobjs := PackedInt32Array()
+	dobjs.resize(max_frames)
+	var dmem := PackedFloat32Array()
+	dmem.resize(max_frames)
+	var draws := PackedInt32Array()
+	draws.resize(max_frames)
+	var enemies := PackedInt32Array()
+	enemies.resize(max_frames)
+	var n := 0
+	var pos: Vector3 = _player.global_position
+	var seg := 0
+	var t_start := Time.get_ticks_msec()
+	var last_us := Time.get_ticks_usec()
+	var last_nodes := get_tree().get_node_count()
+	var last_objs := int(Performance.get_monitor(Performance.OBJECT_COUNT))
+	var last_mem: float = Performance.get_monitor(Performance.MEMORY_STATIC)
+	while float(Time.get_ticks_msec() - t_start) < seconds * 1000.0 and n < max_frames and seg < path.size():
+		await _render_frame()
+		var now := Time.get_ticks_usec()
+		var delta_s := float(now - last_us) / 1.0e6
+		ft[n] = float(now - last_us) / 1000.0
+		last_us = now
+		# move 5 m/s towards the next module centre, face the direction of travel
+		var to: Vector3 = path[seg] - pos
+		to.y = 0.0
+		var step := 5.0 * minf(delta_s, 0.1)
+		if to.length() <= step:
+			seg += 1
+		else:
+			pos += to.normalized() * step
+		_player.global_position = pos + Vector3(0, 0.05, 0)
+		if "velocity" in _player:
+			_player.velocity = Vector3.ZERO
+		if to.length() > 0.5:
+			_cam.global_transform = Transform3D(Basis.looking_at(to.normalized(), Vector3.UP), pos + Vector3(0, 1.6, 0))
+		proc[n] = Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+		phys[n] = Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+		var nn := get_tree().get_node_count()
+		var oo := int(Performance.get_monitor(Performance.OBJECT_COUNT))
+		var mm: float = Performance.get_monitor(Performance.MEMORY_STATIC)
+		dnodes[n] = nn - last_nodes
+		dobjs[n] = oo - last_objs
+		dmem[n] = (mm - last_mem) / 1024.0
+		last_nodes = nn
+		last_objs = oo
+		last_mem = mm
+		draws[n] = int(RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME))
+		enemies[n] = get_tree().get_nodes_in_group("enemy").size() if n % 30 == 0 else (enemies[n - 1] if n > 0 else 0)
+		n += 1
+	var samples: Array = []
+	var skip := mini(60, n / 4)   # the first frames still contain the teleport / spawn burst of the setup
+	for i in range(skip, n):
+		samples.append(ft[i])
+	var res: Dictionary = {"frames": n, "seconds": snappedf(float(Time.get_ticks_msec() - t_start) / 1000.0, 0.1),
+		"distance_walked_m": snappedf(float(seg) * 20.0, 1.0), "dist_ms": _dist(samples)}
+	# slowest frames and what they contained
+	var order: Array = range(skip, n)
+	order.sort_custom(func(a, b): return ft[a] > ft[b])
+	var worst: Array = []
+	for k in mini(12, order.size()):
+		var i: int = order[k]
+		worst.append({"frame": i, "ms": snappedf(ft[i], 0.1),
+			"nodes_created": dnodes[i], "objects_delta": dobjs[i], "static_mem_delta_kb": snappedf(dmem[i], 1.0), "draws": draws[i]})
+	res["slowest_frames"] = worst
+	# correlation summary: how many frames over 2x median contain node creation / allocation
+	var slow := 0
+	var slow_nodes := 0
+	var slow_alloc := 0
+	var cpu_med: float = res["dist_ms"].get("median", 1.0)
+	for i in range(skip, n):
+		if ft[i] > cpu_med * 3.0:
+			slow += 1
+			if dnodes[i] > 0:
+				slow_nodes += 1
+			if dmem[i] > 256.0:
+				slow_alloc += 1
+	res["frames_over_3x_median"] = {"count": slow, "with_node_creation": slow_nodes, "with_alloc_gt_256kb": slow_alloc,
+		}
+	var enemy_max := 0
+	for i in n:
+		enemy_max = maxi(enemy_max, enemies[i])
+	res["max_enemies_seen"] = enemy_max
 	return res
 
 
@@ -733,15 +969,28 @@ func _print_summary() -> void:
 	var views: Dictionary = _results["views"]
 	for k in views:
 		var v: Dictionary = views[k]
-		print("PERF   in view [meshes, tris, surfaces]: ", v.get("in_view_by_category", {}))
+		print("PERF   in view [meshes, tris, surfaces, material transparency modes (T0 opaque, T1 alpha blend, T2 scissor, T3 hash, T4 alpha+depth prepass)]: ", v.get("in_view_by_category", {}))
 		print("PERF view %-9s %-34s draws=%d objs=%d prims=%d | lights active=%d in_fade=%d | meshes=%d lights/mesh mean=%.2f p95=%d max=%d over8=%d pairs8=%d | frame=%.0f ms proc=%.2f phys=%.2f" % [
 			k, v.get("module", ""), v["draw_calls"], v["objects"], v["primitives"], v.get("lights_active_total", 0),
 			v.get("lights_within_fade_of_camera", 0), v.get("meshes_in_view", 0), v.get("lights_per_mesh_mean", 0.0),
 			v.get("lights_per_mesh_p95", 0), v.get("lights_per_mesh_max", 0), v.get("meshes_over_8_lights", 0),
 			v.get("mesh_light_pairs_capped8", 0), v["frame_ms_median"], v["process_ms_avg"], v["physics_ms_avg"]])
-	if _results.has("ablation"):
-		var ab: Dictionary = _results["ablation"]
-		for k in ab:
-			print("PERF ablation[%s] %-30s frame=%.1f ms draws=%d objs=%d prims=%d (changed %d)" % [
-				_results["ablation_view"], k, ab[k]["frame_ms"], ab[k]["draw_calls"], ab[k]["objects"], ab[k]["primitives"], ab[k]["changed_nodes"]])
+	for rk in _results:
+		if str(rk).begins_with("sweep_"):
+			var sw: Dictionary = _results[rk]
+			for k in sw:
+				print("PERF %s %-8s best-frame=%.1f ms pairs8=%d lights_within_fade=%d over8=%d" % [rk, k, sw[k]["frame_ms"], sw[k]["pairs8"], sw[k]["lights_within_fade"], sw[k]["over8"]])
+		if str(rk).begins_with("ablation_"):
+			var ab: Dictionary = _results[rk]
+			for k in ab:
+				print("PERF %s %-30s best-frame=%.1f ms draws=%d objs=%d prims=%d (changed %d)" % [
+					rk, k, ab[k]["frame_ms"], ab[k]["draw_calls"], ab[k]["objects"], ab[k]["primitives"], ab[k]["changed_nodes"]])
+	for k in views:
+		if views[k].has("frame_dist_ms"):
+			print("PERF dist view %-9s frame ms %s  first frames after move %s" % [k, views[k]["frame_dist_ms"], views[k].get("first_frames_ms_after_move", [])])
+	if _results.has("soak"):
+		var sk: Dictionary = _results["soak"]
+		print("PERF soak: ", sk.get("frames", 0), " frames in ", sk.get("seconds", 0), " s, dist ", sk.get("dist_ms", {}), "\nPERF soak frames over 3x median: ", sk.get("frames_over_3x_median", {}), " max enemies ", sk.get("max_enemies_seen", 0))
+		for w in sk.get("slowest_frames", []):
+			print("PERF soak slow frame ", w)
 	print("PERF script cost: ", _results["script_cost"])
