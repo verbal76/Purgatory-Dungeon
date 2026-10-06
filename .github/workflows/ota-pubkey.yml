@@ -1,0 +1,31 @@
+name: OTA public key (dev utility)
+
+# One-off helper on the v7 development branch: prints the PUBLIC half of the OTA signing key held in the
+# private "OTA signing key (do not delete)" draft release, so it can be committed into the native layer
+# (scripts/boot/ota_config.gd). Public information only: the private key is never printed or exported.
+# Deleted once the key is embedded and the key-match gate in ota-publish.yml exists.
+on:
+  push:
+    branches: [v7-ota]
+    paths: ['.github/workflows/ota-pubkey.yml']
+
+permissions:
+  contents: write   # a read-only token cannot list the private draft release that stores the key
+
+jobs:
+  pubkey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print the public key (never the private key)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OTA_SIGNING_KEY_PEM_BASE64: ${{ secrets.OTA_SIGNING_KEY_PEM_BASE64 }}
+          OTA_KEYS_NO_CREATE: "1"
+        run: |
+          source tools/ota/keys.sh --public-only "$RUNNER_TEMP/pub.pem"
+          echo "-----PD-OTA-PUBLIC-KEY-BEGIN-----"
+          cat "$RUNNER_TEMP/pub.pem"
+          echo "-----PD-OTA-PUBLIC-KEY-END-----"
+          openssl pkey -pubin -in "$RUNNER_TEMP/pub.pem" -text -noout | head -2
