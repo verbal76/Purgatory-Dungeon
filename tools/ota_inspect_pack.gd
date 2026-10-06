@@ -2,12 +2,12 @@ extends SceneTree
 ## Independent inspection of a built or published OTA with the SAME verification code the phone runs
 ## (scripts/boot/ota_core.gd: OtaCore.check_manifest + OtaCore.verify_package), plus checks the client cannot make:
 ## the manifest's files[] against the pack's own directory, protected / escaping paths against ota/boundary.json, and
-## game_version / save schema against the source tree this workflow runs from. Docs: docs/OTA.md sections 4, 5, 11.
+## game_version (= native.app_minor) / save schema against the source tree this workflow runs from. Docs: docs/OTA.md sections 4, 5, 11.
 ##
 ## Usage (user args after `--`, all key=value):
 ##   godot --headless --path . -s tools/ota_inspect_pack.gd -- manifest=manifest.json sig=manifest.json.sig pck=payload.pck \
 ##       build_info=<shipped baseline build_info.json> [files=files.json] [pubkey=<PEM file>] [platform=android] \
-##       [expect_source_sha=<40-hex>] [boundary=res://ota/boundary.json] [version_file=res://VERSION]
+##       [expect_source_sha=<40-hex>] [expect_minor=<N>] [boundary=res://ota/boundary.json] [version_file=res://VERSION]
 ## Device identity (what the installed app would hold): from build_info= (commit, runtime_id, runtime_fingerprint,
 ## ota_channel, public_version) or runtime_id= runtime_fingerprint= base_sha= channel= native_version=;
 ## self_identity=1 instead takes it from the manifest itself (offline smoke test only, proves consistency not compatibility).
@@ -262,8 +262,15 @@ func _run() -> Array[String]:
 	# --- game_version / identity against the source tree
 	var seq: int = int(m.get("seq", 0))
 	var nv: int = int(m.get("native_version", 0))
-	if str(m.get("game_version", "")) != "%d.%d.0" % [nv, seq]:
-		fails.append("game_version %s is not <native_version>.<seq>.0 (%d.%d.0)" % [m.get("game_version", ""), nv, seq])
+	var minor_raw: Variant = m.get("app_minor", null)
+	var minor_ok: bool = (minor_raw is float or minor_raw is int) and float(minor_raw) == floorf(float(minor_raw)) and int(minor_raw) >= 1
+	var minor: int = int(minor_raw) if minor_ok else 0
+	if not minor_ok:
+		fails.append("app_minor must be a whole number >= 1 (got %s)" % _s(minor_raw))
+	if minor_ok and str(m.get("game_version", "")) != "%d.%d" % [nv, minor]:
+		fails.append("game_version %s is not <native_version>.<app_minor> (%d.%d)" % [m.get("game_version", ""), nv, minor])
+	if a.has("expect_minor") and (not minor_ok or str(minor) != a["expect_minor"]):
+		fails.append("app_minor %s != the expected %s (assigned from the live pointer)" % [_s(minor_raw), a["expect_minor"]])
 	if str(m.get("ota_id", "")) != "%s-%06d" % [m.get("channel", ""), seq]:
 		fails.append("ota_id %s does not match channel/seq" % m.get("ota_id", ""))
 	if str(m.get("payload_kind", "")) != "patch":

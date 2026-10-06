@@ -30,6 +30,7 @@ func _initialize() -> void:
 	if parsed is Dictionary:
 		variant = int((parsed as Dictionary).get("variant", 0))
 	print("PROBE_VARIANT=%d" % variant)
+	print("PROBE_FOOTER=%s" % BuildInfo.display_string())
 	if boot != null and boot.has_method("diagnostics"):
 		print("PROBE_DIAG=%s" % str(boot.call("diagnostics")).replace("\n", " | "))
 	quit()

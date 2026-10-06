@@ -8,7 +8,8 @@ save-schema constants, the boundary, VERSION and themselves. Running them in a c
 the whole 640 MB game, and it runs the REAL client code (the same files the APK embeds). Project layout produced:
   project.godot  scripts/boot/*  scripts/save_schema.gd  ota/boundary.json  VERSION  tools/ota_make_manifest.gd
   tools/ota_inspect_pack.gd
---standin copies tests/ota_standin/ files for the pieces the tree does not have yet (tests only; never in CI).
+--standin copies tests/ota_standin/ files for the pieces the tree does not have yet (tests only; never in CI);
+prefer_standin (tests: OTA_TEST_STANDIN=1) uses the stand-in client even when the tree has the real one.
 """
 import argparse
 import os
@@ -25,7 +26,7 @@ PROJECT = ('config_version=5\n\n[application]\n\nconfig/name="PD OTA tool projec
            'config/features=PackedStringArray("4.6")\n')
 
 
-def assemble(dest: str, root: str = "", standin: bool = False) -> str:
+def assemble(dest: str, root: str = "", standin: bool = False, prefer_standin: bool = False) -> str:
     root = os.path.abspath(root or otalib.REPO_ROOT)
     standin_dir = os.path.join(root, "tests", "ota_standin")
     if os.path.exists(dest) and os.listdir(dest):
@@ -38,7 +39,7 @@ def assemble(dest: str, root: str = "", standin: bool = False) -> str:
         shutil.copyfile(src, d)
 
     boot = os.path.join(root, "scripts", "boot")
-    if os.path.isdir(boot) and os.path.isfile(os.path.join(boot, "ota_core.gd")):
+    if os.path.isdir(boot) and os.path.isfile(os.path.join(boot, "ota_core.gd")) and not (standin and prefer_standin):
         for f in sorted(os.listdir(boot)):
             if os.path.isfile(os.path.join(boot, f)):
                 put("scripts/boot/" + f, os.path.join(boot, f))

@@ -3,7 +3,7 @@ extends SceneTree
 ## created_at produce the same bytes (sorted keys, 2-space indent, trailing newline). Signing is a separate step.
 ##
 ## Usage (user args after `--`, all key=value):
-##   godot --headless --path . -s tools/ota_make_manifest.gd -- pck=payload.pck out=manifest.json seq=3 \
+##   godot --headless --path . -s tools/ota_make_manifest.gd -- pck=payload.pck out=manifest.json seq=3 app_minor=1 \
 ##       sha=<40-hex source commit> url=<https pck url> files=files.json build_info=<baseline build_info.json> \
 ##       [base_sha=<40-hex native baseline commit>] [channel=dev] [platform=android] [native_version=7] \
 ##       [runtime_id=...] [runtime_fingerprint=<64-hex>] [save_schema=1] [min_save_schema=1] [created_at=<UTC>] \
@@ -12,7 +12,8 @@ extends SceneTree
 ## channel = `ota_channel`) comes from the SHIPPED baseline's build_info.json (`build_info=`); explicit arguments
 ## override it but a conflicting value is refused. The tree's own scripts/boot/ota_config.gd must agree with it
 ## (same runtime id, channel). SAVE_SCHEMA / MIN_SAVE_SCHEMA come from res://scripts/save_schema.gd (game layer).
-## Prints `MANIFEST OK ...` and exits 0, or `MANIFEST FAIL <reason>` and exits 1.
+## game_version is the owner-facing running version "<native_version>.<app_minor>" (e.g. 7.1); app_minor is assigned by the
+## publisher (publish_gates.py next-minor), seq stays the internal channel sequence. Prints `MANIFEST OK ...` and exits 0, or `MANIFEST FAIL <reason>` and exits 1.
 
 const CoreScript := preload("res://scripts/boot/ota_core.gd")
 const HEX40 := "^[0-9a-f]{40}$"
@@ -54,7 +55,7 @@ func _run() -> String:
 		var kv := arg.split("=", true, 1)
 		if kv.size() == 2:
 			a[kv[0]] = kv[1]
-	for need in ["pck", "out", "seq", "sha", "url", "files"]:
+	for need in ["pck", "out", "seq", "app_minor", "sha", "url", "files"]:
 		if not a.has(need) or str(a[need]) == "":
 			return ("missing argument %s=" % need)
 	var cfg: Script = load("res://scripts/boot/ota_config.gd")
@@ -98,6 +99,8 @@ func _run() -> String:
 			return ("%s is not a 40-hex commit id" % k)
 	if not str(a["seq"]).is_valid_int() or int(a["seq"]) < 1:
 		return ("seq must be a positive integer")
+	if not str(a["app_minor"]).is_valid_int() or int(a["app_minor"]) < 1:
+		return ("app_minor must be a whole number >= 1 (the publisher assigns it from the live pointer)")
 	if not str(ident["native_version"]).is_valid_int() or int(ident["native_version"]) < 1:
 		return ("native_version must be a positive integer")
 	if not str(a["url"]).begins_with("https://") and not str(a["url"]).begins_with("http://127.0.0.1"):
@@ -139,6 +142,7 @@ func _run() -> String:
 		return ("min_save_schema %d is above save_schema %d" % [min_save_schema, save_schema])
 
 	var seq: int = int(a["seq"])
+	var app_minor: int = int(a["app_minor"])
 	var native_version: int = int(ident["native_version"])
 	var channel: String = ident["channel"]
 	var f := FileAccess.open(a["pck"], FileAccess.READ)
@@ -153,7 +157,8 @@ func _run() -> String:
 		"runtime_id": ident["runtime_id"],
 		"runtime_fingerprint": ident["runtime_fingerprint"],
 		"minimum_bootstrap_version": int(consts.get("BOOTSTRAP_VERSION", 1)),
-		"game_version": "%d.%d.0" % [native_version, seq],
+		"app_minor": app_minor,
+		"game_version": "%d.%d" % [native_version, app_minor],
 		"save_schema": save_schema,
 		"min_save_schema": min_save_schema,
 		"pck_url": a["url"],
