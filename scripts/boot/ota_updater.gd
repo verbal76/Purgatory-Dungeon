@@ -139,7 +139,7 @@ func check(download: bool = true) -> String:
 	if stale != "":
 		return _done("check", "up to date (%s)" % stale, "up_to_date")
 	_available = [mb[2], sig, m]
-	core.event("check", "update available: %s (game %s, %s)" % [m["ota_id"], m["game_version"], str(m["source_sha"]).left(12)])
+	core.event("check", "update available: v%s (%s, source %s)" % [m["game_version"], m["ota_id"], str(m["source_sha"]).left(12)])
 	if not download:
 		core.save_state()
 		busy = false
@@ -174,6 +174,6 @@ func download_available() -> String:
 		_available = []
 		return _done("download", "rejected %s: %s" % [id, why], "rejected")
 	_available = []
-	var msg: String = ("%s ready: restart to run it" % id) if not core.slot("pending").is_empty() \
-			else ("%s downloaded: activate on restart when ready" % id)
+	var msg: String = ("v%s (%s) ready: restart to run it" % [m["game_version"], id]) if not core.slot("pending").is_empty() \
+			else ("v%s (%s) downloaded: activate on restart when ready" % [m["game_version"], id])
 	return _done("download", msg, "downloaded")

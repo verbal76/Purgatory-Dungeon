@@ -36,7 +36,7 @@ const MAX_MANIFEST_BYTES := 8388608
 const REQUIRED: Array[String] = ["schema", "channel", "ota_id", "seq", "source_sha", "runtime_id",
 		"runtime_fingerprint", "minimum_bootstrap_version", "game_version", "save_schema",
 		"min_save_schema", "pck_url", "pck_sha256", "pck_size", "created_at", "payload_kind",
-		"base_source_sha", "platform", "native_version", "files"]
+		"base_source_sha", "platform", "native_version", "app_minor", "files"]
 const FILE_OPS: Array[String] = ["add", "replace", "remove"]
 ## The game's own key resources: they must still resolve after a pack is mounted.
 const CANARY_RESOURCES: Array[String] = ["res://scenes/StudioSplash.tscn", "res://scenes/MainMenu.tscn",
@@ -380,11 +380,17 @@ func validate_manifest(m: Dictionary) -> String:
 		return "invalid manifest: native_version"
 	if not (m["created_at"] is String):
 		return "invalid manifest: created_at"
+	if not _is_whole(m["app_minor"]) or int(m["app_minor"]) < 1:
+		return "invalid manifest: app_minor must be a whole number >= 1"
+	# Owner-facing version: "<native_version>.<app_minor>" (v7.1 = first OTA on the v7 APK). Independent of seq / ota_id.
 	if not (m["game_version"] is String):
-		return "invalid manifest: game_version is not MAJOR.MINOR.PATCH"
+		return "invalid manifest: game_version is not MAJOR.MINOR"
 	var gv: PackedStringArray = (m["game_version"] as String).split(".")
-	if gv.size() != 3 or not (gv[0].is_valid_int() and gv[1].is_valid_int() and gv[2].is_valid_int()):
-		return "invalid manifest: game_version is not MAJOR.MINOR.PATCH"
+	if gv.size() != 2 or not (gv[0].is_valid_int() and gv[1].is_valid_int()):
+		return "invalid manifest: game_version is not MAJOR.MINOR"
+	var want_gv: String = "%d.%d" % [int(m["native_version"]), int(m["app_minor"])]
+	if m["game_version"] != want_gv:
+		return "invalid manifest: game_version '%s' does not match native_version.app_minor (%s)" % [str(m["game_version"]), want_gv]
 	if not _is_whole(m["save_schema"]) or not _is_whole(m["min_save_schema"]) \
 			or int(m["min_save_schema"]) < 1 or int(m["save_schema"]) < int(m["min_save_schema"]):
 		return "invalid manifest: save_schema / min_save_schema"

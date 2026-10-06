@@ -117,7 +117,7 @@ func _payload(seq: int, size: int = 3000) -> PackedByteArray:
 func _manifest(seq: int, payload: PackedByteArray, over: Dictionary = {}) -> Dictionary:
 	var m: Dictionary = {"schema": 1, "channel": "dev", "ota_id": "dev-%06d" % seq, "seq": seq,
 			"source_sha": "%040x" % (seq + 0xabc), "runtime_id": RUNTIME, "runtime_fingerprint": FP,
-			"minimum_bootstrap_version": 1, "game_version": "7.%d.0" % seq, "save_schema": 1, "min_save_schema": 1,
+			"minimum_bootstrap_version": 1, "game_version": "7.%d" % seq, "app_minor": seq, "save_schema": 1, "min_save_schema": 1,
 			"pck_url": "https://example.invalid/%d.pck" % seq, "pck_sha256": OtaCore.sha256_bytes(payload).hex_encode(),
 			"pck_size": payload.size(), "created_at": "2026-10-06T00:00:00Z",
 			"build_run": {"id": str(1000 + seq), "number": "", "attempt": "", "url": ""},
@@ -286,9 +286,17 @@ func _t_manifest_matrix() -> void:
 		["seq fractional", {"seq": 2.5}, "seq"],
 		["native_version zero", {"native_version": 0}, "native_version"],
 		["created_at missing type", {"created_at": 3}, "created_at"],
-		["game_version two parts", {"game_version": "7.3"}, "game_version"],
-		["game_version letters", {"game_version": "a.b.c"}, "game_version"],
-		["game_version four parts", {"game_version": "7.3.0.1"}, "game_version"],
+		["game_version three parts (the old form)", {"game_version": "7.5.0"}, "game_version is not MAJOR.MINOR"],
+		["game_version one part", {"game_version": "7"}, "game_version is not MAJOR.MINOR"],
+		["game_version letters", {"game_version": "a.b"}, "game_version is not MAJOR.MINOR"],
+		["game_version four parts", {"game_version": "7.3.0.1"}, "game_version is not MAJOR.MINOR"],
+		["game_version differs from app_minor", {"game_version": "7.4"}, "does not match native_version.app_minor (7.5)"],
+		["app_minor differs from game_version", {"app_minor": 4}, "does not match native_version.app_minor (7.4)"],
+		["native_version differs from game_version", {"native_version": 8}, "does not match native_version.app_minor (8.5)"],
+		["app_minor zero", {"app_minor": 0, "game_version": "7.0"}, "app_minor"],
+		["app_minor negative", {"app_minor": -1, "game_version": "7.-1"}, "app_minor"],
+		["app_minor fractional", {"app_minor": 1.5, "game_version": "7.1.5"}, "app_minor"],
+		["app_minor a string", {"app_minor": "5"}, "app_minor"],
 		["game_version number", {"game_version": 7}, "game_version"],
 		["save_schema below min", {"save_schema": 1, "min_save_schema": 2}, "save_schema"],
 		["min_save_schema zero", {"min_save_schema": 0}, "save_schema"],
@@ -983,7 +991,9 @@ func _publish(s: HttpStub, m: Dictionary, payload: PackedByteArray, key: CryptoK
 	var id: String = m["ota_id"]
 	var sg: Array = _sign(m, key)
 	var ptr: Dictionary = {"channel": m["channel"], "ota_id": id, "seq": m["seq"], "runtime_id": m["runtime_id"],
-			"manifest_url": s.url("/dev/%s.json" % id), "signature_url": s.url("/dev/%s.json.sig" % id), "published_at": "2026-10-06T00:00:00Z"}
+			"manifest_url": s.url("/dev/%s.json" % id), "signature_url": s.url("/dev/%s.json.sig" % id), "published_at": "2026-10-06T00:00:00Z",
+			# extra keys the producer adds (the client must tolerate them): owner-facing identity of the OTA
+			"native_version": m["native_version"], "app_minor": m["app_minor"], "future_field": {"x": [1, 2]}}
 	ptr.merge(pointer_over, true)
 	s.routes["/dev/latest.json"] = JSON.stringify(ptr).to_utf8_buffer()
 	s.routes["/dev/%s.json" % id] = sg[0]
@@ -1012,6 +1022,8 @@ func _t_updater() -> void:
 	var m1: Dictionary = _published(stub, 1)
 	var r: String = await u.check(false)
 	_check(r == "available" and u.status == "available" and u.has_available() and c.slot("pending").is_empty(), "check(false) finds the update without downloading it (%s)" % r)
+	_check(u.remote.has("app_minor") and u.remote.has("native_version") and u.remote.has("future_field"), "a pointer with extra keys is accepted")
+	_has(c.boot_log.back() if not c.boot_log.is_empty() else "", "update available: v7.1 (dev-000001, source", "event names the owner-facing version")
 	_check(stub.hit_count("/dev/dev-000001.pck") == 0 and changed[0] > 0, "no package request before Download; status_changed fired")
 	r = await u.download_available()
 	_check(u.status == "downloaded" and c.slot_id("pending") == "dev-000001" and _incoming_files(c).is_empty(), "download -> verified -> PENDING, no temp file left (%s)" % r)
@@ -1238,7 +1250,9 @@ func _t_boot_node() -> void:
 		_check(not real.ota_enabled and real.footer_suffix() == "", "inert Boot: no footer suffix")
 		_has(real.diagnostics_text(), "Client: off", "inert diagnostics say the client is off")
 		_has(real.diagnostics_text(), "Reason:", "inert diagnostics give the reason")
-		_check(not BuildInfo.display_string().contains(" · update ") and not BuildInfo.display_string().contains("restart to apply"), "footer unchanged when inert (%s)" % BuildInfo.display_string())
+		_check(not BuildInfo.display_string().contains("running v") and not BuildInfo.display_string().contains("restart to apply"), "footer unchanged when inert (%s)" % BuildInfo.display_string())
+		_check(real.running_version() == str(BuildInfo.public_version()) and real.app_minor() == 0, "inert Boot runs the bare native version (%s)" % real.running_version())
+		_check(BuildInfo.running_version() == real.running_version(), "BuildInfo.running_version() follows Boot")
 		_has(BuildInfo.diagnostics(), "OTA", "BuildInfo.diagnostics() includes the OTA lines")
 		real.report_ready()
 		real.report_ready()
@@ -1276,13 +1290,20 @@ func _t_boot_node() -> void:
 	_check(c.first_run, "setup: unconfirmed first run")
 	add_child(b)
 	_check(b.panel_visible(), "Applying update panel is shown for a never-run package")
-	_check(b.footer_suffix() == " · update 4", "footer shows the running update (%s)" % b.footer_suffix())
+	_check((b._panel.get_child(1) as Label).text == "Applying update v7.4", "the panel names the owner-facing version, not an update number (%s)" % (b._panel.get_child(1) as Label).text)
+	_check(b.running_version() == "7.4" and b.app_minor() == 4 and b.native_version() == "7", "running version is the owner-facing 7.4 (%s), native stays 7" % b.running_version())
+	_check(b.footer_suffix() == "", "nothing staged: no footer suffix (%s)" % b.footer_suffix())
+	_check(BuildInfo.compose_display(true, 7, b.running_version(), "", b.footer_suffix()) == "Purgatory Dungeon v7.4", "release footer reads Purgatory Dungeon v7.4")
 	_has(b.ota_status(), "Not checked yet", "status before any check")
 	var d: String = b.diagnostics_text()
-	for needle in ["Runtime: " + RUNTIME, "Runtime fingerprint: " + FP, "Embedded baseline source: " + BASE, "Channel: dev", "Running: OTA dev-000004 (seq 4",
-			"Current (known good): dev-000003", "Pending (runs after restart): dev-000004", "Rollback count: 0", "This run healthy: not yet", "OTA disabled (baseline mode): no", "Bootstrap: v1", "Version: 7"]:
+	for needle in ["Runtime: " + RUNTIME, "Runtime fingerprint: " + FP, "Embedded baseline source: " + BASE, "Channel: dev", "Running: OTA v7.4 (dev-000004, #000004",
+			"Current (known good): v7.3 (dev-000003", "Pending (runs after restart): v7.4 (dev-000004", "Rollback count: 0", "This run healthy: not yet", "OTA disabled (baseline mode): no", "Bootstrap: v1"]:
 		_has(d, needle, "diagnostics include '%s'" % needle)
 	_check(not d.contains("PRIVATE") and not d.contains("BEGIN"), "diagnostics never print key material")
+	var dl: PackedStringArray = d.split("\n")
+	_check(dl[0] == "Purgatory Dungeon v7.4" and dl[1] == "Native APK: v7" and dl[2] == "Application layer: v7.4" and dl[3] == "OTA: #000004 (dev-000004)" \
+			and dl[4] == "Runtime: %s  fingerprint %s" % [RUNTIME, FP], "diagnostics open with the three identities (%s)" % str(dl.slice(0, 5)))
+	_check(not d.contains("update 4") and not d.contains("· update"), "no 'update K' wording in diagnostics")
 	# health: report_ready + HEALTHY_AFTER_MS, panel removed
 	b.report_ready()
 	await get_tree().create_timer(1.0).timeout
@@ -1295,7 +1316,7 @@ func _t_boot_node() -> void:
 	_check(b.healthy and c.slot_id("current") == "dev-000004" and c.slot_id("previous") == "dev-000003", "healthy: PENDING promoted (%s)" % c.slot_id("current"))
 	_check(c.device_save_schema == 1 and int(c.state["device_save_schema"]) == 1, "healthy records the running game's save schema (SAVE_SCHEMA)")
 	_check(b._tick != null and not b.is_processing(), "after health Boot stops polling _process (periodic checks use a timer)")
-	_check(b.footer_suffix() == " · update 4", "footer still shows the running update")
+	_check(b.footer_suffix() == "" and b.running_version() == "7.4", "footer still shows the running version")
 	# panel max time
 	b._show_panel()
 	b._panel_since_ms -= BootScript.PANEL_MAX_MS + 100
@@ -1345,8 +1366,9 @@ func _t_boot_node() -> void:
 	# staged update shows 'restart' in status and footer
 	c.state["auto_activate"] = true
 	_stage(c, 5)
-	_has(b.ota_status(), "Update downloaded: dev-000005 runs after the app restarts", "pending update is reported")
-	_check(b.footer_suffix().contains("restart to apply update 5"), "footer says a staged update waits for a restart (%s)" % b.footer_suffix())
+	_has(b.ota_status(), "Update downloaded: v7.5 (dev-000005) runs after the app restarts", "pending update is reported")
+	_check(b.footer_suffix() == " · v7.5 ready, restart to apply" and b.staged_version() == "7.5", "footer names the staged owner-facing version and says restart (%s)" % b.footer_suffix())
+	_check(BuildInfo.compose_display(true, 7, b.running_version(), "", b.footer_suffix()) == "Purgatory Dungeon v7.4 · v7.5 ready, restart to apply", "release footer with a staged update")
 	c.state["pending"] = {}
 	# 'ready' (downloaded, not activated)
 	c.state["ready"] = _manifest(6, _payload(6))
@@ -1361,7 +1383,15 @@ func _t_boot_node() -> void:
 	cb.boot(_fake_mount)
 	var bb: Node = _fake_boot(cb)
 	_check(bb.footer_suffix() == "", "baseline running, nothing staged: no footer suffix")
-	_has(bb.diagnostics_text(), "Running: embedded baseline", "baseline diagnostics")
+	_has(bb.diagnostics_text(), "Running: embedded baseline (v7)", "baseline diagnostics")
+	var bl: PackedStringArray = bb.diagnostics_text().split("\n")
+	_check(bl[0] == "Purgatory Dungeon v7" and bl[1] == "Native APK: v7" and bl[2] == "Application layer: v7" and bl[3] == "OTA: none (embedded baseline)", "baseline diagnostics open with v7 (%s)" % str(bl.slice(0, 4)))
+	_check(bb.running_version() == "7" and bb.app_minor() == 0 and bb.staged_version() == "", "baseline running version is 7, minor 0")
+	_check(BuildInfo.compose_display(true, 7, "7", "", "") == "Purgatory Dungeon v7", "release baseline footer is exactly Purgatory Dungeon v7")
+	_check(BuildInfo.compose_display(false, 7, "7", " · abc1234", "") == "Purgatory Dungeon · development build after v7 · abc1234", "development baseline footer")
+	_check(BuildInfo.compose_display(false, 7, "7.1", " · abc1234", "") == "Purgatory Dungeon · development build after v7 · abc1234 · running v7.1", "development footer names the running OTA version")
+	for fb in [BuildInfo.compose_display(true, 7, "7.1", "", " · v7.2 ready, restart to apply"), b.diagnostics_text()]:
+		_check(not (fb as String).contains("update 1") and not (fb as String).contains("· update"), "no 'update K' wording anywhere")
 	bb.free()
 	b.queue_free()
 

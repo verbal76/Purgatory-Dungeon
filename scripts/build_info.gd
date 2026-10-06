@@ -53,7 +53,16 @@ static func _boot() -> Node:
 	return null
 
 
-## " · update N" while an OTA update is running; "" when OTA is inert or the embedded game runs (release footer unchanged).
+## The owner-facing running version: "7" on the baseline, "7.1" while OTA v7.1 runs (Boot.running_version()).
+## Never the OTA id or sequence. Falls back to the native version when the OTA client is not loaded.
+static func running_version() -> String:
+	var b: Node = _boot()
+	if b != null and b.has_method("running_version"):
+		return str(b.call("running_version"))
+	return str(public_version())
+
+
+## " · v7.2 ready, restart to apply" while a newer OTA is staged; "" otherwise (release footer unchanged).
 static func _ota_suffix() -> String:
 	var b: Node = _boot()
 	return str(b.call("footer_suffix")) if b != null and b.has_method("footer_suffix") else ""
@@ -66,13 +75,19 @@ static func _ota_lines() -> PackedStringArray:
 	return PackedStringArray(str(b.call("diagnostics_text")).split("\n"))
 
 
-## Short line for the menu: "Purgatory Dungeon v2" or the explicit development-build form.
+## Short line for the menu: "Purgatory Dungeon v7" (baseline) or "Purgatory Dungeon v7.1" (OTA 7.1 running), or the
+## explicit development-build form.
 static func display_string() -> String:
-	var v := public_version()
-	if is_release_build():
-		return "%s v%d%s" % [PRODUCT_NAME, v, _ota_suffix()]
 	var tail := " · " + short_commit() if commit() != "" else ""
-	return "%s · development build after v%d%s%s" % [PRODUCT_NAME, v, tail, _ota_suffix()]
+	return compose_display(is_release_build(), public_version(), running_version(), tail, _ota_suffix())
+
+
+## Pure composition of the footer (unit-tested). `running` is "7" or "7.1"; `suffix` the staged-update note.
+static func compose_display(release: bool, native: int, running: String, tail: String, suffix: String) -> String:
+	if release:
+		return "%s v%s%s" % [PRODUCT_NAME, running, suffix]
+	var ota: String = "" if running == str(native) else " · running v%s" % running
+	return "%s · development build after v%d%s%s%s" % [PRODUCT_NAME, native, tail, ota, suffix]
 
 
 ## Multi-line engineering diagnostics (printed at startup; shown by tooling/logs).
