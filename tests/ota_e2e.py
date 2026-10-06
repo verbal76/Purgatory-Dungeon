@@ -13,7 +13,11 @@ HOW IT WORKS
      (base.pck: the "installed native build", runnable on a desktop) and a real cumulative patch (data/ota_probe.json), with
      the very same code CI uses. More OTAs against the same baseline are patch exports from the kept import tree.
   3. tools/ota_make_manifest.gd (real OtaCore) writes each manifest, openssl signs it (RSA-3072 SHA-256), and the OtaSite serves
-     /releases/download/<tag>/<asset> plus the pointer /releases/download/ota-channel-<channel>/latest.json.
+     /releases/download/<tag>/<asset> plus the pointer /releases/download/ota-channel-<channel>/latest.json, the layout of the
+     same-repository GitHub Releases that production uses. The game gets
+     --ota-pointer=http://127.0.0.1:PORT/releases/download/ota-channel-dev/latest.json. Like GitHub, the site can answer every
+     download with a 302 to a signed "objects" URL (--cdn-hop, and scenario cdn_redirect), and can serve a lagging pointer
+     (CDN cache). A second site (the decoy) stands for "another host".
   4. The packaged game runs headless: `godot --headless --main-pack base.pck -- --ota-enable --ota-root=DIR --ota-pointer=URL
      --ota-platform=android ...` (test hooks of scripts/boot, non-template builds only). `game` runs add --ota-quit-after-check;
      `probe` runs use tests/ota_e2e_probe.gd to see what the mounted game sees. The device's state is read from DIR/state.json
@@ -21,7 +25,9 @@ HOW IT WORKS
   5. Scenarios (see --list): no-network start, check -> stage, restart applies, health promotion, supersede, crash-loop abandon +
      fallback, rollback, blacklist, baseline fallback (disable/enable, corrupted stored package) and every failure case: truncated
      body, wrong bytes, hang, 404, stale pointer, pointer for another channel, malformed manifest, bad signature, wrong runtime,
-     wrong fingerprint, wrong channel, wrong base sha. The player's save slots must be byte-identical after every scenario.
+     wrong fingerprint, wrong channel, wrong base sha, a package or manifest URL on another host or under another repository path
+     (the client must never fetch from there: asset_origin), a lagging pointer (pointer_lag) and the 302 objects hop (cdn_redirect).
+     The player's save slots must be byte-identical after every scenario.
 
 NEEDS the native layer (scripts/boot/*, autoload Boot) merged into the tree: until then only --server-selftest and
 --build-only --standin can run (that is what tests/test_ota_tools.py exercises). Full run: ~25-40 min, ~10 GB of temp space
@@ -94,11 +100,28 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _serve(self, head):
         site = self.server.site
         path = self.path.split("?", 1)[0]
+        key, hop = path, "direct"
+        if path.startswith("/objects/"):                      # the signed-URL CDN host GitHub redirects asset downloads to
+            key, hop = "/releases/download/" + path[len("/objects/"):], "object"
+        elif site.cdn_hop and path.startswith("/releases/download/") and path in site.files:
+            site.log.append({"method": "HEAD" if head else "GET", "path": path, "fault": None, "hop": "redirect",
+                             "auth": self.headers.get("Authorization"), "time": time.time()})
+            self.close_connection = True
+            self.send_response(302)
+            self.send_header("Location", f"{site.base}/objects/{path[len('/releases/download/'):]}?X-Amz-Expires=300&X-Amz-Signature=00ff")
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            return
         fault = site._match(path)
-        site.log.append({"method": "HEAD" if head else "GET", "path": path, "fault": fault.mode if fault else None,
+        site.log.append({"method": "HEAD" if head else "GET", "path": path, "fault": fault.mode if fault else None, "hop": hop,
                          "auth": self.headers.get("Authorization"), "time": time.time()})
         self.close_connection = True
-        body = site.files.get(path)
+        body = site.files.get(key)
+        if site.lag > 0 and not head and key in site.prev and re.fullmatch(r"/releases/download/ota-channel-[a-z0-9-]+/latest\.json", key):
+            body = site.prev[key]                             # a CDN edge that has not seen the new pointer yet
+            site.lag -= 1
+            site.log[-1]["lagged"] = True
         mode = fault.mode if fault else ""
         if mode == "hang":
             site._stop.wait(float(fault.arg or 120))
@@ -143,10 +166,13 @@ class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 class OtaSite:
     """Mirrors GitHub Releases: /releases/download/<tag>/<asset>, plus transport faults chosen per path suffix.
-    Fault modes: truncate | wrong_bytes | hang[,arg=seconds] | 404 | status:NNN | empty."""
+    Fault modes: truncate | wrong_bytes | hang[,arg=seconds] | 404 | status:NNN | empty.
+    cdn_hop: answer every download with a 302 to /objects/<tag>/<asset>?signature (GitHub's objects CDN); faults apply to the final hop.
+    lag_pointer(n): the next n pointer fetches see the PREVIOUS pointer document (a stale CDN edge)."""
 
-    def __init__(self):
+    def __init__(self, cdn_hop=False):
         self.files, self.faults, self.log = {}, [], []
+        self.cdn_hop, self.prev, self.lag = cdn_hop, {}, 0
         self._stop = threading.Event()
         self._srv = _Server(("127.0.0.1", 0), _Handler)
         self._srv.site = self
@@ -180,7 +206,13 @@ class OtaSite:
 
     def set_pointer(self, doc, channel=CHANNEL):
         data = doc if isinstance(doc, bytes) else otalib.canonical_json(doc)
-        self.files[f"/releases/download/ota-channel-{channel}/latest.json"] = data
+        key = f"/releases/download/ota-channel-{channel}/latest.json"
+        if key in self.files:
+            self.prev[key] = self.files[key]
+        self.files[key] = data
+
+    def lag_pointer(self, n=1):
+        self.lag = n
 
     def unpublish(self, tag):
         for p in [p for p in self.files if p.startswith(f"/releases/download/{tag}/")]:
@@ -192,8 +224,9 @@ class OtaSite:
     def clear_faults(self):
         self.faults.clear()
 
-    def requests(self, contains=""):
-        return [r for r in self.log if contains in r["path"]]
+    def requests(self, contains="", hops=False):
+        """Requests whose path contains `contains`; the 302 hop of a redirected download is not a request of its own unless hops=True."""
+        return [r for r in self.log if contains in r["path"] and (hops or r.get("hop") != "redirect")]
 
 
 def selftest_server():
@@ -265,6 +298,32 @@ def selftest_server():
             fails.append("unpublish")
         if not site.requests("purgatory-dev-000001.pck") or any(r["auth"] for r in site.log):
             fails.append("request log / no credentials expected")
+        # pointer lag: the next fetch sees the previous document, then the new one
+        site.publish("ota-dev-000002", {"manifest.json": b"{}"})
+        site.set_pointer({"channel": "dev", "ota_id": "dev-000001", "seq": 1})
+        site.set_pointer({"channel": "dev", "ota_id": "dev-000002", "seq": 2})
+        site.lag_pointer(1)
+        ptr = "/releases/download/ota-channel-dev/latest.json"
+        if [json.loads(get(ptr)[1])["seq"] for _ in range(3)] != [1, 2, 2]:
+            fails.append("a lagging pointer must serve the previous document exactly once")
+        # the objects hop: a 302 to /objects/..., the final response carries the bytes, faults apply to the final hop only
+        site.cdn_hop = True
+        site.publish("ota-dev-000001", {"purgatory-dev-000001.pck": data})
+        site.log.clear()
+        st, b = get(p)
+        if (st, b) != (200, data):
+            fails.append("a redirected download must end in the same bytes")
+        hops = [r["hop"] for r in site.log]
+        if hops != ["redirect", "object"] or len(site.requests("purgatory-dev-000001.pck")) != 1:
+            fails.append("the 302 hop must be logged once and not counted as a request (%s)" % hops)
+        site.fault(".pck", "wrong_bytes")
+        st, b = get(p)
+        if not (st == 200 and b != data):
+            fails.append("faults apply behind the redirect")
+        site.clear_faults()
+        if get("/releases/download/ota-dev-000009/nothing.pck")[0] != 404:
+            fails.append("an unknown asset is a plain 404, not a redirect")
+        site.cdn_hop = False
     finally:
         site.stop()
     return fails
@@ -496,8 +555,9 @@ def tree_hash(path):
 
 
 class Ctx:
-    def __init__(self, chain, site):
+    def __init__(self, chain, site, decoy=None):
         self.chain, self.site, self.work = chain, site, chain.work
+        self.decoy = decoy                      # a second server on another port: "another host"
         self.godot = chain.godot
         self.saves = os.path.join(self.work, "saves")
         self.dead = "http://127.0.0.1:9/releases/download/ota-channel-dev/latest.json"   # nothing listens: "no network"
@@ -710,14 +770,19 @@ def baseline_fallbacks(c):
     c.saves_intact("through the baseline fallbacks")
 
 
-def rejected(c, name, setup, expect_bad=False, hang=False):
+def rejected(c, name, setup, expect_bad=False, hang=False, after=None):
     """A fresh device meets a bad server: nothing may be staged or activated, no partial file stays, saves stay identical."""
     d = Device(c, name)
     c.site.clear_faults()
     c.site.log.clear()
+    if c.decoy is not None:
+        c.decoy.files.clear()
+        c.decoy.log.clear()
     ota = c.otas[1]
     setup(ota)
     g = c.game(d, c.pointer, timeout=200 if hang else 120)
+    if after is not None:
+        after(ota)
     check(not g["script_errors"], "[%s] no script errors during the failed check" % name)
     check(not d.state.staged() and not d.state.ids("current"), "[%s] nothing is staged or activated (state: %s)" % (name, d.state.raw()))
     check(not d.state.leftovers(), "[%s] no partial download remains (%s)" % (name, d.state.leftovers()))
@@ -772,6 +837,95 @@ def fault_pointer(c):
 
 
 @scenario
+def pointer_lag(c):
+    """A CDN edge serves the previous pointer for a while: the device stays on what it has, then picks the update up."""
+    o1, o2 = c.otas[1], c.otas[2]
+    d = staged_device(c, "lag", o1)
+    c.probe(d, "plain", pointer=c.dead)
+    c.probe(d, "stay", 9, pointer=c.dead)
+    check(o1.ota_id in d.state.ids("current"), "the device runs and has confirmed OTA 1 (state: %s)" % d.state.raw())
+    c.publish(o2, pointer=False)
+    c.point_to(o2)
+    c.site.lag_pointer(1)
+    c.game(d, c.pointer)
+    lagged = [r for r in c.site.log if r.get("lagged")]
+    check(len(lagged) == 1, "the first check was served the stale pointer (%d lagged)" % len(lagged))
+    check(not d.state.staged(), "a stale pointer stages nothing (state: %s)" % d.state.raw())
+    check(len(c.site.requests(o2.asset)) == 0, "nothing of OTA 2 was downloaded while the pointer lagged")
+    c.game(d, c.pointer)
+    check(o2.ota_id in d.state.staged(), "the next check sees the new pointer and stages OTA 2 (state: %s)" % d.state.raw())
+    r = c.probe(d, "stay", 9, pointer=c.dead)
+    check(r["patched"] and r["variant"] == o2.variant, "OTA 2 runs after the lag is over (variant %s)" % r["variant"])
+    c.saves_intact("through the pointer lag")
+
+
+@scenario
+def cdn_redirect(c):
+    """Every download answers with a 302 to a signed objects URL, like GitHub: the same flow works, faults behind the hop still fail."""
+    c.site.cdn_hop = True
+    try:
+        ota = c.otas[1]
+        d = Device(c, "cdn")
+        c.publish(ota)
+        c.game(d, c.pointer)
+        hops = [r for r in c.site.log if r.get("hop") == "redirect"]
+        objs = [r for r in c.site.log if r.get("hop") == "object"]
+        check(len(hops) >= 3 and len(objs) >= 3, "pointer, manifest, signature and package were all fetched through the 302 hop (%d hops, %d objects)" % (len(hops), len(objs)))
+        check(ota.ota_id in d.state.staged(), "%s is staged through the redirect (state: %s)" % (ota.ota_id, d.state.raw()))
+        r = c.probe(d, "stay", 9, pointer=c.dead)
+        check(r["patched"] and r["variant"] == ota.variant, "the redirected download is the pack that runs (variant %s)" % r["variant"])
+        rejected(c, "cdn-wrong-bytes", lambda o: (c.publish(o), c.site.fault(o.asset, "wrong_bytes")), expect_bad=True)
+        rejected(c, "cdn-truncated", lambda o: (c.publish(o), c.site.fault(o.asset, "truncate")))
+        c.saves_intact("through the redirected downloads")
+    finally:
+        c.site.cdn_hop = False
+
+
+@scenario
+def asset_origin(c):
+    """Package or manifest URL on another host / under another repository path: refused, with no request to it.
+
+    The client only downloads from the release path of its own repository (production: https://<host>/<REPO>/releases/download/;
+    local test hooks: the pointer's own origin). The manifest is signed, but a signed URL is still not followed out of that path."""
+    other_path = "/someone-else/other-repo/releases/download"
+
+    def forged_pck_url(url_of):
+        def setup(ota):
+            c.publish(ota)
+            c.decoy.publish(ota.tag, ota.assets())
+            c.site.files.update({f"{other_path}/{ota.tag}/{k}": v for k, v in ota.assets().items()})
+            data, sig = c.chain.forge(ota, lambda m: m.update(pck_url=url_of(ota)))
+            c.site.publish(ota.tag, {"manifest.json": data, "manifest.json.sig": sig})
+        return setup
+
+    def pointer_urls(base_of):
+        def setup(ota):
+            c.publish(ota, pointer=False)
+            c.decoy.publish(ota.tag, ota.assets())
+            c.site.files.update({f"{other_path}/{ota.tag}/{k}": v for k, v in ota.assets().items()})
+            b = base_of(ota)
+            c.point_to(ota, manifest_url=f"{b}/manifest.json", signature_url=f"{b}/manifest.json.sig")
+        return setup
+
+    def nothing_fetched_from(label, host_decoy):
+        def after(ota):
+            if host_decoy:
+                check(not c.decoy.log, "[%s] the other host received no request at all (%s)" % (label, [r["path"] for r in c.decoy.log]))
+            else:
+                bad = [r["path"] for r in c.site.log if r["path"].startswith(other_path)]
+                check(not bad, "[%s] nothing was fetched from the other repository path (%s)" % (label, bad))
+        return after
+
+    rejected(c, "pck-url-other-host", forged_pck_url(lambda o: c.decoy.url(o.tag, o.asset)), after=nothing_fetched_from("pck-url-other-host", True))
+    rejected(c, "pck-url-other-repo-path", forged_pck_url(lambda o: f"{c.site.base}{other_path}/{o.tag}/{o.asset}"),
+             after=nothing_fetched_from("pck-url-other-repo-path", False))
+    rejected(c, "pointer-url-other-host", pointer_urls(lambda o: f"{c.decoy.base}/releases/download/{o.tag}"),
+             after=nothing_fetched_from("pointer-url-other-host", True))
+    rejected(c, "pointer-url-other-repo-path", pointer_urls(lambda o: f"{c.site.base}{other_path}/{o.tag}"),
+             after=nothing_fetched_from("pointer-url-other-repo-path", False))
+
+
+@scenario
 def fault_manifest(c):
     """Manifest faults: malformed, bad/foreign signature, wrong runtime/fingerprint/channel/base, protected path, size/hash lies."""
     def with_forged(edit=None, raw=None, key=None):
@@ -813,6 +967,7 @@ def main():
     ap.add_argument("--build-only", action="store_true")
     ap.add_argument("--standin", action="store_true", help="build chain only: use the stand-in client of tests/ota_standin")
     ap.add_argument("--server-selftest", action="store_true")
+    ap.add_argument("--cdn-hop", action="store_true", help="answer every download with a 302 to a signed objects URL for ALL scenarios (like GitHub)")
     a = ap.parse_args()
     if a.list:
         for s in SCENARIOS:
@@ -831,12 +986,13 @@ def main():
         ap.error("--standin cannot run device scenarios (the stand-in client is not an autoload); use --build-only")
     work = tempfile.mkdtemp(prefix="ota-e2e-")
     chain = Chain(work, godot, a.standin)
-    site = OtaSite()
+    site = OtaSite(cdn_hop=a.cdn_hop)
+    decoy = OtaSite()
     chain.site_base = site.base
     rc = 1
     try:
         chain.build()
-        ctx = Ctx(chain, site)
+        ctx = Ctx(chain, site, decoy)
         ctx.otas[1] = chain.make_ota(1)
         ctx.otas[2] = chain.make_ota(2)
         print("== built OTA 1 (%s, %d files) and OTA 2 against the same baseline %s" % (ctx.otas[1].ota_id, len(ctx.otas[1].manifest["files"]), chain.bi["commit"][:12]))
@@ -859,6 +1015,7 @@ def main():
             for s in wanted:
                 print("\n== %s: %s" % (s.__name__, (s.__doc__ or "").strip().splitlines()[0] if s.__doc__ else ""), flush=True)
                 site.clear_faults()
+                site.cdn_hop = a.cdn_hop
                 s(ctx)
             ctx.saves_intact("after ALL scenarios")
         print("\nota_e2e: %d checks, %d failures" % (CHECKS, len(FAILS)))
@@ -867,6 +1024,7 @@ def main():
         rc = 1 if FAILS else 0
     finally:
         site.stop()
+        decoy.stop()
         if not a.keep:
             try:
                 chain.cleanup()
