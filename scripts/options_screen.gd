@@ -360,6 +360,8 @@ func _build_gameplay_tab() -> void:
 		_slider(t, "Control Opacity",   TouchControls.KEY_OPACITY, 20.0, 100.0, 5.0)
 		_slider(t, "Control Size",      TouchControls.KEY_SCALE,   70.0, 150.0, 5.0)
 		_slider(t, "Look Sensitivity",  TouchControls.KEY_LOOK,    40.0, 250.0, 5.0)
+		_slider(t, "Aim Smoothing",     TouchControls.KEY_AIM_SMOOTH, 0.0, 100.0, 5.0)
+		_hint(t, "Aim Smoothing steadies the turn while you drag from Attack. 0% turns exactly as your thumb moves.")
 		_section(t, "Playtest")
 		_checkbox(t, "Show performance readout", PerfOverlay.KEY)
 		_hint(t, "FPS, slowest 1% of frames, draw calls. Tell us these numbers if the game stutters.")
@@ -712,7 +714,7 @@ func _load_settings() -> void:
 	var defaults : Dictionary = {
 		"MasterSlider": 100.0, "MusicSlider": 65.0, "SFXSlider": 100.0,
 		"ShakeSlider": 50.0, "SpeedSlider": 100.0, "DamageSlider": 100.0,
-		"TouchOpacity": 70.0, "TouchScale": 100.0, "TouchLookSens": 100.0,
+		"TouchOpacity": 70.0, "TouchScale": 100.0, "TouchLookSens": 100.0, "TouchAimSmoothing": 60.0,
 		"HealthSlider": 100.0,
 	}
 	for key in _sliders.keys():

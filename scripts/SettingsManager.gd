@@ -34,6 +34,7 @@ var gameplay_settings : Dictionary = {
 	"TouchOpacity"  : 70.0,
 	"TouchScale"    : 100.0,
 	"TouchLookSens" : 100.0,
+	"TouchAimSmoothing" : 60.0,   # twin-stick Attack-drag aim low-pass, percent (0 = off), see scripts/touch/touch_controls.gd
 	"TouchScheme"   : "twin",   # "twin" (default: move stick + Attack, which also aims by dragging) or "classic" (swipe to look)
 	"ShowPerf"      : false,   # phone playtests: frame-time readout (Options > Gameplay)
 }
