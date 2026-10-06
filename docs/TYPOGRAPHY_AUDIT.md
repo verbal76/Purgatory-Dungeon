@@ -141,7 +141,7 @@ Cinzel's digit "1" resembles a capital I, so code-like strings with digits (key 
 |---|---|---|---|
 | Touch button captions (OPEN, USE…) — `touch_button.gd` `PUI.font("body_semi")` | Source Sans | **Cinzel SemiBold**, ≥ 16 px | one-line change left to the touch owner (see report) |
 | Touch button badge (potion count) — `PUI.font("body_bold")` | Source Sans bold | Cinzel Bold | same patch |
-| Touch onboarding hints ("Tap to attack - hold to charge") | Source Sans | **stay Source Sans** | sentences |
+| Touch onboarding hints ("Tap to attack - drag the button to look") | Source Sans | **stay Source Sans** | sentences |
 | Performance overlay ("58 fps \| low 1%: 41 \| …") | default Label (Source Sans) | **stay Source Sans** | diagnostics |
 
 ## 3. Glyph audit

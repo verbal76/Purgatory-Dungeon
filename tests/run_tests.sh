@@ -37,12 +37,16 @@ for scene in res://tests/validate_project.tscn res://tests/test_save_manager.tsc
 done
 # Touch layer (Android): runs as a touch platform so the layer is built; the desktop bindings test runs
 # WITHOUT it and proves keyboard / controller input is untouched.
-for scene in res://tests/test_touch_controls.tscn res://tests/test_touch_art.tscn res://tests/test_aim_pacing.tscn res://tests/test_twin_stick.tscn res://tests/test_mobile_ui.tscn res://tests/test_app_lifecycle.tscn res://tests/test_typography.tscn; do
+for scene in res://tests/test_touch_controls.tscn res://tests/test_touch_art.tscn res://tests/test_aim_pacing.tscn res://tests/test_attack_gesture.tscn res://tests/test_twin_stick.tscn res://tests/test_mobile_ui.tscn res://tests/test_app_lifecycle.tscn res://tests/test_typography.tscn; do
 	PURGATORY_FORCE_TOUCH=1 run "$scene" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene"
 done
 # Twin-stick (default scheme): the right stick and the ATTACK drag turn the real Barbarian and the real Mage.
 for cls in barbarian mage; do
 	TWIN_CLASS="$cls" PURGATORY_FORCE_TOUCH=1 run "res://tests/test_twin_stick.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_twin_stick.tscn
+done
+# ATTACK gesture (tap / hold = one attack, drag = look, nothing stays pressed): the real Barbarian and the real Mage.
+for cls in barbarian mage; do
+	ATTACK_CLASS="$cls" PURGATORY_FORCE_TOUCH=1 run "res://tests/test_attack_gesture.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_attack_gesture.tscn
 done
 run "res://tests/test_input_desktop.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_input_desktop.tscn
 for cls in barbarian mage; do

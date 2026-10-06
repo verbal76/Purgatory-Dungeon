@@ -45,7 +45,7 @@ const TEXT := {
 # Twin-stick wording (same steps where the control is the same).
 const TEXT_TWIN := {
 	"move": "Drag the left side to move",
-	"attack": "Tap to attack - hold to charge",
+	"attack": "Tap to attack - drag the button to look",
 	"aim": "Drag from Attack to look and aim",
 	"use": "Tap to use",
 	"block": "Hold to block",

@@ -913,6 +913,12 @@ func _physics_tick(delta: float) -> void:
 			_rapid_attack_charge = 0.0
 			_refresh_rapid_attack_bar()
 
+	# Input-state fail-safe (see mage_player.gd): a release that was missed while paused never starts the Rapid Attack.
+	if _attack_held and not Input.is_action_pressed("attack"):
+		_attack_held = false
+		_rapid_attack_charge = 0.0
+		_refresh_rapid_attack_bar()
+
 	_check_kill_streak()
 	_tick_kill_haste(delta)
 

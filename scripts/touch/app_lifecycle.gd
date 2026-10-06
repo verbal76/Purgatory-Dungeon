@@ -10,7 +10,8 @@
 #        the current dungeon, never progress/unlocks),
 #     2. pause a live run behind the pause menu, so the player returns to a frozen game rather than
 #        one that kept running (or a stuck input),
-#     3. let go of every touch (TouchControls releases its own fingers on the same notifications).
+#     3. let go of every touch (TouchControls releases its own fingers on the same notifications, and again on the way
+#        back: a finger that lifted while we were away never delivered its release).
 #   Coming back needs nothing: the process, the generated dungeon and the music player are the
 #   same objects, so nothing is rebuilt (no regeneration, no second splash, no second music start).
 # ==============================================================================
@@ -60,6 +61,8 @@ func on_foreground() -> void:
 	if not in_background:
 		return
 	in_background = false
+	# A finger that lifted while we were away never delivered its release: nothing it owned may stay down.
+	get_tree().call_group(TouchControls.GROUP, "release_all")
 	foregrounded.emit()
 
 
