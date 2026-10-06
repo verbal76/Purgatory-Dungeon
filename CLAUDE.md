@@ -25,13 +25,18 @@ so Windows is unchanged. Details, controls table and build pipeline: **docs/ANDR
 
 ## OTA updates (same product, same version number)
 
-From the first APK that contains the OTA client (`scripts/ota/`), code/content-only changes can be delivered over the air
-without a new APK: a signed, cumulative patch pack for one installed native build, mounted at startup by the first autoload,
-verified (signature, SHA-256, exact base commit/engine/platform) and rolled back automatically on any failure. Rules in
-**docs/OTA.md** (what ships OTA vs needs an APK: `tools/ota/ota_rules.json`, `tools/ota/classify.py`; publication = push branch
-`ota/v<N>/<K>`; recovery = channel revocation). Never edit `scripts/ota/**`, `ota_trust.pem`, `ota_channel.json`, `project.godot`
-or the Android manifest settings expecting an OTA to carry it. The first OTA and any publication need the owner's authorization.
-The channel is a separate public repo that holds only signed update files; the source repo stays private.
+Android-only, from the first v7-generation APK (v1-v6 cannot receive it). One authoritative mechanism, specified in
+**docs/OTA.md**: the native layer `scripts/boot/` (autoload `Boot`, first) mounts a signed, cumulative patch pack for exactly
+one native baseline; a runtime lock (`ota/runtime_lock.json`, `tools/ota_runtime.py`) gives every native build a
+`runtime_id` + `runtime_fingerprint` and a device accepts only a manifest that names both. What may ship OTA vs needs an
+APK is defined once in `ota/boundary.json` (`tools/ota/classify.py` enforces it). Never edit `scripts/boot/**`,
+`project.godot`, `export_presets.cfg`, `ota/**`, the Android manifest settings or the engine version expecting an OTA to
+carry it (changing them changes the fingerprint: run `python3 tools/ota_runtime.py --check`, then `--bump`/`--relock`).
+An OTA cannot add a new global `class_name`, autoload or input action. Publication = push branch `ota/<channel>/<40-hex sha>`
+(`.github/workflows/ota-publish.yml`); recovery = automatic rollback, the diagnostics overlay and channel revocation. The
+signing key lives outside the repo (CI key store); only the public key is compiled in. Saves are never written by OTA.
+Publishing any OTA, and choosing the public release host (phones cannot read a private repo's releases), need the owner's
+authorization; the source repo stays private.
 
 ## Studio splash (Hot Attic Games standing requirement — do not remove)
 
