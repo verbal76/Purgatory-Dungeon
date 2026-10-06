@@ -18,11 +18,11 @@ const RUNTIME_REVISION := 1
 ## (the "ota_channel" field written at APK build time). Channels are manifest pointers, not
 ## packages: a later "stable" channel is a second pointer, not a second code path.
 const CHANNEL := "dev"
-## Where OTA files are downloaded from (docs/OTA.md section 6): the GitHub Pages site that the PRIVATE source
-## repository's own Actions deployment publishes. Devices download anonymously, so the site is public and holds signed
-## OTA files only (never source, keys or secrets). It must equal what CI derives from GITHUB_REPOSITORY, which refuses
-## to publish otherwise. Changing it is a NATIVE change (new APK, runtime revision bump).
-const BASE_URL := "https://verbal76.github.io/Purgatory-Dungeon/ota"
+## The repository whose GitHub Releases carry OTA files (docs/OTA.md section 6): this PUBLIC source repository's own
+## Releases, published by CI with the automatic github.token and read anonymously by devices. It must equal
+## GITHUB_REPOSITORY in CI, which refuses to publish otherwise. Changing it is a NATIVE change (new APK, runtime
+## revision bump).
+const REPO := "verbal76/Purgatory-Dungeon"
 ## Custom export feature that turns the OTA client on. Only the Android preset sets it.
 const FEATURE := "ota"
 ## The only platform OTA packages are built for.
@@ -60,19 +60,22 @@ static func runtime_id(platform: String = "") -> String:
 	return "%s-godot-%s-r%d" % [platform, engine_version(), RUNTIME_REVISION]
 
 
-## ".../ota/<channel>": the directory of one channel on the Pages site.
-static func channel_dir(channel: String = CHANNEL) -> String:
-	return "%s/%s" % [BASE_URL, channel]
+static func release_url(tag: String, asset: String) -> String:
+	return "https://github.com/%s/releases/download/%s/%s" % [REPO, tag, asset]
 
 
-## The mutable channel pointer: ".../ota/<channel>/latest.json".
+## The mutable release that carries one channel's pointer: "ota-channel-<channel>".
+static func channel_tag(channel: String = CHANNEL) -> String:
+	return "ota-channel-%s" % channel
+
+
+## The immutable release of one OTA: "ota-<channel>-<seq:06d>" (its ota_id is "<channel>-<seq:06d>").
+static func ota_tag(channel: String, seq: int) -> String:
+	return "ota-%s-%06d" % [channel, seq]
+
+
 static func pointer_url(channel: String = CHANNEL) -> String:
-	return channel_dir(channel) + "/latest.json"
-
-
-## An immutable per-OTA asset: ".../ota/<channel>/<ota_id>/<asset>" (purgatory-<ota_id>.pck, manifest.json, manifest.json.sig).
-static func asset_url(channel: String, ota_id: String, asset: String) -> String:
-	return "%s/%s/%s" % [channel_dir(channel), ota_id, asset]
+	return release_url(channel_tag(channel), "latest.json")
 
 
 ## True for a channel name that is safe to put in a URL and a file name.
