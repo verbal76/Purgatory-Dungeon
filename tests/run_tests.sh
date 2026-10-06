@@ -10,15 +10,57 @@ trap 'rm -rf "$SCRATCH"' EXIT
 export PURGATORY_SAVE_ROOT="$SCRATCH/PurgetoryDungeon"
 rc=0
 FAILED_STAGES=()
+STAGE_TIMES=()   # "<seconds> <label>" per stage, summarised at the end (docs/RELEASES.md "CI cost": measure before optimising)
 LOG="$SCRATCH/last.log"
+# TEST_JOBS=N (default 1 = strictly sequential, exactly as before) runs up to N Godot stages at the same time inside this one job. A hosted
+# Linux runner has 4 vCPUs and one headless stage uses about one, so this cuts BILLED minutes (a job matrix would not). Every concurrent stage
+# gets its own PURGATORY_SAVE_ROOT and log; results are printed in stage order and judged by the same rules (exit status, "SCRIPT ERROR").
+TEST_JOBS="${TEST_JOBS:-1}"
+case "$TEST_JOBS" in ''|*[!0-9]*|0) TEST_JOBS=1 ;; esac
+PAR_N=0          # stages started in parallel mode
+PAR_PRINTED=0    # stages whose result has been printed (strictly in start order)
+PAR_LABELS=()
+mkdir -p "$SCRATCH/par"
+# _par_flush [all]: print the finished stages that come next in order (everything, waiting for it, with "all").
+_par_flush() {
+	local n code secs
+	while [ "$PAR_PRINTED" -lt "$PAR_N" ]; do
+		n=$((PAR_PRINTED + 1))
+		if [ ! -f "$SCRATCH/par/$n.rc" ]; then [ "${1:-}" = "all" ] || return 0; wait -n 2>/dev/null || sleep 1; continue; fi
+		read -r code secs < "$SCRATCH/par/$n.rc"
+		echo "=== ${PAR_LABELS[$n]}"
+		STAGE_TIMES+=("$secs ${PAR_LABELS[$n]}")
+		sed 's/\x1b\[[0-9;]*m//g' "$SCRATCH/par/$n.log"
+		if [ "$code" -ne 0 ]; then echo "!!! FAILED (exit $code): ${PAR_LABELS[$n]}"; rc=1; FAILED_STAGES+=("${PAR_LABELS[$n]} (exit $code)")
+		elif grep -q 'SCRIPT ERROR' "$SCRATCH/par/$n.log"; then echo "!!! FAILED (script errors): ${PAR_LABELS[$n]}"; rc=1; FAILED_STAGES+=("${PAR_LABELS[$n]} (script errors)"); fi
+		PAR_PRINTED=$n
+	done
+}
+_par_start() {
+	local label="$1"; shift
+	while [ "$(jobs -rp | wc -l)" -ge "$TEST_JOBS" ]; do wait -n 2>/dev/null || sleep 1; done
+	PAR_N=$((PAR_N + 1))
+	local n=$PAR_N
+	PAR_LABELS[$n]="$label"
+	(
+		export PURGATORY_SAVE_ROOT="$SCRATCH/par/save-$n/PurgetoryDungeon"
+		t0=$SECONDS
+		"$@" > "$SCRATCH/par/$n.log" 2>&1
+		echo "$? $((SECONDS - t0))" > "$SCRATCH/par/$n.rc"
+	) &
+	_par_flush
+}
 # run <label> <cmd...>: runs a command, echoes output, fails on non-zero exit OR any "SCRIPT ERROR".
 run() {
 	local label="$1"; shift
-	# TEST_FILTER (a regex) runs only the matching stages (used by the Android job for the mobile subset).
+	# TEST_FILTER (a regex) runs only the matching stages (a developer shortcut; CI always runs the full suite).
 	if [ -n "${TEST_FILTER:-}" ] && ! echo "$label" | grep -Eq "$TEST_FILTER"; then return; fi
+	if [ "$TEST_JOBS" -gt 1 ]; then _par_start "$label" "$@"; return; fi
 	echo "=== $label"
+	local t0=$SECONDS
 	"$@" > "$LOG" 2>&1
 	local code=$?
+	STAGE_TIMES+=("$((SECONDS - t0)) $label")
 	sed 's/\x1b\[[0-9;]*m//g' "$LOG"
 	if [ "$code" -ne 0 ]; then echo "!!! FAILED (exit $code): $label"; rc=1; FAILED_STAGES+=("$label (exit $code)")
 	elif grep -q 'SCRIPT ERROR' "$LOG"; then echo "!!! FAILED (script errors): $label"; rc=1; FAILED_STAGES+=("$label (script errors)"); fi
@@ -28,10 +70,19 @@ python3 tools/release_tool.py check || { echo "!!! FAILED: version consistency";
 echo "=== check_res_paths"
 python3 tests/check_res_paths.py || { echo "!!! FAILED: res:// path check"; rc=1; }
 echo "=== ota tools (tests/test_ota_tools.py)"
+T_PY=$SECONDS
 GODOT="$GODOT" python3 tests/test_ota_tools.py || { echo "!!! FAILED: OTA build tooling tests"; rc=1; }
+STAGE_TIMES+=("$((SECONDS - T_PY)) python: tests/test_ota_tools.py (includes Godot payload builds)")
+echo "=== ota workflows (tests/test_ota_workflows.py)"
+T_PY=$SECONDS
+python3 tests/test_ota_workflows.py || { echo "!!! FAILED: OTA / CI workflow economics and safety tests"; rc=1; }
+STAGE_TIMES+=("$((SECONDS - T_PY)) python: tests/test_ota_workflows.py")
 # Refresh the import cache + global class registry (needed on a fresh clone).
 echo "=== import"
+T_IMPORT=$SECONDS
 "$GODOT" --headless --path . --import >/dev/null 2>&1 || true
+echo "--- import took $((SECONDS - T_IMPORT))s"
+STAGE_TIMES+=("$((SECONDS - T_IMPORT)) godot --import (fresh clone)")
 for scene in res://tests/validate_project.tscn res://tests/test_save_manager.tscn res://tests/test_fireball_pool.tscn res://tests/test_menu_scenes.tscn res://tests/test_pause_options.tscn res://tests/test_enemy_pooling.tscn res://tests/test_clock_buffs.tscn res://tests/test_run_lifecycle.tscn res://tests/test_audio_buses.tscn res://tests/test_pause_freeze.tscn res://tests/test_settings_controls.tscn res://tests/test_release_metadata.tscn res://tests/test_trap_fireball.tscn res://tests/test_misc_fixes.tscn res://tests/test_portal_completion.tscn res://tests/test_studio_splash.tscn res://tests/test_ui_brand.tscn res://tests/test_typography.tscn res://tests/test_ota_core.tscn res://tests/test_mage_aim.tscn res://tests/test_lighting_readability.tscn; do
 	run "$scene" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . "$scene"
 done
@@ -98,6 +149,9 @@ for seed in 7 42; do
 done
 # ... and in the real main scene with the real minimap (map key shows every room, closing hides them again).
 run "res://tests/test_module_visibility_main.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_module_visibility_main.tscn
+_par_flush all
+echo "=== stage timing: ${#STAGE_TIMES[@]} Godot stages, $(printf '%s\n' ${STAGE_TIMES[@]+"${STAGE_TIMES[@]}"} | awk '{s+=$1} END {print s+0}')s in stages, $SECONDS s total; slowest 12:"
+printf '%s\n' ${STAGE_TIMES[@]+"${STAGE_TIMES[@]}"} | sort -rn | head -12 | sed 's/^/  /'
 if [ "${#FAILED_STAGES[@]}" -gt 0 ]; then
 	echo "=== FAILED STAGES (${#FAILED_STAGES[@]}):"
 	printf '  %s\n' "${FAILED_STAGES[@]}"

@@ -16,7 +16,8 @@ name: OTA publish
 # and publishes nothing. In order, each step failing closed:
 #   01 pin the SHA            02a public-repo + baked-REPO gate   02b identity (channel, seq)   02c baseline tag v<VERSION>
 #   03 native baseline (the published release + APK, read-only)
-#   04 classify vs baseline   05 runtime gate                     06 full test suite on the SHA (ota-tests.yml)
+#   04 classify vs baseline   05 runtime gate                     05b look for a VERIFIED green suite result of this exact SHA (reuse)
+#   06 full test suite on the SHA (ota-tests.yml) - run ONLY when 05b could not verify a reusable result; never skipped otherwise
 #   07 build the payload      07b app_minor from the LIVE pointer 08 build the manifest  09 signing key  10 key == embedded key  11 sign
 #   12 inspect (client code)  13 create the immutable release     14 anonymous re-download + verify
 #   15 anonymous reachability + signature with the compiled-in key 16 advance the pointer (forward only) + confirm it is live      17 receipt
@@ -25,6 +26,10 @@ name: OTA publish
 # baseline's build_info.public_version, app_minor comes from the live pointer (publish_gates.py next-minor), seq is only the
 # internal forward-only channel sequence (shown to people as #000001). Four identities, never conflated: native APK version,
 # owner-facing running version, OTA update id, native runtime id + fingerprint.
+# COST (docs/RELEASES.md "CI cost", docs/OTA.md 11a): the full suite is the expensive step (~15 billed minutes). Step 05b asks the GitHub API
+# (tools/ota/proven_suite.py) whether the same suite already passed, in this repository's ci.yml or an earlier OTA publish run, on exactly this
+# commit (head_sha, workflow path, attempt 1, completed + success on the whole required job, suite step and exact-tree attestation step). Only
+# then is step 06 skipped and the receipt says so (suite.mode = reused + the source run). Any doubt or API problem runs the suite as before.
 # Any failure before step 16 leaves nothing new visible to devices. A private source repository, a REPO that differs from this
 # repository, or a missing signing key ends in a receipt with published=false (never a failed-looking half publication).
 # TOKEN. GH_TOKEN is set only on the steps that create, upload to or clobber a release (13, 16) and on the signing-key step 09;
@@ -59,11 +64,15 @@ jobs:
   prepare:
     name: Pin, identity, classify, runtime gate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15   # typical: 1 minute
     permissions:
       contents: read
+      actions: read   # read-only: 05b lists earlier runs and their jobs
     outputs:
       proceed: ${{ steps.repo.outputs.ok }}
+      suite_reuse: ${{ steps.suite.outputs.reuse }}
+      suite_source_url: ${{ steps.suite.outputs.source_run_url }}
+      native_apk_sha256: ${{ steps.base.outputs.native_apk_sha256 }}
       channel: ${{ steps.pin.outputs.channel }}
       sha: ${{ steps.pin.outputs.sha }}
       seq: ${{ steps.ident.outputs.seq }}
@@ -141,6 +150,8 @@ jobs:
           python3 tools/ota/publish_gates.py native-release --json "$RUNNER_TEMP/native/release.json" --tag "$OTA_NATIVE_BASE_TAG"
           # the bytes are fetched exactly like a phone would: no token
           curl -fsSL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/native/$apk" "$DL_BASE/$OTA_NATIVE_BASE_TAG/$apk"
+          # the publish job downloads the APK again for the byte comparison and must get EXACTLY these bytes (checked there)
+          echo "native_apk_sha256=$(sha256sum "$RUNNER_TEMP/native/$apk" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           python3 tools/ota/native_check.py extract --platform android --native "$RUNNER_TEMP/native/$apk" \
             --path build_info.json --out "$RUNNER_TEMP/native/build_info.json"
           python3 tools/ota/publish_gates.py baseline "$RUNNER_TEMP/native/build_info.json" --channel "$CHANNEL" \
@@ -169,6 +180,23 @@ jobs:
           python3 tools/ota_runtime.py --print --json > "$RUNNER_TEMP/runtime.json"
           python3 tools/ota/publish_gates.py same-runtime --baseline "$RUNNER_TEMP/native/build_info.json" --current "$RUNNER_TEMP/runtime.json"
 
+      - name: 05b Look for a VERIFIED green suite result of this exact SHA (reuse it, else step 06 runs the suite)
+        id: suite
+        if: steps.repo.outputs.ok == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}   # read-only here (job permissions: contents + actions read): lists runs and jobs of this repository
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: |
+          # never fails the job: no proof (or any doubt, or an API problem) simply means reuse=0 and the suite runs in step 06
+          python3 tools/ota/proven_suite.py find --repo "$GITHUB_REPOSITORY" --sha "$SHA" --run-id "$GITHUB_RUN_ID" > suite.out || echo "reuse=0" > suite.out
+          cat suite.out
+          grep -E '^(reuse|reason|source_run_url)=' suite.out >> "$GITHUB_OUTPUT" || echo "reuse=0" >> "$GITHUB_OUTPUT"
+          if grep -qx 'reuse=1' suite.out; then
+            echo "::notice::step 06 is skipped: the suite already passed on exactly this commit ($(sed -n 's/^source_run_url=//p' suite.out))"
+          else
+            echo "::notice::the full suite runs in step 06 ($(sed -n 's/^reason=//p' suite.out | cut -c1-300))"
+          fi
+
       - name: Receipt (prepare stage; written when nothing could be published)
         if: ${{ always() && (failure() || steps.repo.outputs.ok == '0') }}
         env:
@@ -188,12 +216,14 @@ jobs:
           name: ota-receipt-prepare-${{ github.run_id }}
           path: receipt/receipt.json
           if-no-files-found: ignore
+          retention-days: 14
 
   # ------------------------------------------------------------------------------------------------ step 06
   tests:
     name: Full test suite on the exact SHA
     needs: prepare
-    if: needs.prepare.outputs.proceed == '1'
+    # skipped ONLY when step 05b verified an earlier green result of the same suite on exactly this commit
+    if: needs.prepare.outputs.proceed == '1' && needs.prepare.outputs.suite_reuse != '1'
     uses: ./.github/workflows/ota-tests.yml
     permissions:
       contents: read
@@ -204,9 +234,10 @@ jobs:
   publish:
     name: Build, sign, publish, verify, advance the pointer
     needs: [prepare, tests]
-    if: needs.prepare.outputs.proceed == '1'
+    # !cancelled() lets the job run when the tests job was SKIPPED (verified reuse); every other path needs prepare AND the suite to have succeeded
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.proceed == '1' && (needs.tests.result == 'success' || (needs.tests.result == 'skipped' && needs.prepare.outputs.suite_reuse == '1')) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 45   # typical: 5-12 minutes (a hung step must not bill the default 6 hours)
     permissions:
       contents: write   # the ONLY job with write access: creates the ota-* releases of this repository and uploads latest.json
     env:
@@ -220,6 +251,9 @@ jobs:
       RUNTIME_FINGERPRINT: ${{ needs.prepare.outputs.runtime_fingerprint }}
       NATIVE_VERSION: ${{ needs.prepare.outputs.native_version }}
       OTA_NATIVE_BASE_TAG: ${{ needs.prepare.outputs.native_tag }}
+      NATIVE_APK_SHA256: ${{ needs.prepare.outputs.native_apk_sha256 }}
+      SUITE_MODE: ${{ needs.tests.result == 'success' && 'own-run' || (needs.prepare.outputs.suite_reuse == '1' && 'reused' || '') }}
+      SUITE_SOURCE_URL: ${{ needs.prepare.outputs.suite_source_url }}
       DL_BASE: https://github.com/${{ github.repository }}/releases/download
       OUT: ${{ github.workspace }}/ota-out
     steps:
@@ -283,6 +317,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/native"
           apk="Purgatory-Dungeon-${OTA_NATIVE_BASE_TAG}.apk"
           curl -fsSL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/native/$apk" "$DL_BASE/$OTA_NATIVE_BASE_TAG/$apk"
+          # the baseline the gates of the prepare job validated and the baseline the payload is compared with are the SAME bytes
+          test -n "$NATIVE_APK_SHA256" && test "$(sha256sum "$RUNNER_TEMP/native/$apk" | cut -d' ' -f1)" = "$NATIVE_APK_SHA256" \
+            || { echo "::error::the baseline APK changed between the prepare job and the publish job"; exit 1; }
           python3 tools/ota/native_check.py extract --platform android --native "$RUNNER_TEMP/native/$apk" \
             --path build_info.json --out "$RUNNER_TEMP/native/build_info.json"
           python3 tools/ota/publish_gates.py baseline "$RUNNER_TEMP/native/build_info.json" --channel "$CHANNEL" > /dev/null
@@ -481,6 +518,9 @@ jobs:
                 --pck-url "$base/$TAG/purgatory-$OTA_ID.pck" --manifest-url "$base/$TAG/manifest.json"
                 --signature-url "$base/$TAG/manifest.json.sig" --pointer-url "$base/ota-channel-$CHANNEL/latest.json")
           [ -z "$reason" ] || args+=(--reason "$reason")
+          suite_url="$SUITE_SOURCE_URL"
+          [ "$SUITE_MODE" = "own-run" ] && suite_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          [ -z "$SUITE_MODE" ] || args+=(--suite-mode "$SUITE_MODE" --suite-run-url "$suite_url")
           p="$(sha_of "$OUT/purgatory-$OTA_ID.pck")"; [ -z "$p" ] || args+=(--pck-sha256 "$p" --pck-size "$(stat -c %s "$OUT/purgatory-$OTA_ID.pck")")
           m="$(sha_of "$OUT/manifest.json")"; [ -z "$m" ] || args+=(--manifest-sha256 "$m")
           s="$(sha_of "$OUT/manifest.json.sig")"; [ -z "$s" ] || args+=(--signature-sha256 "$s")
@@ -503,3 +543,4 @@ jobs:
             ota-out/payload/payload_report.json
             ota-out/payload/classify.json
           if-no-files-found: ignore
+          retention-days: 14   # the receipt is also in the job summary; the pack itself is a release asset
