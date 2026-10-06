@@ -14,6 +14,7 @@ var _t0: int = 0
 var _last: int = 0
 var _frames := PackedFloat32Array()
 var _frame_marks := PackedStringArray()
+var _frame_end := PackedInt64Array()
 var _count: int = 0
 var _handover_frame: int = -1
 var _after: int = 120
@@ -37,6 +38,7 @@ func _ready() -> void:
 	_after = int(after) if after != "" else 120
 	_frames.resize(40000)
 	_frame_marks.resize(40000)
+	_frame_end.resize(40000)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var t_load := Time.get_ticks_usec()
@@ -66,6 +68,7 @@ func _process(_d: float) -> void:
 	if _count < _frames.size():
 		_frames[_count] = float(now - _last) / 1000.0
 		_frame_marks[_count] = _label_now()
+		_frame_end[_count] = now
 		_count += 1
 	_last = now
 	if _loading == null:
@@ -141,7 +144,12 @@ func _report() -> void:
 	print("ENTRY ---- frames > 20 ms (index, ms, last mark) ----")
 	for i in total_frames:
 		if _frames[i] > 20.0:
-			print("ENTRY   f%-5d %8.1f ms  [%s]%s" % [i, _frames[i], _frame_marks[i], "  (after hand-over +%d)" % (i - h) if i >= h else ""])
+			var inside := PackedStringArray()
+			var t_start: int = _frame_end[i] - int(_frames[i] * 1000.0)
+			for m in marks:
+				if int(m[1]) > t_start and int(m[1]) <= _frame_end[i]:
+					inside.append(String(m[0]))
+			print("ENTRY   f%-5d %8.1f ms  [%s]%s  marks in frame: %s" % [i, _frames[i], _frame_marks[i], "  (after hand-over +%d)" % (i - h) if i >= h else "", ",".join(inside)])
 	var bodies := 0
 	var meshes := 0
 	var lights := 0

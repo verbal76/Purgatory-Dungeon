@@ -8,6 +8,8 @@
 # ==============================================================================
 extends Control
 
+const DungeonEntry = preload("res://scripts/dungeon_entry.gd")   # threaded dungeon load (no global class name)
+
 @export var main_menu_scene: String = "res://scenes/MainMenu.tscn" # Path to the main menu
 @export var gameplay_scene: String = "res://scenes/Purgatory_Dungeon_main_game_file.tscn" # Path to the actual game
 
@@ -795,4 +797,5 @@ func _on_start_run() -> void:
 	PlayerWallet.refresh_hud()
 
 	# Transition to gameplay
-	get_tree().change_scene_to_file(gameplay_scene)
+	# Loads the dungeon scene on worker threads under the loading screen instead of freezing the menu for seconds.
+	DungeonEntry.start(get_tree(), gameplay_scene)

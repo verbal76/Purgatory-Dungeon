@@ -177,6 +177,59 @@ func generate_dungeon() -> Dictionary:
 	return result
 
 
+## The same generation as generate_dungeon(), spread over frames: the layout loop (and the end-cap sweep)
+## give the frame back whenever `budget_us` microseconds of work have been done, so a loading screen keeps
+## animating and the device never stalls for the whole layout. The RNG is consumed in exactly the order
+## the synchronous version consumes it, so a seed gives the same dungeon either way (tests compare them).
+## The torch pass is a single synchronous step at the end.
+func generate_dungeon_async(budget_us: int) -> Dictionary:
+	layout_attempts = 0
+	layout_history.clear()
+	gen_stats = {"instantiated": 0, "overlap_checks": 0, "aabb_computed": 0, "attempt_ms": [], "torch_ms": 0.0, "slices": 0}
+	var t_gen : int = Time.get_ticks_usec()
+	_slice_budget_us = budget_us
+	_slice_t0 = t_gen
+	var result : Dictionary = {"success": false}
+	for i in maxi(max_layout_attempts, 1):
+		layout_attempts += 1
+		var t_att : int = Time.get_ticks_usec()
+		result = await _generate_once_async()
+		gen_stats["attempt_ms"].append(float(Time.get_ticks_usec() - t_att) / 1000.0)
+		if not bool(result.get("success", false)):
+			_free_candidate_pool()
+			_slice_budget_us = 0
+			return result
+		if counted_piece_total >= int(ceil(float(target_piece_count) * minimum_fill_fraction)):
+			break
+		if i < maxi(max_layout_attempts, 1) - 1:
+			push_warning("DungeonGeneration: layout %d reached only %d of %d rooms - regenerating." % [
+				layout_attempts, counted_piece_total, target_piece_count])
+			_discard_layout()
+	_free_candidate_pool()
+	_slice_budget_us = 0
+	await get_tree().process_frame   # let the layout's last slice present before the torch block
+	if bool(result.get("success", false)):
+		_place_all_torches()
+	gen_stats["torch_ms"] = torch_pass_ms
+	gen_stats["total_ms"] = float(Time.get_ticks_usec() - t_gen) / 1000.0
+	return result
+
+
+var _slice_budget_us : int = 0
+var _slice_t0 : int = 0
+
+
+# True when the current slice has used its budget (only ever true in the async generation).
+func _slice_over() -> bool:
+	return _slice_budget_us > 0 and Time.get_ticks_usec() - _slice_t0 >= _slice_budget_us
+
+
+func _slice_next_frame() -> void:
+	gen_stats["slices"] = int(gen_stats.get("slices", 0)) + 1
+	await get_tree().process_frame
+	_slice_t0 = Time.get_ticks_usec()
+
+
 # Removes every module of the current layout from the tree at once (their physics bodies and
 # markers must not linger while the replacement layout is built) and frees them.
 func _discard_layout() -> void:
@@ -190,15 +243,38 @@ func _discard_layout() -> void:
 
 
 func _generate_once() -> Dictionary:
+	var starter : Node3D = _generate_begin()
+	if starter == null:
+		return {"success": false}
+	_generate_layout()
+	if _retry_fill_prepare():
+		_generate_layout()
+	_close_open_ends_full_sweep()
+	return _generate_finish(starter)
+
+
+func _generate_once_async() -> Dictionary:
+	var starter : Node3D = _generate_begin()
+	if starter == null:
+		return {"success": false}
+	await _generate_layout_async()
+	if _retry_fill_prepare():
+		await _generate_layout_async()
+	await _close_open_ends_async()
+	return _generate_finish(starter)
+
+
+# Resets the state and places the starter module. Null when the generator is not set up.
+func _generate_begin() -> Node3D:
 	_reset_generation_state()
 	_diag = {"attach_fail": 0, "end_caps": 0, "wall_plugs": 0, "code_plugs": 0, "blocked": 0,
 			"dead_end_rooms": 0, "last_door_retries": 0, "stop": "", "rooms_at_stop": 0}
 
-	if _main_root == null:            return {"success": false}
-	if _starter_module == null:       return {"success": false}
-	if _branch_modules.is_empty():    return {"success": false}
-	if _room_connector_module == null: return {"success": false}
-	if _end_cap_module == null:       return {"success": false}
+	if _main_root == null:            return null
+	if _starter_module == null:       return null
+	if _branch_modules.is_empty():    return null
+	if _room_connector_module == null: return null
+	if _end_cap_module == null:       return null
 
 	# Lazy-load the wall-plug scene once per run.
 	if _wall_plug_module == null and ResourceLoader.exists(_WALL_PLUG_PATH):
@@ -215,9 +291,10 @@ func _generate_once() -> Dictionary:
 	counted_piece_total = 1
 
 	_collect_open_connections(starter)
-	_generate_layout()
-	_retry_fill_pass()
-	_close_open_ends_full_sweep()
+	return starter
+
+
+func _generate_finish(starter: Node3D) -> Dictionary:
 	_clean_open_connections()
 	_diag["rooms"] = counted_piece_total
 	_diag["modules"] = placed_modules.size()
@@ -239,9 +316,9 @@ func _generate_once() -> Dictionary:
 # connection that was flagged blocked (some were rejected only because a neighbour
 # hadn't been placed yet) and run _generate_layout() once more. Cheap on runs that
 # already hit target — early-exits.
-func _retry_fill_pass() -> void:
+func _retry_fill_prepare() -> bool:
 	if counted_piece_total >= target_piece_count:
-		return
+		return false
 	for mod in placed_modules:
 		if not is_instance_valid(mod):
 			continue
@@ -252,7 +329,7 @@ func _retry_fill_pass() -> void:
 	for mod in placed_modules:
 		if is_instance_valid(mod):
 			_collect_open_connections(mod)
-	_generate_layout()
+	return true
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -396,53 +473,77 @@ func _weight_from_filename(path: String) -> int:
 # ══════════════════════════════════════════════════════════════════════════════
 
 func _generate_layout() -> void:
-	var attempt: int = 0
-	while counted_piece_total < target_piece_count and attempt < total_generation_attempts:
-		attempt += 1
-		_clean_open_connections()
-		if open_connections.is_empty(): break
+	_layout_attempt = 0
+	while _layout_step():
+		pass
+	_layout_finish()
 
-		var target_idx: int = randi() % open_connections.size()
-		var target: Node3D = open_connections[target_idx]
-		if not is_instance_valid(target) or _is_connection_used(target) or _is_connection_blocked(target):
-			open_connections.remove_at(target_idx)
-			continue
 
-		var res: Dictionary = _try_attach_connector_then_piece(target)
-		if res.get("success", false):
-			_register_module(res.get("connector"), false)
-			_collect_open_connections(res.get("connector"))
-			_register_module(res.get("main"), true)
-			_collect_open_connections(res.get("main"))
-			counted_piece_total += 1
-			if _get_connections(res.get("main")).size() < 2:
-				_diag["dead_end_rooms"] += 1
-			continue
+func _generate_layout_async() -> void:
+	_layout_attempt = 0
+	while _layout_step():
+		if _slice_over():
+			await _slice_next_frame()
+	_layout_finish()
 
-		_diag["attach_fail"] += 1
-		# Failing to fit a room is down to the random picks, not the doorway: while the frontier is
-		# thin keep the doorway open and try again rather than closing it for good.
-		if _frontier_is_thin():
-			var fails: int = int(target.get_meta("door_fails", 0)) + 1
-			target.set_meta("door_fails", fails)
-			if fails < door_retry_limit:
-				_diag["last_door_retries"] += 1
-				continue
-		var cap: Node3D = _try_attach_specific_module_to_connection(target, _end_cap_module)
-		if cap != null:
-			_register_module(cap, false)
-			cap.set_meta("is_end_cap", true)
-			_diag["end_caps"] += 1
-		elif _try_attach_wall_plug(target):
-			wall_plug_count += 1
-			_diag["wall_plugs"] += 1
-		elif _force_attach_code_plug(target):
-			code_plug_count += 1
-			_diag["code_plugs"] += 1
-		else:
-			target.set_meta("blocked", true)
-			blocked_final_count += 1
-			_diag["blocked"] += 1
+
+var _layout_attempt : int = 0
+
+
+# One iteration of the layout loop (try to fill one open doorway). False when the loop is over.
+func _layout_step() -> bool:
+	if counted_piece_total >= target_piece_count or _layout_attempt >= total_generation_attempts:
+		return false
+	_layout_attempt += 1
+	_clean_open_connections()
+	if open_connections.is_empty():
+		return false
+
+	var target_idx: int = randi() % open_connections.size()
+	var target: Node3D = open_connections[target_idx]
+	if not is_instance_valid(target) or _is_connection_used(target) or _is_connection_blocked(target):
+		open_connections.remove_at(target_idx)
+		return true
+
+	var res: Dictionary = _try_attach_connector_then_piece(target)
+	if res.get("success", false):
+		_register_module(res.get("connector"), false)
+		_collect_open_connections(res.get("connector"))
+		_register_module(res.get("main"), true)
+		_collect_open_connections(res.get("main"))
+		counted_piece_total += 1
+		if _get_connections(res.get("main")).size() < 2:
+			_diag["dead_end_rooms"] += 1
+		return true
+
+	_diag["attach_fail"] += 1
+	# Failing to fit a room is down to the random picks, not the doorway: while the frontier is
+	# thin keep the doorway open and try again rather than closing it for good.
+	if _frontier_is_thin():
+		var fails: int = int(target.get_meta("door_fails", 0)) + 1
+		target.set_meta("door_fails", fails)
+		if fails < door_retry_limit:
+			_diag["last_door_retries"] += 1
+			return true
+	var cap: Node3D = _try_attach_specific_module_to_connection(target, _end_cap_module)
+	if cap != null:
+		_register_module(cap, false)
+		cap.set_meta("is_end_cap", true)
+		_diag["end_caps"] += 1
+	elif _try_attach_wall_plug(target):
+		wall_plug_count += 1
+		_diag["wall_plugs"] += 1
+	elif _force_attach_code_plug(target):
+		code_plug_count += 1
+		_diag["code_plugs"] += 1
+	else:
+		target.set_meta("blocked", true)
+		blocked_final_count += 1
+		_diag["blocked"] += 1
+	return true
+
+
+func _layout_finish() -> void:
 	_diag["stop"] = "target" if counted_piece_total >= target_piece_count \
 			else ("open_exhausted" if open_connections.is_empty() else "attempt_cap")
 	_diag["rooms_at_stop"] = counted_piece_total
@@ -454,17 +555,32 @@ func _close_open_ends_full_sweep() -> void:
 		safety += 1; found = false
 		for target in _get_all_unused_connections_from_all_modules():
 			found = true
-			var cap: Node3D = _try_attach_specific_module_to_connection(target, _end_cap_module)
-			if cap != null:
-				_register_module(cap, false)
-				cap.set_meta("is_end_cap", true)
-			elif _try_attach_wall_plug(target):
-				wall_plug_count += 1
-			elif _force_attach_code_plug(target):
-				code_plug_count += 1
-			else:
-				target.set_meta("blocked", true)
-				blocked_final_count += 1
+			_close_one_end(target)
+
+
+func _close_open_ends_async() -> void:
+	var found := true; var safety := 0
+	while found and safety < 10:
+		safety += 1; found = false
+		for target in _get_all_unused_connections_from_all_modules():
+			found = true
+			_close_one_end(target)
+			if _slice_over():
+				await _slice_next_frame()
+
+
+func _close_one_end(target: Node3D) -> void:
+	var cap: Node3D = _try_attach_specific_module_to_connection(target, _end_cap_module)
+	if cap != null:
+		_register_module(cap, false)
+		cap.set_meta("is_end_cap", true)
+	elif _try_attach_wall_plug(target):
+		wall_plug_count += 1
+	elif _force_attach_code_plug(target):
+		code_plug_count += 1
+	else:
+		target.set_meta("blocked", true)
+		blocked_final_count += 1
 
 
 # Last-ditch cap when neither a room nor the regular end-cap fits. If this
@@ -1250,6 +1366,46 @@ func _get_module_cached_aabb(mod: Node3D) -> AABB:
 # Public accessor used by RoomLockManager to size trigger Area3Ds.
 func get_module_aabb(mod: Node3D) -> AABB:
 	return _get_module_cached_aabb(mod)
+
+
+# The module's Connection_* markers (found once, kept on the module).
+func get_module_connections(mod: Node3D) -> Array[Node3D]:
+	return _get_connections(mod)
+
+
+# Placed modules ordered by the XZ distance from `origin` to their box centre (nearest first). Used by the
+# staged population passes so the player's surroundings are finished before the far rooms.
+# Modules without geometry (code plugs) sort by their own position.
+func get_modules_by_distance(origin: Vector3) -> Array[Node3D]:
+	var keyed : Array = []
+	for mod in placed_modules:
+		if not is_instance_valid(mod):
+			continue
+		var a : AABB = _get_module_cached_aabb(mod)
+		var c : Vector3 = a.get_center() if a.size != Vector3.ZERO else mod.global_position
+		var dx : float = c.x - origin.x
+		var dz : float = c.z - origin.z
+		keyed.append([dx * dx + dz * dz, mod])
+	keyed.sort_custom(func(l, r): return l[0] < r[0])
+	var out : Array[Node3D] = []
+	for k in keyed:
+		out.append(k[1])
+	return out
+
+
+# How many of `sorted_modules` (from get_modules_by_distance) have their box centre within `radius` of `origin`.
+func count_modules_within(sorted_modules: Array, origin: Vector3, radius: float) -> int:
+	var n : int = 0
+	var r2 : float = radius * radius
+	for mod in sorted_modules:
+		var a : AABB = _get_module_cached_aabb(mod)
+		var c : Vector3 = a.get_center() if a.size != Vector3.ZERO else mod.global_position
+		var dx : float = c.x - origin.x
+		var dz : float = c.z - origin.z
+		if dx * dx + dz * dz > r2:
+			break
+		n += 1
+	return n
 
 
 # A candidate point is usable if a small sphere there touches no level geometry (module

@@ -26,8 +26,12 @@ var label: Label         # "Loading the dungeon" (display face)
 var _dots: Label         # animated dots in their own fixed-width slot so the title never shifts
 var _content: Control    # title block, faded together with the background
 
-# Minimum seconds before we even check if spawning is done.
-const MIN_DISPLAY_TIME : float = 3.0
+# Minimum seconds before we even check if spawning is done (a floor so the screen never flashes; it used to be
+# 3 s, which kept a fast device waiting on an already finished dungeon).
+const MIN_DISPLAY_TIME : float = 1.2
+# Rendered frames with the whole neighbourhood in place before the fade starts: the first draws of its meshes,
+# lights and materials happen behind the screen instead of under the player's first steps.
+const SETTLE_FRAMES : int = 3
 # Safety fallback — dismiss after this many seconds regardless.
 const MAX_DISPLAY_TIME : float = 30.0
 
@@ -35,6 +39,8 @@ var _elapsed      : float = 0.0
 var _spawn_done   : bool  = false   # Set true when enemy_spawner signals complete
 var _connected    : bool  = false   # True once we've connected the spawn signal
 var is_fading     : bool  = false
+var _gen_node     : Node  = null    # the dungeon's main node (group "dungeon_generator"), once found
+var _settle       : int   = 0
 
 var original_volume : float = 0.0
 var bus_idx         : int   = 0
@@ -133,9 +139,22 @@ func _process(delta: float) -> void:
 			if spawner.get("_initial_spawn_done") == true:
 				_spawn_done = true
 
-	# Dismiss as soon as spawn is confirmed done.
-	if _spawn_done:
-		_start_fade_in()
+	# Dismiss as soon as spawn is confirmed done AND the dungeon reports the player's neighbourhood complete
+	# (props, chests, orbs around the spawn), then a few settle frames.
+	if _spawn_done and _entry_ready():
+		_settle += 1
+		if _settle >= SETTLE_FRAMES:
+			_start_fade_in()
+
+
+# True when there is no staged dungeon to wait for (menus, tests) or it reports entry_is_ready.
+func _entry_ready() -> bool:
+	if _gen_node == null or not is_instance_valid(_gen_node):
+		var nodes : Array[Node] = get_tree().get_nodes_in_group("dungeon_generator")
+		_gen_node = nodes[0] if not nodes.is_empty() else null
+	if _gen_node == null or not ("entry_is_ready" in _gen_node):
+		return true
+	return bool(_gen_node.entry_is_ready)
 
 
 # Called by EnemyManager via the spawn_complete signal.

@@ -93,15 +93,20 @@ const _PropScript = preload("res://scripts/destructible_prop.gd")
 var _shared_mat : StandardMaterial3D = null
 
 
-func _ready() -> void:
-	# Wait two frames for the dungeon generator to finish placing all modules.
-	await get_tree().process_frame
-	await get_tree().process_frame
-	_entry_mark("props_begin")
-	_build_shared_material()
-	_entry_mark("props_material")
-	await _spawn_all_props()
-	_entry_mark("props_end")
+# ── Staged population ─────────────────────────────────────────────────────────
+# The main game file registers this node as a stage worker (see Purgatory_Dungeon_main_game_file.gd): props are
+# placed room by room, nearest the player first, and the coroutine hands the frame back whenever the shared
+# per-frame budget is spent (stage_over). `stage_near_done` flips once every room around the spawn is furnished,
+# `stage_done` when all rooms are.
+var stage_near_done : bool = true
+var stage_done : bool = true
+var _main : Node = null
+
+
+func stage_begin(origin: Vector3, near_radius: float) -> void:
+	stage_near_done = false
+	stage_done = false
+	call("_stage_run", origin, near_radius)   # dynamic call: runs as a background coroutine
 
 
 func _entry_mark(label: String) -> void:
@@ -110,14 +115,24 @@ func _entry_mark(label: String) -> void:
 		main.entry_mark(label)
 
 
+# Waits (a frame at a time) for a resource requested with ResourceLoader.load_threaded_request, then returns it.
+func _await_loaded(path: String) -> Resource:
+	if not ResourceLoader.exists(path):
+		return null
+	while ResourceLoader.load_threaded_get_status(path) == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+		await get_tree().process_frame
+	return load(path)
+
+
 func _build_shared_material() -> void:
 	_shared_mat = StandardMaterial3D.new()
 
-	if ResourceLoader.exists(ALBEDO_TEX):
-		_shared_mat.albedo_texture = load(ALBEDO_TEX)
+	var albedo = await _await_loaded(ALBEDO_TEX)
+	if albedo != null:
+		_shared_mat.albedo_texture = albedo
 
-	if ResourceLoader.exists(METALLIC_TEX):
-		var mt : Texture2D = load(METALLIC_TEX)
+	var mt = await _await_loaded(METALLIC_TEX)
+	if mt != null:
 		_shared_mat.metallic                  = 1.0
 		_shared_mat.metallic_texture          = mt
 		_shared_mat.metallic_texture_channel  = BaseMaterial3D.TEXTURE_CHANNEL_RED
@@ -125,71 +140,118 @@ func _build_shared_material() -> void:
 		_shared_mat.roughness_texture         = mt
 		_shared_mat.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_GREEN
 
-	if ResourceLoader.exists(NORMAL_TEX):
+	var normal = await _await_loaded(NORMAL_TEX)
+	if normal != null:
 		_shared_mat.normal_enabled = true
-		_shared_mat.normal_texture = load(NORMAL_TEX)
+		_shared_mat.normal_texture = normal
 
 
-func _spawn_all_props() -> void:
-	var gen : Node = get_parent().get_node_or_null("DungeonGenerationFunction")
+# True (and the frame is given back by the caller) once the shared per-frame budget is spent.
+func _budget_spent() -> bool:
+	return _main != null and _main.has_method("stage_over") and _main.stage_over()
+
+
+func _stage_run(origin: Vector3, near_radius: float) -> void:
+	_main = get_parent()
+	var gen : Node = _main.get_node_or_null("DungeonGenerationFunction")
 	if gen == null:
 		push_warning("PropSpawner: DungeonGenerationFunction not found.")
+		stage_near_done = true
+		stage_done = true
 		return
-
-	var modules : Array = gen.get("placed_modules") if gen.get("placed_modules") != null else []
+	var modules : Array = gen.get_modules_by_distance(origin)
 	if modules.is_empty():
 		push_warning("PropSpawner: placed_modules is empty.")
+		stage_near_done = true
+		stage_done = true
+		return
+	var near_count : int = gen.count_modules_within(modules, origin, near_radius)
+	_entry_mark("props_begin")
+	await _build_shared_material()
+	_entry_mark("props_material")
+	var index : int = 0
+	if near_count == 0:
+		stage_near_done = true
+	for mod in modules:
+		index += 1
+		if is_instance_valid(mod) and mod is Node3D:
+			await _populate_module(gen, mod as Node3D)
+		if index >= near_count:
+			stage_near_done = true
+		if _budget_spent():
+			await get_tree().process_frame
+	stage_near_done = true
+	stage_done = true
+	_entry_mark("props_end")
+
+
+# Furnishes one room (same rules as before: connectors and end caps are skipped; a wall piece, a table with
+# stools, or 2-4 scattered props). Yields to the frame budget after every placement.
+func _populate_module(gen: Node, mod: Node3D) -> void:
+	# Skip connectors and end-caps — only place props in main rooms.
+	# DungeonGenerationFunction registers connectors/caps with
+	# counts_toward_goal=false to exclude them from the explore counter.
+	if not bool(mod.get_meta("counts_toward_goal", false)):
 		return
 
-	# Stagger spawning so that hundreds of RigidBody3D + FBX instantiations
-	# don't all land on a single frame. Each prop's _ready() sets up physics,
-	# contact monitoring, collision shape, material — cheap individually but
-	# a hard freeze when 300+ happen synchronously.
-	const BATCH_SIZE : int = 15
-	var spawned_in_batch : int = 0
+	if randf() < skip_module_chance:
+		return
 
-	for mod in modules:
-		if not (mod is Node3D):
+	# Wall furniture (independent per-room roll, stacks with other placements).
+	if randf() < wall_furniture_chance:
+		_try_spawn_wall_furniture(gen, mod)
+		if _budget_spent():
+			await get_tree().process_frame
+
+	# Furniture rooms: 1 table at centre, 2–4 stools around it.
+	# Skips the scatter pass for this room so we don't overcrowd.
+	if randf() < furniture_group_chance:
+		if await _spawn_furniture_group_staged(gen, mod) > 0:
+			return
+
+	var count : int = randi_range(props_per_room_min, props_per_room_max)
+	for _i in count:
+		var pos : Vector3 = gen.get_random_safe_interior_point(mod, spawn_height, 2.0)
+		if pos == Vector3.ZERO:
 			continue
+		_place_prop(pos)
+		if _budget_spent():
+			await get_tree().process_frame
 
-		# Skip connectors and end-caps — only place props in main rooms.
-		# DungeonGenerationFunction registers connectors/caps with
-		# counts_toward_goal=false to exclude them from the explore counter.
-		if not bool(mod.get_meta("counts_toward_goal", false)):
-			continue
 
-		if randf() < skip_module_chance:
-			continue
-
-		# Wall furniture (independent per-room roll, stacks with other placements).
-		if randf() < wall_furniture_chance:
-			var wall_placed : int = _try_spawn_wall_furniture(gen, mod as Node3D)
-			spawned_in_batch += wall_placed
-			if spawned_in_batch >= BATCH_SIZE:
-				spawned_in_batch = 0
-				await get_tree().process_frame
-
-		# Furniture rooms: 1 table at centre, 2–4 stools around it.
-		# Skips the scatter pass for this room so we don't overcrowd.
-		if randf() < furniture_group_chance:
-			var placed : int = _try_spawn_furniture_group(gen, mod as Node3D)
-			if placed > 0:
-				spawned_in_batch += placed
-				if spawned_in_batch >= BATCH_SIZE:
-					spawned_in_batch = 0
-					await get_tree().process_frame
-				continue
-
-		var count : int = randi_range(props_per_room_min, props_per_room_max)
-		for _i in count:
-			var pos : Vector3 = gen.get_random_safe_interior_point(
-				mod as Node3D, spawn_height, 2.0)
-			if pos == Vector3.ZERO:
-				continue
-			spawned_in_batch += _place_prop(pos)
-			if spawned_in_batch >= BATCH_SIZE:
-				spawned_in_batch = 0
-				await get_tree().process_frame
+# Staged twin of _try_spawn_furniture_group(): the same table + stools, one placement per budget check.
+func _spawn_furniture_group_staged(gen: Node, mod: Node3D) -> int:
+	if not gen.has_method("get_module_aabb"):
+		return 0
+	var aabb : AABB = gen.get_module_aabb(mod)
+	if aabb.size == Vector3.ZERO:
+		return 0
+	var centre : Vector3 = aabb.get_center()
+	var floor_y : float = mod.global_position.y + spawn_height
+	var j : float = furniture_group_centre_jitter
+	var table_pos := Vector3(
+		centre.x + randf_range(-j, j),
+		floor_y,
+		centre.z + randf_range(-j, j)
+	)
+	var total : int = _place_prop(table_pos, TABLE_MODEL)
+	if _budget_spent():
+		await get_tree().process_frame
+	var stool_count : int = randi_range(2, 4)
+	var start_angle : float = randf() * TAU
+	for i in stool_count:
+		var base_angle : float = start_angle + TAU * float(i) / float(stool_count)
+		var angle : float = base_angle + randf_range(-furniture_group_angle_jitter, furniture_group_angle_jitter)
+		var r : float = furniture_group_radius + randf_range(-furniture_group_radius_jitter, furniture_group_radius_jitter)
+		var stool_pos := Vector3(
+			table_pos.x + cos(angle) * r,
+			floor_y,
+			table_pos.z + sin(angle) * r
+		)
+		total += _place_prop(stool_pos, STOOL_MODEL)
+		if _budget_spent():
+			await get_tree().process_frame
+	return total
 
 
 func _place_prop(pos: Vector3, model_path: String = "", y_rot: float = -1.0, as_topper: bool = false) -> int:
@@ -302,42 +364,3 @@ func _try_spawn_wall_furniture(gen: Node, mod: Node3D) -> int:
 	if gen.has_method("is_position_clear") and not gen.is_position_clear(pos + Vector3(0.0, 0.6, 0.0), 0.1):
 		return 0
 	return _place_prop(pos, model, y_rot)
-
-
-# Attempts to place a table-with-stools group near the room's centre.
-# The table is offset from dead-centre by a small random jitter; each stool
-# has its own angle + radius jitter so groups don't look mechanically radial.
-# Returns the number of props placed (0 if the module's AABB is missing,
-# letting the caller fall back to scattered random props for that room).
-func _try_spawn_furniture_group(gen: Node, mod: Node3D) -> int:
-	if not gen.has_method("get_module_aabb"):
-		return 0
-	var aabb : AABB = gen.get_module_aabb(mod)
-	if aabb.size == Vector3.ZERO:
-		return 0
-
-	var centre : Vector3 = aabb.get_center()
-	var floor_y : float = mod.global_position.y + spawn_height
-	var j : float = furniture_group_centre_jitter
-	var table_pos := Vector3(
-		centre.x + randf_range(-j, j),
-		floor_y,
-		centre.z + randf_range(-j, j)
-	)
-	# Sum _place_prop returns so any toppers on the table count toward the
-	# BATCH_SIZE yielding pass in the caller.
-	var total : int = _place_prop(table_pos, TABLE_MODEL)
-
-	var stool_count : int = randi_range(2, 4)
-	var start_angle : float = randf() * TAU
-	for i in stool_count:
-		var base_angle : float = start_angle + TAU * float(i) / float(stool_count)
-		var angle : float = base_angle + randf_range(-furniture_group_angle_jitter, furniture_group_angle_jitter)
-		var r : float = furniture_group_radius + randf_range(-furniture_group_radius_jitter, furniture_group_radius_jitter)
-		var stool_pos := Vector3(
-			table_pos.x + cos(angle) * r,
-			floor_y,
-			table_pos.z + sin(angle) * r
-		)
-		total += _place_prop(stool_pos, STOOL_MODEL)
-	return total

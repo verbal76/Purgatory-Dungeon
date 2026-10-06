@@ -67,12 +67,20 @@ var _active_locks : Array     = []
 #  BOOT
 # ══════════════════════════════════════════════════════════════
 
-func boot(player: Node3D, dungeon_gen: Node, enemy_mgr: Node3D) -> void:
+# Staged setup (see Purgatory_Dungeon_main_game_file.gd): the trigger of every large room is created in its
+# own budgeted step, nearest rooms first. A trigger only matters once the player enters its room.
+var stage_near_done : bool = true
+var stage_done : bool = true
+
+
+func boot(player: Node3D, dungeon_gen: Node, enemy_mgr: Node3D, origin: Vector3 = Vector3.ZERO) -> void:
 	_player      = player
 	_dungeon_gen = dungeon_gen
 	_enemy_mgr   = enemy_mgr
 	_connect_arming()
-	_setup_room_triggers()
+	if _dungeon_gen != null:
+		stage_done = false   # (never gates the hand-over: a trigger only matters once its room is entered)
+		call("_stage_triggers", origin)   # dynamic call: runs as a background coroutine
 
 
 # ══════════════════════════════════════════════════════════════
@@ -115,16 +123,20 @@ func _on_day_changed_no_buffs(day: int) -> void:
 #  TRIGGER SETUP
 # ══════════════════════════════════════════════════════════════
 
-func _setup_room_triggers() -> void:
-	if _dungeon_gen == null:
-		return
-	var modules : Array = _dungeon_gen.placed_modules
+func _stage_triggers(origin: Vector3) -> void:
+	var main : Node = get_parent()
+	var budgeted : bool = main != null and main.has_method("stage_over")
+	var modules : Array = _dungeon_gen.get_modules_by_distance(origin) \
+			if _dungeon_gen.has_method("get_modules_by_distance") else _dungeon_gen.placed_modules
 	for mod in modules:
 		if not is_instance_valid(mod):
 			continue
 		if not (mod.scene_file_path in LARGE_ROOM_PATHS):
 			continue
 		_create_trigger_for_module(mod)
+		if budgeted and main.stage_over():
+			await get_tree().process_frame
+	stage_done = true
 
 
 func _create_trigger_for_module(mod: Node3D) -> void:

@@ -24,18 +24,50 @@ const _COLORS      : Array[String] = ["bronze", "silver", "gold"]
 @export var mimic_chance       : float = 0.50
 
 
-func _ready() -> void:
-	await get_tree().process_frame
-	await get_tree().process_frame
-	_entry_mark("chests_begin")
-	_spawn_all_chests()
-	_entry_mark("chests_end")
+# Staged population (see Purgatory_Dungeon_main_game_file.gd): dead-end rooms are visited nearest the player
+# first; the coroutine gives the frame back whenever the shared per-frame budget is spent.
+var stage_near_done : bool = true
+var stage_done : bool = true
+
+
+func stage_begin(origin: Vector3, near_radius: float) -> void:
+	stage_near_done = false
+	stage_done = false
+	call("_stage_run", origin, near_radius)   # dynamic call: runs as a background coroutine
 
 
 func _entry_mark(label: String) -> void:
 	var main : Node = get_parent()
 	if main != null and main.has_method("entry_mark"):
 		main.entry_mark(label)
+
+
+func _stage_run(origin: Vector3, near_radius: float) -> void:
+	var main : Node = get_parent()
+	var gen : Node = main.get_node_or_null("DungeonGenerationFunction")
+	if gen == null:
+		push_warning("ChestManager: DungeonGenerationFunction not found.")
+		stage_near_done = true
+		stage_done = true
+		return
+	var modules : Array = gen.get_modules_by_distance(origin)
+	var near_count : int = gen.count_modules_within(modules, origin, near_radius)
+	_entry_mark("chests_begin")
+	if near_count == 0:
+		stage_near_done = true
+	var index : int = 0
+	for mod in modules:
+		index += 1
+		if is_instance_valid(mod) and mod is Node3D and _is_chest_candidate(mod as Node3D) \
+				and randf() < chest_spawn_chance:
+			_spawn_chest_in(gen, mod as Node3D)
+		if index >= near_count:
+			stage_near_done = true
+		if main.has_method("stage_over") and main.stage_over():
+			await get_tree().process_frame
+	stage_near_done = true
+	stage_done = true
+	_entry_mark("chests_end")
 
 
 func _spawn_all_chests() -> void:
@@ -70,12 +102,12 @@ func _is_chest_candidate(mod: Node3D) -> bool:
 		return false
 	if mod.find_child("Player_Spawn", true, false) != null:
 		return false
-	return mod.find_children("Connection_*", "Node3D", true, false).size() == 1
+	return _connections_of(mod).size() == 1
 
 
 # The room's doorway marker (a dead end has one).
 func _doorway_of(mod: Node3D) -> Node3D:
-	var conns : Array = mod.find_children("Connection_*", "Node3D", true, false)
+	var conns : Array = _connections_of(mod)
 	return conns[0] as Node3D if not conns.is_empty() else null
 
 
@@ -175,3 +207,11 @@ func _spot_is_clear(gen: Node, pos: Vector3) -> bool:
 		return true
 	return gen.is_position_clear(pos + Vector3(0.0, 0.5, 0.0), 0.5) \
 			and gen.is_position_clear(pos + Vector3(0.0, 1.0, 0.0), 0.4)
+
+
+# The generator keeps each module's Connection_* markers (found once); fall back to a tree search.
+func _connections_of(mod: Node3D) -> Array:
+	var gen : Node = get_parent().get_node_or_null("DungeonGenerationFunction") if get_parent() != null else null
+	if gen != null and gen.has_method("get_module_connections"):
+		return gen.get_module_connections(mod)
+	return mod.find_children("Connection_*", "Node3D", true, false)

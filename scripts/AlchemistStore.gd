@@ -15,6 +15,8 @@
 # ==============================================================================
 extends Control
 
+const DungeonEntry = preload("res://scripts/dungeon_entry.gd")   # threaded dungeon load (no global class name)
+
 @export var character_selection_scene : String = "res://scenes/CharacterSelection.tscn"
 const DUNGEON_SCENE    : String = "res://scenes/Purgatory_Dungeon_main_game_file.tscn"
 const PERKS_PER_PAGE   : int    = 9
@@ -367,7 +369,7 @@ func _start_new_run() -> void:
 
 	RunLifecycle.end_run_cleanup()
 
-	get_tree().change_scene_to_file(DUNGEON_SCENE)
+	DungeonEntry.start(get_tree(), DUNGEON_SCENE)
 
 
 # ══════════════════════════════════════════════════════════════
