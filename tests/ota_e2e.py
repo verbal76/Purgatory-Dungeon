@@ -354,27 +354,24 @@ class Chain:
 
     # -- OTAs
     def make_ota(self, seq, variant=None, channel=CHANNEL):
-        """Builds, signs and returns OTA <seq>. Seq 1 uses the self-test payload; others export a new patch from the kept tree."""
+        """Builds, signs and returns OTA <seq>. Every seq exports a fresh patch (its own probe variant) from the kept tree."""
         ota_id = "%s-%06d" % (channel, seq)
         tag = "ota-" + ota_id
         variant = seq if variant is None else variant
         d = os.path.join(self.work, "ota-%d" % seq)
         os.makedirs(d, exist_ok=True)
         pck, files = os.path.join(d, "payload.pck"), os.path.join(d, "files.json")
-        if seq == 1 and variant == 1:
-            shutil.copyfile(os.path.join(self.payload, "payload.pck"), pck)
-            shutil.copyfile(os.path.join(self.payload, "files.json"), files)
-        else:
-            probe = os.path.join(self.head_tree, "data", "ota_probe.json")
-            open(probe, "w").write('{\n  "ota_self_test": true,\n  "variant": %d\n}\n' % variant)
-            sh([self.godot, "--headless", "--path", self.head_tree, "--import"], timeout=600)
-            r = sh([self.godot, "--headless", "--path", self.head_tree, "--export-patch", PRESET, pck, "--patches", self.base_pck], timeout=900)
-            if not os.path.isfile(pck):
-                raise SystemExit("export-patch for OTA %d failed: %s" % (seq, (r.stdout + r.stderr)[-800:]))
-            r = sh([sys.executable, os.path.join(ROOT, "tools", "ota", "payload_check.py"), pck, "--base", self.base_pck,
-                    "--boundary", os.path.join(self.src, "ota", "boundary.json"), "--files-out", files])
-            if r.returncode != 0:
-                raise SystemExit("payload_check refused OTA %d: %s" % (seq, r.stderr))
+        # every OTA (OTA 1 included) is exported from the kept tree with its own probe variant
+        probe = os.path.join(self.head_tree, "data", "ota_probe.json")
+        open(probe, "w").write('{\n  "ota_self_test": true,\n  "variant": %d\n}\n' % variant)
+        sh([self.godot, "--headless", "--path", self.head_tree, "--import"], timeout=600)
+        r = sh([self.godot, "--headless", "--path", self.head_tree, "--export-patch", PRESET, pck, "--patches", self.base_pck], timeout=900)
+        if not os.path.isfile(pck):
+            raise SystemExit("export-patch for OTA %d failed: %s" % (seq, (r.stdout + r.stderr)[-800:]))
+        r = sh([sys.executable, os.path.join(ROOT, "tools", "ota", "payload_check.py"), pck, "--base", self.base_pck,
+                "--boundary", os.path.join(self.src, "ota", "boundary.json"), "--files-out", files])
+        if r.returncode != 0:
+            raise SystemExit("payload_check refused OTA %d: %s" % (seq, r.stderr))
         asset = os.path.join(d, f"purgatory-{ota_id}.pck")
         shutil.copyfile(pck, asset)
         manifest = os.path.join(d, "manifest.json")
