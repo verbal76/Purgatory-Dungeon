@@ -89,7 +89,7 @@ Cinzel's digit "1" resembles a capital I, so code-like strings with digits (key 
 | Key-binding buttons ("W", "LMB", "Pad Axis1-") | Source Sans | **Source Sans (`FieldButton`)** | would otherwise inherit Cinzel from `Button`; digit 1 ≈ I |
 | Quick-reference table, column captions | Source Sans | unchanged | reference data |
 | Back / Reset Controls to Default | Source Sans | **Cinzel** | |
-| Touch Controls sliders / "Show performance readout" rows | Source Sans | label **Cinzel** (row), hint Source Sans | same row component |
+| Touch Controls sliders / Options > About rows ("Show performance readout" is a developer-only row there) | Source Sans | label **Cinzel** (row), hint Source Sans | same row component |
 | Pause: title, Resume (primary), Options, Exit to Main Menu (danger) | mixed | all Cinzel | |
 | Pause: Master/Music/SFX Volume, Display Mode, Resolution labels | Source Sans | **Cinzel (`ShortLabel`)** | same names as Options |
 

@@ -39,7 +39,7 @@ func _ready() -> void:
 			fails += 1
 			continue
 		if path.ends_with("MainMenu.tscn"):
-			var label := inst.get_node_or_null("VersionLabel") as Label
+			var label := inst.find_child("VersionLabel", true, false) as Label   # inside the footer box (Exit button above it)
 			if label == null or not label.text.begins_with("Purgatory Dungeon") or not label.text.contains("v%d" % BuildInfo.public_version()):
 				printerr("FAIL: main menu shows the public version (label: %s)" % (label.text if label != null else "missing"))
 				fails += 1

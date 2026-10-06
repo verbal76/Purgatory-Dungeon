@@ -68,6 +68,7 @@ func _ready() -> void:
 	_t_real_mount()
 	await _t_updater()
 	await _t_boot_node()
+	await _t_status_api()
 	_t_policy_and_taps()
 	_t_boot_gating()
 	_t_save_root_mirror()
@@ -1490,6 +1491,117 @@ func _t_boot_node() -> void:
 		_check(not (fb as String).contains("update 1") and not (fb as String).contains("· update"), "no 'update K' wording anywhere")
 	bb.free()
 	b.queue_free()
+
+
+# --- 13b. public status API for Options > About (Boot.status_snapshot / update_state / check_now) --------------------
+
+func _boot_on_stub(stub: HttpStub, c: OtaCore) -> Node:
+	var b: Node = _fake_boot(c)
+	b._args["ota-pointer"] = stub.url("/dev/latest.json")
+	c.allow_local_http = true
+	add_child(b)
+	return b
+
+
+func _t_status_api() -> void:
+	# the inert autoload: everything answers "inactive" and a check starts nothing
+	var real: Node = get_node_or_null("/root/Boot")
+	if real != null:
+		var rs: Dictionary = real.status_snapshot()
+		_check(rs["state"] == "inactive" and not rs["client"] and rs["channel"] == "" and not rs["busy"] and rs["staged_version"] == "", "inert Boot: snapshot is inactive")
+		_check(not real.can_check_now() and real.update_state() == "inactive" and real.last_error() == "", "inert Boot: no check possible, no error")
+		_check(await real.check_now() == "inactive", "inert Boot: check_now() starts nothing")
+		_check(real.get("_overlay") == null, "inert Boot never created an overlay")
+
+	var stub: HttpStub = _stub()
+	var root: String = _new_root()
+	var c: OtaCore = _core(root)
+	c.boot(_fake_mount)   # embedded baseline
+	var b: Node = _boot_on_stub(stub, c)
+	var changes: Array = [0]
+	b.status_changed.connect(func() -> void: changes[0] += 1)
+	var s0: Dictionary = b.status_snapshot()
+	for k in ["client", "inert_reason", "state", "busy", "native_version", "running_version", "app_minor", "ota_id", "ota_seq", "staged_version",
+			"staged_ota_id", "latest_ota_id", "checked_at", "runtime_id", "runtime_fingerprint", "channel", "engine", "platform", "bootstrap",
+			"baseline_source", "healthy", "rollback_count", "disabled", "rejected", "last_error"]:
+		_check(s0.has(k), "snapshot has '%s'" % k)
+	_check(s0["state"] == "unchecked" and s0["client"] and s0["running_version"] == "7" and s0["native_version"] == "7" and s0["ota_id"] == "", "fresh baseline: unchecked, v7, no OTA")
+	_check(s0["runtime_id"] == RUNTIME and s0["runtime_fingerprint"] == FP and s0["channel"] == "dev" and s0["platform"] == "android", "snapshot carries runtime identity")
+	_check(b.can_check_now(), "a manual check is allowed")
+	var js: String = JSON.stringify(s0)
+	_check(not js.contains("PRIVATE") and not js.contains("BEGIN") and not js.contains("PUBLIC"), "snapshot holds no key material")
+
+	# nothing published yet: the channel answers 404 -> offline, with a technical reason only for diagnostics
+	var r: String = await b.check_now()
+	_check(r == "offline" and b.update_state() == "offline" and b.last_error().contains("HTTP 404"), "unpublished channel: offline (%s / %s)" % [r, b.last_error()])
+	_check(b.can_check_now() and changes[0] > 0, "the client is free again and announced its progress")
+
+	# an update: check_now = check + download + verify + stage (the same path as the automatic check)
+	_published(stub, 1)
+	var n_before: int = changes[0]
+	var first: Array = [""]
+	var kick: Callable = func() -> void: first[0] = await b.check_now()
+	kick.call()
+	_check(not b.can_check_now() and b.update_state() == "checking", "while a check runs: checking, no second check")
+	_check(await b.check_now() == "busy", "a second check_now() while one runs returns 'busy'")
+	while not b.can_check_now():
+		await get_tree().process_frame
+	await get_tree().process_frame
+	r = first[0]
+	_check(r == "pending_restart" and b.update_state() == "pending_restart", "check_now stages the update: pending_restart (%s)" % r)
+	_check(c.slot_id("pending") == "dev-000001" and FileAccess.file_exists(c.package_path("dev-000001")), "the verified package is staged as PENDING through the existing path")
+	_check(stub.hit_count("/dev/dev-000001.pck") == 1, "the package was downloaded once")
+	var s1: Dictionary = b.status_snapshot()
+	_check(s1["staged_version"] == "7.1" and s1["staged_ota_id"] == "dev-000001" and s1["latest_ota_id"] == "dev-000001", "snapshot names the staged update")
+	_check(s1["running_version"] == "7" and s1["ota_id"] == "", "nothing is applied mid-run: still the baseline")
+	_check(changes[0] > n_before, "status_changed fired during the check")
+	_check(b.get("_overlay") == null, "a finished download shows no overlay or toast")
+	b._on_update_finished("v7.1 (dev-000001) ready: restart to run it")
+	_check(b.get("_overlay") == null, "even the 'restart to run it' result creates no on-screen text")
+	# again: still staged, no re-download
+	r = await b.check_now()
+	_check(r == "pending_restart" and stub.hit_count("/dev/dev-000001.pck") == 1, "a second check keeps the staged update, no second download")
+
+	# disabled (developer baseline mode)
+	c.set_disabled(true)
+	_check(b.update_state() == "disabled" and not b.can_check_now() and await b.check_now() == "disabled", "disabled: no check")
+	c.set_disabled(false)
+
+	# a running OTA is named by the snapshot
+	var root2: String = _new_root()
+	var c2: OtaCore = _make_current(root2, 3)
+	c2 = _core(root2)
+	c2.boot(_fake_mount)
+	var b2: Node = _fake_boot(c2)
+	var s2: Dictionary = b2.status_snapshot()
+	_check(s2["running_version"] == "7.3" and s2["ota_id"] == "dev-000003" and s2["ota_seq"] == 3 and s2["app_minor"] == 3 and s2["native_version"] == "7", "running OTA 7.3 (#3) on APK v7")
+	b2.free()
+
+	# a bad signature is rejected, installs nothing, and reports a technical reason for diagnostics only
+	var stub2: HttpStub = _stub()
+	_published(stub2, 1, {}, PackedByteArray(), _other)
+	var c3: OtaCore = _core(_new_root())
+	c3.boot(_fake_mount)
+	var b3: Node = _fake_boot(c3)
+	b3._args["ota-pointer"] = stub2.url("/dev/latest.json")
+	c3.allow_local_http = true
+	add_child(b3)
+	r = await b3.check_now()
+	_check(r == "rejected" and b3.last_error() != "" and c3.slot("pending").is_empty() and b3.status_snapshot()["staged_version"] == "", "wrong signature: rejected, nothing staged (%s)" % b3.last_error())
+	_check(stub2.hit_count("/dev/dev-000001.pck") == 0, "a rejected manifest never downloads the package")
+	# another runtime is incompatible
+	var stub3: HttpStub = _stub()
+	_published(stub3, 1, {"runtime_fingerprint": "f".repeat(64)})
+	var c4: OtaCore = _core(_new_root())
+	c4.boot(_fake_mount)
+	var b4: Node = _fake_boot(c4)
+	b4._args["ota-pointer"] = stub3.url("/dev/latest.json")
+	c4.allow_local_http = true
+	add_child(b4)
+	r = await b4.check_now()
+	_check(r == "incompatible" and c4.slot("pending").is_empty(), "other runtime: incompatible, nothing staged (%s)" % r)
+	for n in [b, b3, b4, stub, stub2, stub3]:
+		n.queue_free()
 
 
 # --- 14. check policy and tap gesture (pure logic) ---------------------------------------------------------------------

@@ -224,7 +224,7 @@ time, fades when the player does the thing, is saved, and is retired after 3 ign
 ## Phone UI
 `scripts/touch/mobile_ui.gd` (touch platforms only) enlarges the default font, raises any smaller
 font and gives buttons a 72 px minimum on the 1280x720 phone canvas. Screens with fixed layouts were
-adapted individually (main menu without Quit, character select without dev toggles and with the
+adapted individually (main menu with an Exit button above the version text, kept inside the safe area; character select without dev toggles and with the
 game's own keyboard, Alchemist 3x2 pages, pause menu Resume/Options/Exit, death-screen buttons,
 tap-to-stop buff roulette, wallet moved top-right). `tools/ui_shot.gd` renders any scene at phone
 shape for review (needs a display; opengl3 under xvfb works).
@@ -234,7 +234,7 @@ The APK contains the OTA client (`scripts/boot/`) and declares the INTERNET perm
 index and package (nothing else uses the network). Saves live in `user://PurgetoryDungeon`;
 OTA state lives in `user://ota`, so updates never write the save folder, and the save folder is backed up before an update is
 first activated. The APK bakes `runtime_id` / `runtime_fingerprint` into `build_info.json`; `tools/verify_apk.py` requires them.
-How updates are made, published, applied and rolled back: `docs/OTA.md`. The main menu footer shows the running version: `Purgatory Dungeon v7` on the APK as installed and `v7.K` while an OTA runs; tapping the top-left corner 5 times opens the diagnostics overlay.
+How updates are made, published, applied and rolled back: `docs/OTA.md`. Players see no OTA/debug text over the menus or the game: the main menu footer is the Exit button over the plain version (`Purgatory Dungeon v7` on the APK as installed, `v7.K` while an OTA runs), inside the phone safe area. Update state, the OTA label, runtime/channel and **Check for updates** / **Copy diagnostics** live in **Options > About** (last tab, 5th on a phone); an update that was downloaded and verified says "Update ready - restart to apply" there and starts the next time the game is opened. The native diagnostics overlay is a developer tool: tap the version in About seven times to unlock Developer tools (Open update diagnostics, performance readout), or use F9 / five quick taps in the top-left corner.
 
 ## Lifecycle and saves
 - Saves live in the app's private `user://` (folder `PurgetoryDungeon`, spelling kept for
@@ -247,8 +247,9 @@ How updates are made, published, applied and rolled back: `docs/OTA.md`. The mai
 
 ## Performance notes
 Mobile renderer, 3D scaled to 0.75, MSAA off, no shadow-casting lights anywhere, torch lights fade by
-distance. Options > Gameplay > "Show performance readout" overlays FPS, 1% low, worst frame, draw
-calls; the same line goes to `adb logcat` every 30 s. Real-device numbers are still to be gathered.
+distance. The performance readout (FPS, 1% low, worst frame, draw calls; the same line goes to `adb logcat` every 30 s) is a
+developer tool, off by default: Options > About, tap the version seven times, then "Show performance readout" (turning
+Developer tools off also turns it off). Real-device numbers are still to be gathered.
 
 ## Testing
 `tests/run_tests.sh` includes `test_touch_controls` (the Classic scheme, run with `PURGATORY_FORCE_TOUCH=1`),
