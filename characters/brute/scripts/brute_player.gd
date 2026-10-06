@@ -865,6 +865,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		var look        : float = (event as InputEventMouseMotion).relative.x
 		var actual_sens : float = mouse_sensitivity * turn_speed_modifier
 		_yaw -= look * actual_sens
+		# Show the turn on the frame it arrives, not at the next 30 Hz physics tick (at 20-40 fps the tick cadence made
+		# the camera stand still for a frame, then jump). Same states as the tick: the view is locked while blocking / dead.
+		if not _is_dead and not _is_blocking:
+			_apply_yaw_now()
 
 	if event.is_action_pressed("kick") and not _is_kicking and not _is_attacking and not _is_sliding and not _is_blocking:
 		_do_kick()
@@ -1013,11 +1017,15 @@ func _handle_view_input(delta: float) -> void:
 		_yaw -= look_x * actual_speed * delta
 
 
-func _apply_view_rotation() -> void:
+func _apply_yaw_now() -> void:
 	var yaw_out : float = _yaw
 	if _status_drunk:
 		yaw_out += sin(Time.get_ticks_msec() * 0.002) * 0.18
 	rotation.y = yaw_out
+
+
+func _apply_view_rotation() -> void:
+	_apply_yaw_now()
 
 	var arm : SpringArm3D = get_node_or_null("SpringArm3D") as SpringArm3D
 	if arm != null:

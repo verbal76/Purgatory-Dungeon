@@ -79,7 +79,7 @@ const LOOK_CURVE_EXP    := 2.0    # >1: fine control near the centre, fast turn 
 const AIM_SMOOTH_TAU_MAX := 0.12  # s: low-pass time constant at 100% Aim Smoothing (0% = off, linear in between)
 const LOOK_MAX_YAW_RATE := 4.2    # rad/s at full deflection and 100% sensitivity (~240 deg/s)
 const LOOK_PITCH_RATIO  := 0.55   # pitch rate / yaw rate (the players have no pitch today and ignore it)
-const LOOK_MAX_STEP     := 0.1    # s: a hitch never turns the camera more than this much in one step
+const LOOK_MAX_STEP     := 0.25   # s: one frame never integrates more than this (a pause / app resume must not jump the camera)
 # The players turn by `relative.x * mouse_sensitivity` (0.0025 rad per mouse px); the rate is expressed in
 # that unit so the same input path as the classic swipe is used.
 const LOOK_RAD_PER_MOUSE_PX := 0.0025
@@ -482,6 +482,8 @@ func _process(delta: float) -> void:
 	if _stick_active and _stick_vec.length() > STICK_DEADZONE:
 		move_time += delta
 	_poll_settings(delta)
+	if touch_enabled:
+		_aim_frame(delta)
 	_status_poll += delta
 	if _status_poll >= 0.1:
 		_status_poll = 0.0
@@ -504,16 +506,22 @@ func _poll_settings(delta: float) -> void:
 		_relayout()
 
 
-## Twin ATTACK drag: one look event per physics frame, a turn RATE (not a distance), so the
-## result does not depend on the frame time. Fed through the same mouse-motion path the classic swipe uses.
-func _physics_process(delta: float) -> void:
-	if (_look_cmd == Vector2.ZERO and _aim_smoothed == Vector2.ZERO) or get_tree().paused or not touch_enabled:
+## Twin ATTACK drag: the aim is integrated in _process, on the RENDERED frame with its REAL delta, not in the 30 Hz
+## physics tick. This is camera input, not simulation: at 20-40 fps a physics-tick cadence meant 0, 1 or several
+## back-to-back ticks per rendered frame, so the camera stood still, then caught up; with the real frame delta the same
+## finger movement turns the same angle per second at any frame rate (a long frame turns proportionally more in one
+## step instead of being split into bursts). One event per rendered frame, only while turning, delivered the same frame.
+func _aim_frame(delta: float) -> void:
+	if _look_cmd == Vector2.ZERO and _aim_smoothed == Vector2.ZERO:
 		return
-	look_step(delta)
+	if look_step(delta) != Vector2.ZERO:
+		# Deliver the motion now. Left buffered it would reach the player at the START of the next frame, so a long
+		# frame would show no turn at all and the following (short) one would show all of it: hesitate, then catch up.
+		Input.flush_buffered_events()
 
 
-## Applies one look step of `delta` seconds: the aim command is low-passed (time constant AIM_SMOOTH_TAU_MAX x the
-## Aim Smoothing setting; alpha = 1 - exp(-dt / tau) so it is frame-rate independent) and turned into mouse-motion px.
+## Applies one look step of `delta` real seconds: the aim command is low-passed (time constant AIM_SMOOTH_TAU_MAX x the
+## Aim Smoothing setting; alpha = 1 - exp(-dt / tau), exact for any dt) and turned into mouse-motion px = rate x dt.
 ## Returns the px sent.
 func look_step(delta: float) -> Vector2:
 	if _look_cmd == Vector2.ZERO and _aim_smoothed == Vector2.ZERO:
