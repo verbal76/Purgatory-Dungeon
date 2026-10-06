@@ -116,15 +116,22 @@ func _layer_tests() -> void:
 	var tc: TouchControls = _new_layer(view)
 	await _frames(3)
 	_check(tc.is_twin() and tc.scheme == TouchControls.SCHEME_TWIN, "a fresh layer on a default install is twin-stick")
+	_check(is_equal_approx(tc.aim_smoothing, 0.6), "Aim Smoothing defaults to 60%% (%.2f)" % tc.aim_smoothing)
+	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = 0.0   # the raw response tests below measure the unsmoothed path
+	tc._apply_settings()
 	_removal_tests(tc)
 	await _ownership_tests(tc, view)
 	await _aim_tests(tc, view)
+	await _aim_filter_tests(tc, view)
+	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = 0.0
+	tc._apply_settings()
 	await _attack_drag_tests(tc, view)
 	await _lifecycle_tests(tc, view)
 	await _hit_tests(tc)
 	await _scheme_switch_tests(tc, view)
 	tc.queue_free()
 	await _frames(2)
+	SettingsManager.update_setting(TouchControls.KEY_AIM_SMOOTH, TouchControls.DEFAULT_AIM_SMOOTH)
 	await _onboarding_tests()
 	await _options_tests()
 	_check(_down_actions().is_empty(), "nothing is left pressed at the end")
@@ -155,6 +162,33 @@ func _settings_tests() -> void:
 	_check(TouchControls.scheme_from(SettingsManager.gameplay_settings.get(TouchControls.KEY_SCHEME, TouchControls.DEFAULT_SCHEME)) == "twin", "an existing install with no saved key gets twin-stick")
 	_check(TouchControls.scheme_from("") == "twin" and TouchControls.scheme_from(null) == "twin" and TouchControls.scheme_from("Classic") == "classic" and TouchControls.scheme_from("garbage") == "twin", "scheme_from normalises stored values")
 	SettingsManager.update_setting(TouchControls.KEY_SCHEME, "twin")
+	# Aim Smoothing: default, persisted, clamped, tolerant of older settings files without the key
+	SettingsManager.gameplay_settings.erase(TouchControls.KEY_AIM_SMOOTH)   # an older settings file without the key
+	_check(TouchControls.DEFAULT_AIM_SMOOTH == 60.0, "the Aim Smoothing default is 60% and lives in the touch layer (no entry in SettingsManager: an OTA must not touch the guarded settings code)")
+	SettingsManager.update_setting(TouchControls.KEY_AIM_SMOOTH, 35.0)
+	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = -1.0
+	SettingsManager.load_settings()
+	_check(float(SettingsManager.gameplay_settings.get(TouchControls.KEY_AIM_SMOOTH, -1.0)) == 35.0, "Aim Smoothing is persisted and reloaded")
+	var path2: String = SettingsManager._settings_path
+	var parsed2: Variant = JSON.parse_string(FileAccess.get_file_as_string(path2))
+	(parsed2 as Dictionary).erase(TouchControls.KEY_AIM_SMOOTH)
+	var f2 := FileAccess.open(path2, FileAccess.WRITE)
+	f2.store_string(JSON.stringify(parsed2))
+	f2.close()
+	SettingsManager.gameplay_settings.erase(TouchControls.KEY_AIM_SMOOTH)
+	SettingsManager.load_settings()
+	var probe := TouchControls.new()
+	add_child(probe)
+	probe._apply_settings()
+	_check(is_equal_approx(probe.aim_smoothing, 0.6), "an older settings file without the key gets 60%% (%.2f)" % probe.aim_smoothing)
+	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = 500.0
+	probe._apply_settings()
+	_check(probe.aim_smoothing == 1.0, "a value above 100 clamps to 100%")
+	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = -40.0
+	probe._apply_settings()
+	_check(probe.aim_smoothing == 0.0, "a negative value clamps to 0%")
+	probe.queue_free()
+	SettingsManager.update_setting(TouchControls.KEY_AIM_SMOOTH, 60.0)
 
 
 # ── layout ───────────────────────────────────────────────────────────────────────────────────────
@@ -349,6 +383,9 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 	_touch(2, kick.center, false)
 	_touch(0, s0, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(_down_actions().is_empty() and tc._owners.is_empty(), "all released (%s)" % [_down_actions()])
 
@@ -366,6 +403,9 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 	_touch(1, atk.center, false)
 	_touch(0, s0, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(_down_actions().is_empty(), "all released after the three-finger test (%s)" % [_down_actions()])
 
@@ -396,6 +436,9 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 	for i in 5:
 		_touch(i, Vector2.ZERO, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(tc._owners.is_empty() and tc._look_cmd == Vector2.ZERO and _down_actions().is_empty(), "all fingers up: no owners left")
 	# the engine's cancel path (a pointer cancelled by the OS) is a clean release too
@@ -411,6 +454,9 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 		Input.parse_input_event(cancel)
 		_flush()
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(tc._owners.is_empty() and tc._look_cmd == Vector2.ZERO and tc._atk_index == -1 and _down_actions().is_empty(), "a cancelled touch releases movement, attack and aim (%s)" % [_down_actions()])
 
@@ -425,17 +471,18 @@ func _aim_tests(tc: TouchControls, view: Vector2) -> void:
 	var radius: float = radius_of(tc)
 	# deadzone: a tiny deflection does not turn
 	_motion.clear()
+	var settle: float = TouchControls.AIM_SETTLE_PX * tc.ui_scale
 	_touch(0, l0, true)
-	_drag(0, l0 + Vector2(radius * TouchControls.LOOK_DEADZONE * 0.9, 0), Vector2.ZERO)
+	_drag(0, l0 + Vector2(settle + radius * TouchControls.AIM_ENGAGE * 0.9, 0), Vector2.ZERO)
 	await _frames(4)
-	_check(_real_motion().is_empty(), "inside the dead zone no look motion is sent (%d)" % _real_motion().size())
+	_check(_real_motion().is_empty(), "below the engage threshold no look motion is sent (%d)" % _real_motion().size())
 	# monotonic: deflection -> total px over 6 physics frames
 	var totals: Array = []
 	var last_events: int = 0
-	for f in [0.25, 0.5, 0.75, 1.0]:
+	for f in [0.3, 0.5, 0.75, 1.0]:
 		_touch(0, l0, false)
 		_touch(0, l0, true)
-		_drag(0, l0 + Vector2(radius * f, 0), Vector2.ZERO)
+		_drag(0, l0 + Vector2(settle + radius * f, 0), Vector2.ZERO)
 		_motion.clear()
 		await _frames(6)
 		var sum: float = 0.0
@@ -456,7 +503,7 @@ func _aim_tests(tc: TouchControls, view: Vector2) -> void:
 	_check(_real_motion().is_empty() and tc._look_cmd == Vector2.ZERO, "releasing ATTACK stops the turning")
 	# vertical drag sends vertical motion at the (lower) pitch rate
 	_touch(0, l0, true)
-	_drag(0, l0 + Vector2(0, radius), Vector2.ZERO)
+	_drag(0, l0 + Vector2(0, settle + radius), Vector2.ZERO)
 	_motion.clear()
 	await _frames(3)
 	var yv: float = 0.0
@@ -474,7 +521,7 @@ func _aim_tests(tc: TouchControls, view: Vector2) -> void:
 
 	# frame-rate independence: one second of the same deflection at different step sizes turns the same
 	_touch(0, l0, true)
-	_drag(0, l0 + Vector2(radius * 0.8, 0), Vector2.ZERO)
+	_drag(0, l0 + Vector2(settle + radius * 0.8, 0), Vector2.ZERO)
 	var sums: Dictionary = {}
 	for hz in [20, 30, 60, 120, 144]:
 		var acc := Vector2.ZERO
@@ -498,7 +545,185 @@ func _aim_tests(tc: TouchControls, view: Vector2) -> void:
 	_touch(0, l0, false)
 	_check(tc.look_step(1.0 / 30.0) == Vector2.ZERO, "no aim command, no look motion")
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
+
+
+# ── jitter, hysteresis, smoothing ────────────────────────────────────────────────────────────────
+func _aim_filter_tests(tc: TouchControls, view: Vector2) -> void:
+	var atk: TouchButton = tc.buttons["attack"]
+	var l0: Vector2 = atk.center
+	var radius: float = radius_of(tc)
+	var settle: float = TouchControls.AIM_SETTLE_PX * tc.ui_scale
+	_check(TouchControls.AIM_ENGAGE == 0.20 and TouchControls.LOOK_DEADZONE == 0.12 and TouchControls.LOOK_CURVE_EXP == 2.0 and TouchControls.AIM_SETTLE_PX == 6.0, "documented aim constants: engage 0.20, exit 0.12, curve 2.0, settle 6 px")
+	_check(TouchControls.AIM_SMOOTH_TAU_MAX == 0.12 and TouchControls.DEFAULT_AIM_SMOOTH == 60.0 and TouchControls.LOOK_MAX_YAW_RATE == 4.2, "documented smoothing / top rate constants: tau 120 ms at 100%, default 60%, 4.2 rad/s")
+	var at := func(v: float) -> Vector2: return l0 + Vector2(settle + radius * v, 0)
+
+	# 1) the thumb settling on the button: +-3 px jitter around touch-down is zero turn
+	_motion.clear()
+	_touch(0, l0, true)
+	for j in [Vector2(3, 0), Vector2(-3, 0), Vector2(0, 3), Vector2(0, -3), Vector2(3, 3), Vector2(-3, -3), Vector2(2, -2), Vector2(-2, 2), Vector2(5.5, 0)]:
+		_drag(0, l0 + j, Vector2.ZERO)
+		_check(tc._look_cmd == Vector2.ZERO and tc._atk_vec == Vector2.ZERO, "jitter %s px around touch-down turns nothing" % j)
+	await _frames(5)
+	_check(_real_motion().is_empty() and Input.is_action_pressed("attack"), "...and sends no look motion while attack stays held")
+	# 2) past the settle zone but under the engage threshold: still nothing
+	_drag(0, at.call(0.15), Vector2.ZERO)
+	_check(tc._look_cmd == Vector2.ZERO and not tc._atk_engaged, "a 0.15 deflection (%.0f px) does not engage" % (settle + radius * 0.15))
+	# 3) a slow deliberate drag turns monotonically and continuously (no jump at the engage point)
+	var prev: float = 0.0
+	var mono := true
+	var max_jump: float = 0.0
+	var engaged_at: float = -1.0
+	var v: float = 0.15
+	while v <= 0.98:
+		_drag(0, at.call(v), Vector2.ZERO)
+		var m: float = tc._look_cmd.length()
+		if m < prev - 0.0001:
+			mono = false
+		if m > 0.0 and engaged_at < 0.0:
+			engaged_at = v
+		max_jump = maxf(max_jump, m - prev)
+		prev = m
+		v += 0.01
+	_check(mono and prev > 0.9, "a slow drag turns monotonically up to nearly full rate (%.2f)" % prev)
+	_check(engaged_at >= TouchControls.AIM_ENGAGE - 0.001 and engaged_at < TouchControls.AIM_ENGAGE + 0.02, "turning engages at about 0.20 deflection (%.2f)" % engaged_at)
+	_check(max_jump < 0.06, "no step at the engage point: the largest rate change per 1%% of travel is %.3f of full" % max_jump)
+	# 4) hysteresis: once engaged, hovering between exit and entry keeps turning; below exit stops and needs the entry again
+	_drag(0, at.call(0.22), Vector2.ZERO)
+	_check(tc._atk_engaged and tc._look_cmd != Vector2.ZERO, "engaged at 0.22")
+	var stayed := true
+	for k in 20:
+		_drag(0, at.call(0.14 if k % 2 == 0 else 0.19), Vector2.ZERO)
+		if tc._look_cmd == Vector2.ZERO:
+			stayed = false
+	_check(stayed, "hovering between 0.14 and 0.19 after engaging keeps turning (no chatter)")
+	_drag(0, at.call(0.11), Vector2.ZERO)
+	_check(tc._look_cmd == Vector2.ZERO and not tc._atk_engaged, "falling below 0.12 stops the turn")
+	var quiet := true
+	for k in 20:
+		_drag(0, at.call(0.14 if k % 2 == 0 else 0.19), Vector2.ZERO)
+		if tc._look_cmd != Vector2.ZERO:
+			quiet = false
+	_check(quiet, "hovering between 0.14 and 0.19 while disengaged stays still (no chatter)")
+	_drag(0, at.call(0.21), Vector2.ZERO)
+	_check(tc._atk_engaged and tc._look_cmd != Vector2.ZERO, "crossing 0.20 engages again")
+	_touch(0, l0, false)
+	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
+	_flush()
+
+	# 5) smoothing: exponential low-pass, 63% after tau, frame-rate independent
+	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = 100.0
+	tc._apply_settings()
+	_check(is_equal_approx(tc.aim_smoothing, 1.0), "slider 100% = full smoothing")
+	_touch(0, l0, true)
+	_drag(0, at.call(1.0), Vector2.ZERO)
+	var target: float = tc._look_cmd.x
+	_check(target > 0.99, "full deflection target is 1.0 (%.2f)" % target)
+	var tau: float = TouchControls.AIM_SMOOTH_TAU_MAX
+	var finals: Dictionary = {}
+	var totals: Dictionary = {}
+	for hz in [20, 30, 60, 120, 144]:
+		tc._aim_smoothed = Vector2.ZERO
+		var steps_tau: int = int(round(float(hz) * tau))
+		var acc: float = 0.0
+		for i in steps_tau:
+			acc += tc.look_step(1.0 / float(hz)).x
+		var t_actual: float = float(steps_tau) / float(hz)
+		_check(absf(tc._aim_smoothed.x - target * (1.0 - exp(-t_actual / tau))) < 0.0005, "%d Hz: the step response follows 1-exp(-t/tau) (%.3f at %.3f s)" % [hz, tc._aim_smoothed.x, t_actual])
+		tc._aim_smoothed = Vector2.ZERO
+		var half_s: int = int(round(float(hz) * 0.5))
+		var acc2: float = 0.0
+		for i in half_s:
+			acc2 += tc.look_step(1.0 / float(hz)).x
+		finals[hz] = tc._aim_smoothed.x
+		totals[hz] = acc2
+	var f_ref: float = finals[60]
+	var t_ref: float = totals[60]
+	var indep := true
+	for hz in finals:
+		if absf(finals[hz] - f_ref) > 0.0005:
+			indep = false
+		if absf(totals[hz] - t_ref) > t_ref * 0.10:
+			indep = false
+	_check(indep, "after 0.5 s the smoothed command is identical at 20-144 Hz and the turn within 10%% (%s %s)" % [finals, totals])
+	_check(absf(finals[60] - (1.0 - exp(-0.5 / tau))) < 0.0005, "...and equals 1-exp(-0.5/tau)")
+	# 60% = 72 ms
+	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = 60.0
+	tc._apply_settings()
+	tc._aim_smoothed = Vector2.ZERO
+	for i in 9:
+		tc.look_step(0.008)
+	_check(absf(tc._aim_smoothed.x - target * (1.0 - exp(-1.0))) < 0.0005, "60%% smoothing reaches 63%% after 72 ms (%.3f)" % tc._aim_smoothed.x)
+	_check(tc.look_step(5.0).x > 0.0 and tc._aim_smoothed.x < 0.99, "a frame hitch advances the filter by at most LOOK_MAX_STEP")
+	# 0% = the raw, unsmoothed path
+	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = 0.0
+	tc._apply_settings()
+	tc._aim_smoothed = Vector2.ZERO
+	var px: Vector2 = tc.look_step(1.0 / 30.0)
+	var want_px: Vector2 = TouchControls.look_rates(tc._look_cmd, tc.look_gain) / TouchControls.LOOK_RAD_PER_MOUSE_PX / 30.0
+	_check(px.distance_to(want_px) < 0.0001 and tc._aim_smoothed == tc._look_cmd, "slider 0%% is the raw path: the first step already turns at the full command")
+	_touch(0, l0, false)
+	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
+	_flush()
+	# 6) release / cancel / background zero the smoothed command at once (no coasting)
+	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = 100.0
+	tc._apply_settings()
+	for how in ["release", "cancel", "background", "release_all"]:
+		_touch(1, l0, true)
+		_drag(1, at.call(1.0), Vector2.ZERO)
+		for i in 6:
+			tc.look_step(1.0 / 30.0)
+		_check(tc._aim_smoothed.x > 0.3, "[%s] the smoothed aim is live before" % how)
+		match how:
+			"release": _touch(1, l0, false)
+			"cancel":
+				var cancel := InputEventScreenTouch.new()
+				cancel.index = 1
+				cancel.pressed = false
+				cancel.canceled = true
+				Input.parse_input_event(cancel)
+				_flush()
+			"background": tc.notification(NOTIFICATION_APPLICATION_PAUSED)
+			_: tc.release_all()
+		_check(tc._aim_smoothed == Vector2.ZERO and tc._look_cmd == Vector2.ZERO and tc.look_step(1.0 / 30.0) == Vector2.ZERO, "[%s] the aim is exactly zero immediately, no coasting" % how)
+		_motion.clear()
+		await _frames(4)
+		_check(_real_motion().is_empty(), "[%s] nothing keeps turning" % how)
+		_touch(1, l0, false)
+		await get_tree().create_timer(0.25).timeout
+		await get_tree().process_frame
+		await get_tree().process_frame
+		await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
+		_flush()
+	# 7) back inside the dead zone with the finger down: the smoothed tail decays to exactly zero
+	_touch(0, l0, true)
+	_drag(0, at.call(1.0), Vector2.ZERO)
+	for i in 6:
+		tc.look_step(1.0 / 30.0)
+	_drag(0, at.call(0.05), Vector2.ZERO)
+	_check(tc._look_cmd == Vector2.ZERO and tc._aim_smoothed != Vector2.ZERO, "back in the dead zone the target is zero and the filter is still decaying")
+	var n: int = 0
+	while tc._aim_smoothed != Vector2.ZERO and n < 200:
+		tc.look_step(1.0 / 30.0)
+		n += 1
+	_check(tc._aim_smoothed == Vector2.ZERO and n < 60, "the tail ends at exactly zero (%d steps)" % n)
+	_touch(0, l0, false)
+	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
+	_flush()
+	# Classic ignores the setting entirely (it has no rate path)
+	_check(tc.is_twin(), "smoothing tests ran on twin-stick")
 
 
 # ── attack + drag ────────────────────────────────────────────────────────────────────────────────
@@ -532,11 +757,14 @@ func _attack_drag_tests(tc: TouchControls, view: Vector2) -> void:
 	_check(tc._owners[0]["kind"] == TouchControls.Owner.BUTTON and tc._owners[0]["button"] == "attack", "the dragging finger is still the attack button's")
 	_touch(0, atk.center, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_attack_events.clear()
 	# the aim response curve, measured from the touch-down point
 	_touch(0, atk.center, true)
-	_drag(0, atk.center + Vector2(radius * 0.5, 0), Vector2.ZERO)
+	_drag(0, atk.center + Vector2(TouchControls.AIM_SETTLE_PX * tc.ui_scale + radius * 0.5, 0), Vector2.ZERO)
 	var want: Vector2 = TouchControls.look_response(Vector2(0.5, 0))
 	_check(tc._look_cmd.distance_to(want) < 0.001, "the attack drag uses the aim response (%s vs %s)" % [tc._look_cmd, want])
 	# releasing ATTACK ends the drag and the turning, and then releases attack
@@ -546,6 +774,9 @@ func _attack_drag_tests(tc: TouchControls, view: Vector2) -> void:
 	await _frames(4)
 	_check(_real_motion().is_empty(), "no turning after ATTACK is released")
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(not Input.is_action_pressed("attack") and _attack_events == [true, false], "attack released once after the drag (%s)" % [_attack_events])
 	# a quick tap on ATTACK still lasts long enough for polling code
@@ -553,6 +784,9 @@ func _attack_drag_tests(tc: TouchControls, view: Vector2) -> void:
 	_touch(0, atk.center, false)
 	_check(Input.is_action_pressed("attack"), "a tap on ATTACK is still stretched to MIN_PRESS_MS")
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(not Input.is_action_pressed("attack"), "...and released")
 	# same-direction wandering across the whole screen never exceeds full deflection
@@ -561,6 +795,9 @@ func _attack_drag_tests(tc: TouchControls, view: Vector2) -> void:
 	_check(tc._look_cmd.length() <= 1.0 + 0.0001 and tc._look_cmd.length() > 0.9, "a far drag is limited to full deflection (%s)" % tc._look_cmd)
 	_touch(0, Vector2.ZERO, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 
 
@@ -643,6 +880,9 @@ func _scheme_switch_tests(tc: TouchControls, view: Vector2) -> void:
 	_drag(0, s0 + Vector2(100, 0), Vector2(100, 0))
 	SettingsManager.update_setting(TouchControls.KEY_SCHEME, "classic")
 	await get_tree().create_timer(0.7).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(not tc.is_twin() and tc.scheme == "classic", "choosing Classic switches the live layer")
 	_check(_down_actions().is_empty() and tc._owners.is_empty(), "switching releases every finger and action (%s)" % [_down_actions()])
@@ -674,6 +914,9 @@ func _scheme_switch_tests(tc: TouchControls, view: Vector2) -> void:
 	_check(Input.is_action_pressed("attack") and _real_motion().is_empty(), "Classic: dragging from ATTACK does not turn the camera")
 	_touch(2, atk.center, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	# and back to twin, also while the tree is paused (Options opened from the pause menu)
 	get_tree().paused = true
@@ -737,6 +980,9 @@ func _onboarding_tests() -> void:
 	_check(ob.is_done("aim"), "...which completes the aim hint")
 	_touch(0, atk.center, false)
 	await get_tree().create_timer(0.25).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 
 	# hints never sit on a control, for both schemes, with the USE button showing, at several shapes
@@ -791,8 +1037,19 @@ func _options_tests() -> void:
 		tw.button_pressed = true
 		_check(SettingsManager.gameplay_settings.get(TouchControls.KEY_SCHEME) == "twin", "choosing Twin-stick sets it back")
 		_check(not cl.button_pressed, "the selector is exclusive")
-	for key in [TouchControls.KEY_OPACITY, TouchControls.KEY_SCALE, TouchControls.KEY_LOOK]:
-		_check(scr._sliders.has(key), "the %s slider is still there for both schemes" % key)
+	for key in [TouchControls.KEY_OPACITY, TouchControls.KEY_SCALE, TouchControls.KEY_LOOK, TouchControls.KEY_AIM_SMOOTH]:
+		_check(scr._sliders.has(key), "the %s slider is there" % key)
+	var live: TouchControls = _new_layer(Vector2(1602, 720))
+	await _frames(2)
+	var sl: HSlider = scr._sliders[TouchControls.KEY_AIM_SMOOTH]
+	_check(sl.min_value == 0.0 and sl.max_value == 100.0 and is_equal_approx(sl.value, 60.0), "the Aim Smoothing slider is 0-100 and starts at the saved 60 (%.0f)" % sl.value)
+	sl.value = 25.0
+	_check(is_equal_approx(float(SettingsManager.gameplay_settings.get(TouchControls.KEY_AIM_SMOOTH)), 25.0), "moving the slider writes TouchAimSmoothing")
+	await get_tree().create_timer(0.7).timeout
+	_check(is_equal_approx(live.aim_smoothing, 0.25), "...and the live layer applies it without a restart (%.2f)" % live.aim_smoothing)
+	live.queue_free()
+	SettingsManager.update_setting(TouchControls.KEY_AIM_SMOOTH, 60.0)
+	_check(scr.find_child("Scheme_twin", true, false) != null, "the scheme selector is still there")
 	scr.queue_free()
 	# reopening reads the saved value
 	SettingsManager.update_setting(TouchControls.KEY_SCHEME, "classic")
@@ -890,6 +1147,9 @@ func _real_player_test(cls: String) -> void:
 	_check(_attack_events == [true], "[%s] no attack release/re-press during the drag (%s)" % [cls, _attack_events])
 	_touch(1, atk.center, false)
 	await get_tree().create_timer(0.2).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	var y6: float = player.rotation.y
 	await _frames(6)

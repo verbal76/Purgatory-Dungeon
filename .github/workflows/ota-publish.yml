@@ -14,7 +14,8 @@ name: OTA publish
 # AUTHORIZATION IS THE BRANCH NAME. Only a push to `ota/<channel>/<full 40-hex sha>` whose head commit IS that sha runs
 # this workflow (a moving branch name can never publish an unreviewed commit); any other `ota/**` branch fails at step 01
 # and publishes nothing. In order, each step failing closed:
-#   01 pin the SHA            02a public-repo + baked-REPO gate   02b identity (channel, seq)   03 native baseline (read-only)
+#   01 pin the SHA            02a public-repo + baked-REPO gate   02b identity (channel, seq)   02c baseline tag v<VERSION>
+#   03 native baseline (the published release + APK, read-only)
 #   04 classify vs baseline   05 runtime gate                     06 full test suite on the SHA (ota-tests.yml)
 #   07 build the payload      07b app_minor from the LIVE pointer 08 build the manifest  09 signing key  10 key == embedded key  11 sign
 #   12 inspect (client code)  13 create the immutable release     14 anonymous re-download + verify
@@ -28,7 +29,9 @@ name: OTA publish
 # repository, or a missing signing key ends in a receipt with published=false (never a failed-looking half publication).
 # TOKEN. GH_TOKEN is set only on the steps that create, upload to or clobber a release (13, 16) and on the signing-key step 09;
 # reads of published objects are anonymous on purpose (that is what a phone does). Configuration (nothing is created here):
-#   variable OTA_NATIVE_BASE_TAG  (required) the shipped native release whose APK is the baseline, e.g. v7
+#   variable OTA_NATIVE_BASE_TAG  OPTIONAL. The baseline is the published release "Purgatory Dungeon v<N>" (N = VERSION at the pinned
+#                                 commit, so 7 -> tag v7, APK Purgatory-Dungeon-v7.apk). When the variable is set it must equal
+#                                 that tag, otherwise the run refuses. Nothing has to be configured by the owner.
 #   secret   OTA_SIGNING_KEY_PEM_BASE64  signing key (preferred), else the private draft release "OTA signing key (do not delete)"
 #   variable OTA_ACCEPT_GUARDED   non-empty reason to allow guarded save/settings code in the payload
 on:
@@ -48,7 +51,7 @@ defaults:
     shell: bash
 
 env:
-  OTA_NATIVE_BASE_TAG: ${{ vars.OTA_NATIVE_BASE_TAG }}
+  OTA_NATIVE_BASE_TAG_OVERRIDE: ${{ vars.OTA_NATIVE_BASE_TAG }}   # optional; must equal v$(cat VERSION) when set (step 02c)
   OTA_ACCEPT_GUARDED: ${{ vars.OTA_ACCEPT_GUARDED }}
 
 jobs:
@@ -70,10 +73,13 @@ jobs:
       runtime_id: ${{ steps.base.outputs.runtime_id }}
       runtime_fingerprint: ${{ steps.base.outputs.runtime_fingerprint }}
       native_version: ${{ steps.base.outputs.native_version }}
+      native_tag: ${{ steps.nbt.outputs.tag }}
+    env:
+      DL_BASE: https://github.com/${{ github.repository }}/releases/download
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # the native baseline commit must be resolvable
+          fetch-depth: 0   # the native baseline commit (and the release tags) must be resolvable
           persist-credentials: false
 
       - name: 01 Pin the exact commit (branch must be ota/<channel>/<40-hex sha> and github.sha must equal it)
@@ -112,19 +118,38 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Publishing $id from ${GITHUB_SHA} to $GITHUB_REPOSITORY"
 
-      - name: 03 Native baseline (read-only, the shipped APK of OTA_NATIVE_BASE_TAG)
+      - name: 02c Native baseline tag (v<VERSION> of the pinned commit; OTA_NATIVE_BASE_TAG is optional and must agree)
+        id: nbt
+        if: steps.repo.outputs.ok == '1'
+        run: |
+          python3 tools/ota/publish_gates.py base-tag --version-file VERSION --var "$OTA_NATIVE_BASE_TAG_OVERRIDE" | tee nbt.out
+          cat nbt.out >> "$GITHUB_OUTPUT"
+          echo "OTA_NATIVE_BASE_TAG=$(sed -n 's/^tag=//p' nbt.out)" >> "$GITHUB_ENV"
+          echo "NATIVE_NUMBER=$(sed -n 's/^version=//p' nbt.out)" >> "$GITHUB_ENV"
+
+      - name: 03 Native baseline (the published release Purgatory Dungeon v<N> and its APK, downloaded anonymously)
         id: base
         if: steps.repo.outputs.ok == '1'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}   # read-only here (job permission is contents: read): release metadata only
           CHANNEL: ${{ steps.pin.outputs.channel }}
         run: |
-          [[ "$OTA_NATIVE_BASE_TAG" =~ ^v[1-9][0-9]*$ ]] || { echo "::error::set the repository variable OTA_NATIVE_BASE_TAG to the shipped native release tag (e.g. v7)"; exit 1; }
           mkdir -p "$RUNNER_TEMP/native"
-          gh release download "$OTA_NATIVE_BASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "Purgatory-Dungeon-${OTA_NATIVE_BASE_TAG}.apk" --dir "$RUNNER_TEMP/native"
-          python3 tools/ota/native_check.py extract --platform android --native "$RUNNER_TEMP/native/Purgatory-Dungeon-${OTA_NATIVE_BASE_TAG}.apk" \
+          apk="Purgatory-Dungeon-${OTA_NATIVE_BASE_TAG}.apk"
+          # a draft, a prerelease, a wrong title or a missing APK stops here (nothing is published)
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$OTA_NATIVE_BASE_TAG" > "$RUNNER_TEMP/native/release.json"
+          python3 tools/ota/publish_gates.py native-release --json "$RUNNER_TEMP/native/release.json" --tag "$OTA_NATIVE_BASE_TAG"
+          # the bytes are fetched exactly like a phone would: no token
+          curl -fsSL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/native/$apk" "$DL_BASE/$OTA_NATIVE_BASE_TAG/$apk"
+          python3 tools/ota/native_check.py extract --platform android --native "$RUNNER_TEMP/native/$apk" \
             --path build_info.json --out "$RUNNER_TEMP/native/build_info.json"
-          python3 tools/ota/publish_gates.py baseline "$RUNNER_TEMP/native/build_info.json" --channel "$CHANNEL" | tee -a "$GITHUB_OUTPUT"
+          python3 tools/ota/publish_gates.py baseline "$RUNNER_TEMP/native/build_info.json" --channel "$CHANNEL" \
+            --expect-native-version "$NATIVE_NUMBER" | tee -a "$GITHUB_OUTPUT"
+          tagged="$(git rev-parse --verify --quiet "refs/tags/${OTA_NATIVE_BASE_TAG}^{commit}" || true)"
+          built="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$RUNNER_TEMP/native/build_info.json")"
+          if [ -n "$tagged" ] && [ "$tagged" != "$built" ]; then
+            echo "::warning::tag $OTA_NATIVE_BASE_TAG points at $tagged but the shipped APK was built from $built; the APK is the baseline"
+          fi
 
       - name: 04 Classify against the native baseline (APK-required or guarded stops here)
         if: steps.repo.outputs.ok == '1'
@@ -194,6 +219,7 @@ jobs:
       RUNTIME_ID: ${{ needs.prepare.outputs.runtime_id }}
       RUNTIME_FINGERPRINT: ${{ needs.prepare.outputs.runtime_fingerprint }}
       NATIVE_VERSION: ${{ needs.prepare.outputs.native_version }}
+      OTA_NATIVE_BASE_TAG: ${{ needs.prepare.outputs.native_tag }}
       DL_BASE: https://github.com/${{ github.repository }}/releases/download
       OUT: ${{ github.workspace }}/ota-out
     steps:

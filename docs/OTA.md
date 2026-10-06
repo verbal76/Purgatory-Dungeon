@@ -263,5 +263,6 @@ State at branch `v7-ota` head `17d29c1` (2026-10-06); nothing is published:
 | Save slots byte-identical through every OTA scenario | integration-e2e-tested |
 | Publisher gates (public-repo, REPO == repo, next seq / `app_minor`, forward-only pointer, immutability, allowlist, secret scan, anonymous verification, receipt) and workflow static properties (token scope, trigger, no Latest) | unit-tested; workflow never executed on GitHub |
 | Android APK builds, passes `verify_apk` (INTERNET permission, runtime identity fields, no legacy OTA files), Windows export + package verification, full headless suite | CI-proven (PR #6, runs 56-58) |
-| Real GitHub Releases publication, redirect to the objects CDN, anonymous reads of real release assets | NOT proven (needs an authorized publication) |
+| First real publication: `ota/dev/6dd77be…` -> immutable release `ota-dev-000001` ("Purgatory Dungeon v7.1 (OTA #000001)", not Latest), pointer `ota-channel-dev`, receipt; anonymous re-download of manifest, signature and pack (size + SHA-256 + signature with the compiled-in public key verified independently) | CI-proven (OTA publish run 37463060653, 2026-10-06) |
+| Redirect of release downloads to the objects CDN as seen by a phone, device mount/health/rollback of the real v7.1 on Android | NOT proven (physical device pending) |
 | Real Android file layout, `user://` pack mounting, HTTPS from a phone, touch-drag in the overlay, the "Applying update" panel | NOT proven (emulator / physical device pending) |

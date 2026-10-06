@@ -74,9 +74,17 @@ const _WALL_PLUG_PATH : String = "res://dungeon modules/new_collision_room_close
 var _wall_plug_module : PackedScene = null
 
 # ── Torch placement constants ─────────────────────────────────────────────────
-const _TORCH_CEILING_Y   : float = 3.5   # World Y of the dungeon ceiling
+const _TORCH_CEILING_Y   : float = 3.5   # World Y used only when no ceiling is found above a marker
 const _TORCH_SPHERE_R    : float = 0.18  # Sphere radius — matches torch.tscn
-const _TORCH_WALL_SEARCH : float = 2.5   # Max horizontal distance to look for a wall
+const _TORCH_EMBED       : float = 0.04  # How far the sphere sinks into the wall (touching, not buried)
+const _TORCH_CEILING_GAP : float = 0.02  # Gap between the sphere top and the ceiling
+const _TORCH_WALL_NEAR   : float = 1.5   # First wall search distance from a Torch marker
+const _TORCH_WALL_FAR    : float = 3.0   # Wider search used when the near search finds nothing
+const _TORCH_AUTO_SEARCH : float = 8.0   # Wall search distance for the one-torch-per-module fallback
+const _TORCH_AUTO_HEIGHT : float = 2.0   # Probe height above the module origin for that fallback
+const _TORCH_MAX_TILT    : float = 0.35  # Hits whose |normal.y| is above this are not walls
+const _TORCH_VERIFY      : float = 0.6   # Length of the confirming ray cast from a candidate seat
+const _TORCH_SEAT_SLACK  : float = 0.03  # Tolerated extra distance between seat and wall surface
 
 # Debug counters
 var counted_piece_total: int = 0
@@ -86,6 +94,13 @@ var waypoint_total: int = 0
 var wall_plug_count : int = 0
 var code_plug_count : int = 0
 var blocked_final_count : int = 0
+# Torch diagnostics (reset each generate_dungeon()): Torch markers that found no wall and were
+# skipped, and modules that got an automatically placed torch because they had none.
+var torch_skipped_count : int = 0
+var torch_auto_count    : int = 0
+var torch_skipped_by_scene : Dictionary = {}   # module scene file name -> skipped marker count
+var torch_pass_ms       : float = 0.0          # duration of _place_all_torches()
+var _torch_ray : PhysicsRayQueryParameters3D = null
 
 # ── Internal generation state ─────────────────────────────────────────────────
 var _main_root: Node3D
@@ -146,6 +161,8 @@ func generate_dungeon() -> Dictionary:
 			push_warning("DungeonGeneration: layout %d reached only %d of %d rooms - regenerating." % [
 				layout_attempts, counted_piece_total, target_piece_count])
 			_discard_layout()
+	if bool(result.get("success", false)):
+		_place_all_torches()
 	return result
 
 
@@ -333,6 +350,9 @@ func _reset_generation_state() -> void:
 	wall_plug_count          = 0
 	code_plug_count          = 0
 	blocked_final_count      = 0
+	torch_skipped_count      = 0
+	torch_auto_count         = 0
+	torch_skipped_by_scene.clear()
 
 
 func _get_player() -> Node3D:
@@ -580,8 +600,8 @@ func _register_module(mod: Node3D, counts: bool) -> void:
 	# Register Connection and coursec nodes as navigation waypoints
 	_register_waypoints_from_module(mod)
 
-	# Place torch scene instances at Torch marker nodes
-	_try_spawn_torches_in_module(mod)
+	# Torches are placed once for the whole layout by _place_all_torches() (end of
+	# generate_dungeon()): wall raycasts only work once the colliders reach the physics space.
 
 
 # ── Typed spawn point registration ───────────────────────────────────────────
@@ -667,53 +687,207 @@ func _find_waypoint_nodes_recursive(node: Node, res: Array[Node3D]) -> void:
 #  TORCH PLACEMENT
 # ══════════════════════════════════════════════════════════════════════════════
 
-func _try_spawn_torches_in_module(mod: Node3D) -> void:
+# Runs once, on the final layout. Modules are moved around while the layout is built and a body's
+# transform only reaches the physics space at the next flush, so every collider is flushed first
+# (without it a wall raycast made in the same frame finds almost nothing). Then every Torch
+# marker gets a torch seated on its nearest wall, and every module that still has no torch (the
+# end caps, anything without markers) gets one on its nearest wall, so no room is ever dark.
+func _place_all_torches() -> void:
+	if not is_inside_tree() or get_viewport() == null:
+		return
+	var world : World3D = get_viewport().find_world_3d()
+	var space : PhysicsDirectSpaceState3D = world.direct_space_state if world != null else null
+	if space == null:
+		return
+	var t0 : int = Time.get_ticks_usec()
+	if _torch_ray == null:
+		_torch_ray = PhysicsRayQueryParameters3D.new()
+		_torch_ray.collision_mask = 1
+	for mod in placed_modules:
+		if is_instance_valid(mod):
+			_flush_module_colliders(mod)
+	for mod in placed_modules:
+		if not is_instance_valid(mod):
+			continue
+		# The cached AABB is taken first: the torch meshes must not enlarge it.
+		var has_geometry : bool = _get_module_cached_aabb(mod).size != Vector3.ZERO
+		var placed : int = _try_spawn_torches_in_module(mod, space)
+		if placed == 0 and has_geometry:
+			if _spawn_auto_torch(mod, space):
+				torch_auto_count += 1
+	torch_pass_ms = float(Time.get_ticks_usec() - t0) / 1000.0
+	print("Torches: ", registered_torches.size(), " placed (", torch_auto_count,
+		  " automatic one-per-module, ", torch_skipped_count, " skipped: no wall in reach) in ",
+		  snappedf(torch_pass_ms, 0.1), " ms")
+
+
+# Pushes pending transform changes of a module's physics bodies to the physics server.
+func _flush_module_colliders(mod: Node3D) -> void:
+	if mod is CollisionObject3D:
+		mod.force_update_transform()
+	for body in mod.find_children("*", "CollisionObject3D", true, false):
+		(body as Node3D).force_update_transform()
+
+
+# Builds one torch node (scene if assigned, else the code-built one) under the module root.
+# Parent is the module root (scale 1), not a marker (may have scale 35+): parenting to a scaled
+# marker makes the FlameMesh inherit that scale and turns it into a giant yellow blob.
+func _make_torch(mod: Node3D) -> Node3D:
+	var t : Node3D
+	if torch_scene != null:
+		t = torch_scene.instantiate() as Node3D
+	else:
+		t = _build_torch_node()
+	mod.add_child(t)
+	return t
+
+
+# Places a torch at every Torch1..Torch10 marker of the module. Returns how many were placed.
+func _try_spawn_torches_in_module(mod: Node3D, space: PhysicsDirectSpaceState3D) -> int:
+	var placed : int = 0
 	for i in range(1, 11):
 		var marker = mod.find_child("Torch" + str(i), true, false)
 		if not (marker is Marker3D):
 			continue
-		var t : Node3D
-		if torch_scene != null:
-			t = torch_scene.instantiate() as Node3D
-		else:
-			t = _build_torch_node()
-		# Parent to the module root (scale 1), not the marker (may have scale 35+).
-		# Parenting to a scaled marker causes FlameMesh children to inherit that scale,
-		# producing giant yellow blobs. Global position places the torch at the marker.
-		mod.add_child(t)
-		t.global_position = marker.global_position
-		_position_torch_near_ceiling(t, marker as Marker3D)
-		registered_torches.append(t)
+		var origin : Vector3 = (marker as Marker3D).global_position
+		origin.y = _torch_height(space, origin)
+		var dirs : Array[Vector3] = _horizontal_dirs((marker as Marker3D).global_transform.basis)
+		var seat : Variant = _find_wall_seat(space, origin, dirs, _TORCH_WALL_NEAR)
+		if seat == null:
+			seat = _find_wall_seat(space, origin, dirs, _TORCH_WALL_FAR)
+		if seat == null:
+			# Never hang a light in mid-air: no wall in reach, no torch.
+			torch_skipped_count += 1
+			var key : String = mod.scene_file_path.get_file()
+			torch_skipped_by_scene[key] = int(torch_skipped_by_scene.get(key, 0)) + 1
+			continue
+		_place_torch_at(mod, seat as Vector3)
+		placed += 1
+	return placed
 
 
-# Raises the torch sphere/light to just below the ceiling and sinks the sphere
-# halfway into the nearest wall so it looks like a wall-mounted glowing dome.
-# Markers must be rotated so their blue arrow (-Z) points AWAY from the wall;
-# +Z (basis.z) then aims directly at the wall for a single reliable raycast.
-func _position_torch_near_ceiling(t: Node3D, marker: Marker3D) -> void:
-	# Local Y that places the sphere centre just below the ceiling.
-	var target_y : float = _TORCH_CEILING_Y - _TORCH_SPHERE_R - 0.02
-	var local_y  : float = target_y - marker.global_position.y
+# One-torch-per-module fallback: from the module's AABB centre, at torch height, look for the
+# nearest wall in the four horizontal directions (module yaw) and seat a torch on it.
+func _spawn_auto_torch(mod: Node3D, space: PhysicsDirectSpaceState3D) -> bool:
+	var centre : Vector3 = _get_module_cached_aabb(mod).get_center()
+	var dirs : Array[Vector3] = _horizontal_dirs(mod.global_transform.basis)
+	var starts : Array[Vector3] = [Vector3(centre.x, mod.global_position.y + _TORCH_AUTO_HEIGHT, centre.z)]
+	# The AABB centre can sit inside a wall or pillar (L / T shaped rooms): fall back to the
+	# module origin and its doorways, which are in open floor space.
+	starts.append(mod.global_position + Vector3(0.0, _TORCH_AUTO_HEIGHT, 0.0))
+	for c in _get_connections(mod):
+		starts.append(c.global_position)
+	for st in starts:
+		st.y = _torch_height(space, st)
+		var seat : Variant = _find_wall_seat(space, st, dirs, _TORCH_AUTO_SEARCH)
+		if seat != null:
+			_place_torch_at(mod, seat as Vector3)
+			return true
+	torch_skipped_count += 1
+	var scene_key : String = mod.scene_file_path.get_file()
+	torch_skipped_by_scene[scene_key] = int(torch_skipped_by_scene.get(scene_key, 0)) + 1
+	return false
 
-	# Single raycast along the marker's +Z (toward the wall the marker faces).
-	var origin   : Vector3 = marker.global_position + Vector3(0.0, local_y, 0.0)
-	var wall_dir : Vector3 = marker.global_transform.basis.z
-	var space    : PhysicsDirectSpaceState3D = get_viewport().find_world_3d().direct_space_state
-	var q        := PhysicsRayQueryParameters3D.create(origin, origin + wall_dir * _TORCH_WALL_SEARCH)
-	q.collision_mask = 1
-	var hit : Dictionary = space.intersect_ray(q)
 
-	# Place sphere centre at the wall surface; fall back to centred if no hit.
-	var new_pos : Vector3
-	if not hit.is_empty():
-		new_pos = t.to_local(hit["position"])
-	else:
-		new_pos = Vector3(0.0, local_y, 0.0)
-
-	# Apply to OmniLight3D and FlameMesh.
+# Creates the torch and puts the flame sphere and the light (together) at `seat`.
+func _place_torch_at(mod: Node3D, seat: Vector3) -> void:
+	var t : Node3D = _make_torch(mod)
+	t.global_position = seat
 	for child in t.get_children():
 		if child is OmniLight3D or child.name == "FlameMesh":
-			(child as Node3D).position = new_pos
+			(child as Node3D).position = Vector3.ZERO
+	registered_torches.append(t)
+
+
+# World Y for a torch's sphere centre above `origin`: just under the real ceiling found with an
+# upward ray (the sphere never pokes through it; the floor is always below the marker, so it
+# cannot be reached either); the fixed constant only when no ceiling is hit.
+func _torch_height(space: PhysicsDirectSpaceState3D, origin: Vector3) -> float:
+	var ceiling_y : float = _TORCH_CEILING_Y
+	var up : Dictionary = _ray_live_geometry(space, origin, origin + Vector3.UP * 12.0)
+	if not up.is_empty() and (up["position"] as Vector3).y > origin.y + 0.3:
+		ceiling_y = (up["position"] as Vector3).y
+	return ceiling_y - _TORCH_SPHERE_R - _TORCH_CEILING_GAP
+
+
+# The four horizontal directions of a basis (+X, -X, +Z, -Z flattened to the XZ plane).
+func _horizontal_dirs(b: Basis) -> Array[Vector3]:
+	var out : Array[Vector3] = []
+	for axis in [b.x, -b.x, b.z, -b.z]:
+		var flat : Vector3 = Vector3(axis.x, 0.0, axis.z)
+		if flat.length_squared() > 0.0001:
+			out.append(flat.normalized())
+	return out
+
+
+# Nearest wall within `max_dist` in any of `dirs`; returns the sphere centre that makes the sphere
+# touch that wall lightly (hit + normal * (radius - embed)), or null when there is none.
+# Hits that are not roughly vertical surfaces (floors, ceilings, ramps) are ignored, and a wall is
+# only accepted once a second ray from the seat confirms the surface really is right behind the
+# sphere (a sliver or an uneven face hit by the first ray would leave the torch floating).
+func _find_wall_seat(space: PhysicsDirectSpaceState3D, origin: Vector3, dirs: Array[Vector3], max_dist: float) -> Variant:
+	var found : Array = []   # entries: [distance, hit, direction]
+	for d in dirs:
+		var hit : Dictionary = _ray_live_geometry(space, origin, origin + d * max_dist)
+		if hit.is_empty() or absf(_facing_normal(hit, d).y) > _TORCH_MAX_TILT:
+			continue
+		found.append([origin.distance_to(hit["position"]), hit, d])
+	found.sort_custom(func(a, b): return a[0] < b[0])
+	for f in found:
+		var seat : Variant = _seat_on_wall(space, f[1], f[2])
+		if seat != null:
+			return seat
+	return null
+
+
+# Sphere centre touching the wall `hit` (found by a ray travelling along `d`), verified and, if the
+# surface is uneven, refined by re-casting from the candidate seat. Null when it cannot be confirmed.
+func _seat_on_wall(space: PhysicsDirectSpaceState3D, hit: Dictionary, d: Vector3) -> Variant:
+	var reach : float = _TORCH_SPHERE_R - _TORCH_EMBED
+	for _i in 3:
+		var n : Vector3 = _facing_normal(hit, d)
+		var seat : Vector3 = (hit["position"] as Vector3) + Vector3(n.x, 0.0, n.z).normalized() * reach
+		var check : Dictionary = _ray_live_geometry(space, seat, seat + d * _TORCH_VERIFY)
+		if check.is_empty() or absf(_facing_normal(check, d).y) > _TORCH_MAX_TILT:
+			return null
+		if seat.distance_to(check["position"]) <= reach + _TORCH_SEAT_SLACK:
+			return seat
+		hit = check
+	return null
+
+
+# Surface normal of a ray hit, flipped to face the ray origin (a back-face hit reports the other side).
+func _facing_normal(hit: Dictionary, d: Vector3) -> Vector3:
+	var n : Vector3 = hit["normal"]
+	return -n if n.dot(d) > 0.0 else n
+
+
+# Ray against level geometry only. Candidate modules that were tried and rejected during layout
+# are queued for deletion but their colliders linger until the end of the frame: they are skipped.
+func _ray_live_geometry(space: PhysicsDirectSpaceState3D, from: Vector3, to: Vector3) -> Dictionary:
+	var excluded : Array[RID] = []
+	_torch_ray.from = from
+	_torch_ray.to = to
+	_torch_ray.exclude = excluded
+	for _i in 8:
+		var hit : Dictionary = space.intersect_ray(_torch_ray)
+		if hit.is_empty():
+			return hit
+		var collider : Object = hit.get("collider")
+		if PhysicsUtil.is_world_geometry(collider) and not _is_pending_delete(collider as Node):
+			return hit
+		excluded.append(hit["rid"])
+		_torch_ray.exclude = excluded
+	return {}
+
+
+func _is_pending_delete(n: Node) -> bool:
+	var cur : Node = n
+	while cur != null and cur != _main_root:
+		if cur.is_queued_for_deletion():
+			return true
+		cur = cur.get_parent()
+	return false
 
 
 # Builds a minimal torch node in code when no torch_scene is assigned.

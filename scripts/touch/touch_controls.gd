@@ -45,10 +45,12 @@ const GROUP := "touch_controls"
 const KEY_OPACITY := "TouchOpacity"
 const KEY_SCALE   := "TouchScale"
 const KEY_LOOK    := "TouchLookSens"
+const KEY_AIM_SMOOTH := "TouchAimSmoothing"
 const KEY_SCHEME  := "TouchScheme"
 const DEFAULT_OPACITY := 70.0
 const DEFAULT_SCALE   := 100.0
 const DEFAULT_LOOK    := 100.0
+const DEFAULT_AIM_SMOOTH := 60.0
 const SCHEME_TWIN     := "twin"
 const SCHEME_CLASSIC  := "classic"
 const DEFAULT_SCHEME  := SCHEME_TWIN    # existing installs with no saved key get twin-stick
@@ -61,13 +63,20 @@ const MARGIN_X        := 36.0    # keep clear of rounded corners / gesture edges
 const MARGIN_Y        := 28.0
 
 # ── Twin-stick ATTACK-drag aiming (all numbers in virtual px at 100% size unless stated) ─────────────────────────
-# Response: offset from the touch-down point / AIM_DRAG_RADIUS = deflection d in 0..1. Inside LOOK_DEADZONE nothing
-# turns; outside it x = (d - dz) / (1 - dz) is stretched over 0..1 and shaped by x^LOOK_CURVE_EXP, so a
-# small push is a slow, precise aim and a full push is the maximum turn rate. Rates are physical
-# (radians per second at 100% Look Sensitivity) so they do not depend on the frame time.
-const AIM_DRAG_RADIUS   := 90.0   # thumb travel for full deflection (the drag origin follows the thumb past it)
-const LOOK_DEADZONE     := 0.12
-const LOOK_CURVE_EXP    := 1.7    # >1: fine control near the centre, fast turn at the rim
+# Response: offset from the drag origin / AIM_DRAG_RADIUS = deflection d in 0..1. The first AIM_SETTLE_PX of finger
+# travel after touch-down are ignored (the press itself moves the thumb; measured in distance, so a deliberate fast
+# drag is not delayed). Turning ENGAGES when d reaches AIM_ENGAGE and stays engaged until d falls below LOOK_DEADZONE
+# (hysteresis: a thumb hovering at the edge does not chatter). While engaged x = (d - dz) / (1 - dz) is stretched over
+# 0..1 from the exit threshold, so the rate is continuous (about 1% of full at the entry point, exactly 0 at the exit)
+# and shaped by x^LOOK_CURVE_EXP: a small push is a slow, precise aim, a full push is the maximum turn rate. The
+# command is then low-passed (exponential, frame-rate independent) by the Aim Smoothing setting, which removes the
+# hand's tremor. Rates are physical (radians per second at 100% Look Sensitivity), independent of the frame time.
+const AIM_DRAG_RADIUS   := 90.0   # drag travel for full deflection (the drag origin follows the thumb past it)
+const AIM_SETTLE_PX     := 6.0    # finger travel right after touch-down that is ignored
+const AIM_ENGAGE        := 0.20   # deflection that starts the turn (about 18 px)
+const LOOK_DEADZONE     := 0.12   # deflection below which an engaged turn stops (hysteresis exit); the response starts here
+const LOOK_CURVE_EXP    := 2.0    # >1: fine control near the centre, fast turn at the rim
+const AIM_SMOOTH_TAU_MAX := 0.12  # s: low-pass time constant at 100% Aim Smoothing (0% = off, linear in between)
 const LOOK_MAX_YAW_RATE := 4.2    # rad/s at full deflection and 100% sensitivity (~240 deg/s)
 const LOOK_PITCH_RATIO  := 0.55   # pitch rate / yaw rate (the players have no pitch today and ignore it)
 const LOOK_MAX_STEP     := 0.1    # s: a hitch never turns the camera more than this much in one step
@@ -101,6 +110,7 @@ var touch_enabled : bool = true
 var ui_scale      : float = 1.0
 var opacity       : float = 0.7
 var look_gain     : float = 1.0
+var aim_smoothing : float = 0.6     # 0..1 (the Aim Smoothing slider / 100): 0 = off
 var scheme        : String = DEFAULT_SCHEME
 var dpi_override  : float = 0.0                                    # tests: pretend the panel has this dpi
 var screen_override : Vector2 = Vector2.ZERO                       # tests: pretend the panel has this many physical px
@@ -121,7 +131,10 @@ var _overlay_draw : Control = null       # above the buttons: the drag ring of a
 var _atk_index : int = -1                # finger that went down on ATTACK (-1: none)
 var _atk_origin : Vector2 = Vector2.ZERO # where that finger touched down (the drag is measured from here)
 var _atk_vec : Vector2 = Vector2.ZERO
-var _look_cmd : Vector2 = Vector2.ZERO   # curved aim command of the ATTACK drag (length <= 1), applied each physics frame
+var _atk_settled : bool = false          # the finger has moved past AIM_SETTLE_PX since touch-down
+var _atk_engaged : bool = false          # hysteresis state: the drag is past AIM_ENGAGE and still above LOOK_DEADZONE
+var _look_cmd : Vector2 = Vector2.ZERO   # curved aim command of the ATTACK drag (length <= 1): the target of the smoothing
+var _aim_smoothed : Vector2 = Vector2.ZERO   # the low-passed command that look_step actually applies
 var _owners : Dictionary = {}            # finger index -> {"kind": Owner, "button": String}
 var _held : Dictionary = {}              # action -> strength currently pressed through us
 var _press_ms : Dictionary = {}          # action -> time pressed (for MIN_PRESS_MS)
@@ -373,6 +386,7 @@ func _apply_settings() -> void:
 	opacity = clampf(_setting(KEY_OPACITY, DEFAULT_OPACITY) / 100.0, 0.15, 1.0)
 	ui_scale = clampf(_setting(KEY_SCALE, DEFAULT_SCALE) / 100.0, 0.6, 1.6)
 	look_gain = clampf(_setting(KEY_LOOK, DEFAULT_LOOK) / 100.0, 0.2, 3.0)
+	aim_smoothing = clampf(_setting(KEY_AIM_SMOOTH, DEFAULT_AIM_SMOOTH) / 100.0, 0.0, 1.0)
 
 
 func _stored_scheme() -> String:
@@ -493,18 +507,29 @@ func _poll_settings(delta: float) -> void:
 ## Twin ATTACK drag: one look event per physics frame, a turn RATE (not a distance), so the
 ## result does not depend on the frame time. Fed through the same mouse-motion path the classic swipe uses.
 func _physics_process(delta: float) -> void:
-	if _look_cmd == Vector2.ZERO or get_tree().paused or not touch_enabled:
+	if (_look_cmd == Vector2.ZERO and _aim_smoothed == Vector2.ZERO) or get_tree().paused or not touch_enabled:
 		return
 	look_step(delta)
 
 
-## Applies one look step of `delta` seconds from the current aim command; returns the mouse-motion px sent.
+## Applies one look step of `delta` seconds: the aim command is low-passed (time constant AIM_SMOOTH_TAU_MAX x the
+## Aim Smoothing setting; alpha = 1 - exp(-dt / tau) so it is frame-rate independent) and turned into mouse-motion px.
+## Returns the px sent.
 func look_step(delta: float) -> Vector2:
-	if _look_cmd == Vector2.ZERO:
+	if _look_cmd == Vector2.ZERO and _aim_smoothed == Vector2.ZERO:
 		return Vector2.ZERO
 	var dt: float = minf(delta, LOOK_MAX_STEP)
+	var tau: float = AIM_SMOOTH_TAU_MAX * aim_smoothing
+	if tau <= 0.0:
+		_aim_smoothed = _look_cmd
+	else:
+		_aim_smoothed += (_look_cmd - _aim_smoothed) * (1.0 - exp(-dt / tau))
+		if _look_cmd == Vector2.ZERO and _aim_smoothed.length() < 0.002:
+			_aim_smoothed = Vector2.ZERO   # the tail is below one pixel per second: stop exactly
+	if _aim_smoothed == Vector2.ZERO:
+		return Vector2.ZERO
 	look_time += dt
-	var px: Vector2 = look_rates(_look_cmd, look_gain) / LOOK_RAD_PER_MOUSE_PX * dt
+	var px: Vector2 = look_rates(_aim_smoothed, look_gain) / LOOK_RAD_PER_MOUSE_PX * dt
 	_emit_mouse_motion(px)
 	return px
 
@@ -611,6 +636,10 @@ func _touch_down(index: int, p: Vector2) -> void:
 			_atk_index = index
 			_atk_origin = p
 			_atk_vec = Vector2.ZERO
+			_atk_settled = false
+			_atk_engaged = false
+			_aim_smoothed = Vector2.ZERO
+			_look_cmd = Vector2.ZERO
 		_button_down(b)
 		return
 	if stick_zone.has_point(p) and not _stick_active:
@@ -645,10 +674,22 @@ func _touch_move(index: int, p: Vector2, rel: Vector2) -> void:
 			_look(rel)   # Classic only: twin-stick never creates a LOOK owner
 		Owner.BUTTON:
 			if index == _atk_index:
-				_atk_origin = _follow(_atk_origin, p)
-				_atk_vec = (p - _atk_origin) / (AIM_DRAG_RADIUS * ui_scale)
-				_update_look_cmd()
-				_overlay_draw.queue_redraw()
+				_aim_drag(p)
+
+
+## The ATTACK finger moved to `p`: ignore the thumb settling, then follow the drag.
+func _aim_drag(p: Vector2) -> void:
+	if not _atk_settled:
+		var d: Vector2 = p - _atk_origin
+		var settle: float = AIM_SETTLE_PX * ui_scale
+		if d.length() <= settle:
+			return   # still settling on the button (a press and tremor wobble it a few px)
+		_atk_settled = true
+		_atk_origin += d.normalized() * settle   # measure from where it settled, so the rate does not jump
+	_atk_origin = _follow(_atk_origin, p)
+	_atk_vec = (p - _atk_origin) / (AIM_DRAG_RADIUS * ui_scale)
+	_update_look_cmd()
+	_overlay_draw.queue_redraw()
 
 
 ## Floating drag origin: stays put while the finger is within AIM_DRAG_RADIUS, then trails it at exactly that radius
@@ -661,9 +702,14 @@ func _follow(base: Vector2, p: Vector2) -> Vector2:
 	return base
 
 
-## The ATTACK drag's curved aim command, applied each physics frame.
+## The ATTACK drag's curved aim command (the smoothing target), with the engage / exit hysteresis.
 func _update_look_cmd() -> void:
-	_look_cmd = look_response(_atk_vec)
+	var mag: float = _atk_vec.length()
+	if _atk_engaged:
+		_atk_engaged = mag >= LOOK_DEADZONE
+	else:
+		_atk_engaged = mag >= AIM_ENGAGE
+	_look_cmd = look_response(_atk_vec) if _atk_engaged else Vector2.ZERO
 
 
 func _touch_up(index: int) -> void:
@@ -681,7 +727,10 @@ func _touch_up(index: int) -> void:
 			if index == _atk_index:
 				_atk_index = -1
 				_atk_vec = Vector2.ZERO
-				_update_look_cmd()   # releasing ATTACK ends the drag: the turn stops, the attack releases below
+				_atk_engaged = false
+				_atk_settled = false
+				_look_cmd = Vector2.ZERO
+				_aim_smoothed = Vector2.ZERO   # releasing ATTACK ends the drag: the turn stops at once (no coasting); the attack releases below
 				_overlay_draw.queue_redraw()
 			var b: TouchButton = buttons.get(o["button"])
 			if b != null:
@@ -773,7 +822,10 @@ func release_all() -> void:
 	_stick_vec = Vector2.ZERO
 	_atk_index = -1
 	_atk_vec = Vector2.ZERO
+	_atk_engaged = false
+	_atk_settled = false
 	_look_cmd = Vector2.ZERO   # nothing keeps turning after a background / lock / pause
+	_aim_smoothed = Vector2.ZERO
 	for action in _held.keys():
 		var ev := InputEventAction.new()
 		ev.action = action

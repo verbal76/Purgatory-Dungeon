@@ -106,14 +106,23 @@ def public_verdict(status, obj) -> str:
     return NOT_PUBLIC_REASON + why
 
 
-def check_public(repo: str, api: str = "https://api.github.com", retries: int = 4, delay: float = 5.0, sleep=time.sleep) -> str:
-    """Anonymous (no Authorization header) read of the repository: '' = public. Rate limits and 5xx are retried, then refused."""
+def check_public(repo: str, api: str = "https://api.github.com", retries: int = 4, delay: float = 5.0, sleep=time.sleep, web=None) -> str:
+    """Anonymous (no Authorization header) read of the repository: '' = public. Rate limits and 5xx are retried, then refused.
+
+    The unauthenticated API allows 60 requests an hour per IP and hosted runners share addresses, so when the API stays unusable
+    (neither 200 nor 404) the repository's own web page is the second anonymous witness: it answers 200 for a public repository and
+    404 for a private one. `web` defaults to https://github.com for the real API and to nothing for any other `api`."""
     status, body = 0, b""
     for attempt in range(max(1, retries)):
         status, body = fetch_anonymous(f"{api.rstrip('/')}/repos/{repo}")
         if status in (200, 404) or attempt + 1 >= retries:
             break
         sleep(delay * (attempt + 1))
+    if web is None and api.rstrip("/") == "https://api.github.com":
+        web = "https://github.com"
+    if status not in (200, 404) and web:
+        if fetch_anonymous(f"{web.rstrip('/')}/{repo}")[0] == 200:
+            return ""
     obj = None
     if status == 200:
         try:
@@ -281,7 +290,45 @@ def validate_receipt(r: dict) -> str:
     return ""
 
 
-def baseline_identity(info: dict, channel: str = "") -> dict:
+def native_base_tag(version_text: str, override: str = "") -> dict:
+    """The native release whose APK is the baseline: 'v<N>' from VERSION at the pinned commit. The repository variable
+    OTA_NATIVE_BASE_TAG is optional; when it is set it must say exactly the same (a stale value can never pick another APK)."""
+    v = (version_text or "").strip()
+    if not re.fullmatch(r"[1-9][0-9]*", v):
+        raise OtaError(f"VERSION is {v!r}, not a positive integer: cannot derive the native baseline tag")
+    tag = "v" + v
+    override = (override or "").strip()
+    if override and override != tag:
+        raise OtaError(f"the repository variable OTA_NATIVE_BASE_TAG is {override!r} but VERSION at this commit says {tag!r}: "
+                       "delete the variable (it is optional) or set it to the matching tag")
+    return {"tag": tag, "version": int(v)}
+
+
+def native_release_problems(rel, tag: str) -> list:
+    """Problems with the REST release object (`gh api repos/<repo>/releases/tags/<tag>`: tag_name, name, draft, prerelease, assets[]): the
+    baseline must be the published (not draft, not prerelease) release titled exactly 'Purgatory Dungeon <tag>' that carries its APK."""
+    if not isinstance(rel, dict):
+        return ["the release description is not a JSON object"]
+    problems = []
+    if rel.get("tag_name") != tag:
+        problems.append(f"release tag is {rel.get('tag_name')!r}, expected {tag!r}")
+    if rel.get("name") != f"Purgatory Dungeon {tag}":
+        problems.append(f"release title is {rel.get('name')!r}, expected 'Purgatory Dungeon {tag}'")
+    if rel.get("draft") is not False:
+        problems.append("the release is a draft (devices and this workflow can only use a published release)")
+    if rel.get("prerelease") is not False:
+        problems.append("the release is a prerelease (the native baseline must be a normal published release)")
+    apk = f"Purgatory-Dungeon-{tag}.apk"
+    assets = rel.get("assets") if isinstance(rel.get("assets"), list) else []
+    hit = [a for a in assets if isinstance(a, dict) and a.get("name") == apk]
+    if len(hit) != 1:
+        problems.append(f"the release has {len(hit)} asset(s) named {apk} (expected exactly 1)")
+    elif not isinstance(hit[0].get("size"), int) or hit[0]["size"] <= 0 or hit[0].get("state", "uploaded") != "uploaded":
+        problems.append(f"the asset {apk} is empty or not fully uploaded")
+    return problems
+
+
+def baseline_identity(info: dict, channel: str = "", expect_version: int = 0) -> dict:
     """The identity of the SHIPPED native build from its build_info.json (docs/OTA.md section 3)."""
     out = {"base_sha": info.get("commit"), "runtime_id": info.get("runtime_id"),
            "runtime_fingerprint": info.get("runtime_fingerprint"), "ota_channel": info.get("ota_channel"),
@@ -298,6 +345,8 @@ def baseline_identity(info: dict, channel: str = "") -> dict:
         raise OtaError("the baseline's build_info.json has no valid public_version")
     if channel and out["ota_channel"] != channel:
         raise OtaError(f"the installed app follows channel {out['ota_channel']!r}, not {channel!r}: an OTA for {channel!r} would never be offered to it")
+    if expect_version and out["native_version"] != expect_version:
+        raise OtaError(f"the APK's build_info.json says public_version {out['native_version']} but the baseline tag is v{expect_version}")
     return out
 
 
@@ -439,6 +488,7 @@ def main(argv=None) -> int:
     p.add_argument("--repo", required=True)
     p.add_argument("--config", default="")
     p.add_argument("--api", default="https://api.github.com")
+    p.add_argument("--web", default=None, help="anonymous web fallback when the API is rate limited (default: github.com for the real API)")
     p.add_argument("--retries", type=int, default=4)
     p.add_argument("--delay", type=float, default=5.0)
     p = sub.add_parser("fetch-pointer")
@@ -494,6 +544,13 @@ def main(argv=None) -> int:
     p = sub.add_parser("baseline")
     p.add_argument("build_info")
     p.add_argument("--channel", default="")
+    p.add_argument("--expect-native-version", type=int, default=0)
+    p = sub.add_parser("base-tag")
+    p.add_argument("--version-file", required=True)
+    p.add_argument("--var", default="")
+    p = sub.add_parser("native-release")
+    p.add_argument("--json", required=True)
+    p.add_argument("--tag", required=True)
     p = sub.add_parser("same-runtime")
     p.add_argument("--baseline", required=True)
     p.add_argument("--current", required=True)
@@ -510,7 +567,7 @@ def main(argv=None) -> int:
         elif a.cmd == "repo-gate":
             baked = str(config_value(otalib.read_bytes(a.config).decode("utf-8"), "REPO")) if a.config else ""
             check_source_repo(a.repo, baked)
-            why = check_public(a.repo, a.api, a.retries, a.delay)
+            why = check_public(a.repo, a.api, a.retries, a.delay, web=a.web)
             print(f"repo={a.repo}\nok={'0' if why else '1'}\nreason={why}")
         elif a.cmd == "fetch-pointer":
             status, body = 0, b""
@@ -576,9 +633,19 @@ def main(argv=None) -> int:
         elif a.cmd == "summary":
             print("\n".join(summary_lines(otalib.load_json_bytes(otalib.read_bytes(a.receipt), a.receipt))))
         elif a.cmd == "baseline":
-            b = baseline_identity(otalib.load_json_bytes(otalib.read_bytes(a.build_info), a.build_info), a.channel)
+            b = baseline_identity(otalib.load_json_bytes(otalib.read_bytes(a.build_info), a.build_info), a.channel, a.expect_native_version)
             for k in ("base_sha", "runtime_id", "runtime_fingerprint", "ota_channel", "native_version"):
                 print(f"{k}={b[k]}")
+        elif a.cmd == "base-tag":
+            b = native_base_tag(otalib.read_bytes(a.version_file).decode("utf-8"), a.var)
+            print(f"tag={b['tag']}\nversion={b['version']}")
+        elif a.cmd == "native-release":
+            problems = native_release_problems(otalib.load_json_bytes(otalib.read_bytes(a.json), a.json), a.tag)
+            if problems:
+                for pr in problems:
+                    print("REFUSED:", pr, file=sys.stderr)
+                return 1
+            print(f"native baseline release {a.tag} is published and carries Purgatory-Dungeon-{a.tag}.apk")
         elif a.cmd == "same-runtime":
             problems = same_runtime(otalib.load_json_bytes(otalib.read_bytes(a.baseline), a.baseline),
                                     otalib.load_json_bytes(otalib.read_bytes(a.current), a.current))

@@ -166,6 +166,9 @@ func _ready() -> void:
 	_touch(2, att.center, false)
 	_check(Input.is_action_pressed("attack"), "a tap is stretched so Input.is_action_just_pressed can see it")
 	await get_tree().create_timer(0.12).timeout
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
 	_check(not Input.is_action_pressed("attack"), "...and released afterwards")
 	# Minimap is a toggle.
