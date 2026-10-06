@@ -537,6 +537,7 @@ func _light_overlap() -> Dictionary:
 			if is_instance_valid(m):
 				_module_set[m.get_instance_id()] = true
 	var cats: Dictionary = {}
+	var dist_buckets: Array[int] = [0, 0, 0, 0, 0]   # meshes in the frustum: <=50 m, <=75, <=100, <=150, farther
 	var counts: Array[int] = []
 	var pairs := 0
 	var over := 0
@@ -555,8 +556,13 @@ func _light_overlap() -> Dictionary:
 		if gi.visibility_range_end > 0.0 and cpos.distance_to(a.get_center()) > gi.visibility_range_end + 0.0:
 			continue
 		var cat := _mesh_category(gi)
-		var ce: Array = cats.get(cat, [0, 0, 0, {}])
+		var ce: Array = cats.get(cat, [0, 0, 0, {}, 0])
 		ce[0] += 1
+		var dist_c := cpos.distance_to(a.get_center())
+		if dist_c > 50.0:
+			ce[4] += 1   # beyond 50 m: torch light has faded out completely there
+		var bucket := 0 if dist_c <= 50.0 else (1 if dist_c <= 75.0 else (2 if dist_c <= 100.0 else (3 if dist_c <= 150.0 else 4)))
+		dist_buckets[bucket] += 1
 		if gi is MeshInstance3D:
 			ce[1] += _mesh_tris((gi as MeshInstance3D).mesh)
 			ce[2] += (gi as MeshInstance3D).mesh.get_surface_count()
@@ -593,6 +599,7 @@ func _light_overlap() -> Dictionary:
 		total += c
 	return {
 		"in_view_by_category": cats,
+		"in_view_distance_buckets_50_75_100_150_more": dist_buckets,
 		"lights_active_total": active_lights,
 		"lights_within_fade_of_camera": in_fade,
 		"meshes_in_view": meshes_in_view,
@@ -602,6 +609,17 @@ func _light_overlap() -> Dictionary:
 		"meshes_over_8_lights": over,
 		"mesh_light_pairs_capped8": pairs,
 	}
+
+
+var _added_log: Array = []   # first few nodes added in the current frame (soak attribution)
+var _added_count: int = 0
+
+
+func _on_node_added_probe(n: Node) -> void:
+	_added_count += 1
+	if _added_log.size() < 4:
+		var par := n.get_parent()
+		_added_log.append("%s/%s(%s)" % [str(par.name) if par != null else "-", str(n.name), n.get_class()])
 
 
 var _tri_cache: Dictionary = {}   # Mesh -> triangle count (probe-only, uses surface arrays)
@@ -695,6 +713,12 @@ func _ablate() -> Dictionary:
 	var cpos := _cam.global_position
 	torch_omni.sort_custom(func(a, b): return cpos.distance_squared_to((a as Node3D).global_position) < cpos.distance_squared_to((b as Node3D).global_position))
 	var far_torch_lights: Array = torch_omni.slice(12)
+	var wenv: Environment = null
+	var lm := _main.get_node_or_null("LightingManager")
+	if lm != null:
+		var we := lm.get_node_or_null("WorldEnvironment") as WorldEnvironment
+		if we != null:
+			wenv = we.environment
 	# architecture materials (unique): flipped between the alpha pass (4) and opaque (0)
 	var arch_mats: Dictionary = {}
 	if _module_set.is_empty():
@@ -722,6 +746,9 @@ func _ablate() -> Dictionary:
 		["no_props", props, false],
 		["torch_lights_nearest12_only", far_torch_lights, false],
 		["arch_materials_flipped_0_4", [], false],
+		["env_glow_off", [], false],
+		["env_fog_off", [], false],
+		["env_glow_and_fog_off", [], false],
 		["flames_lowpoly_8x4", [], true],
 		["lights12_and_lowpoly_flames", far_torch_lights, true],
 	]
@@ -737,6 +764,13 @@ func _ablate() -> Dictionary:
 			if str(st[0]).begins_with("arch_materials_flipped"):
 				for am in arch_mats:
 					(am as BaseMaterial3D).transparency = BaseMaterial3D.TRANSPARENCY_DISABLED if int(arch_mats[am]) != 0 else BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+			var env_saved := [true, true]
+			if wenv != null and str(st[0]).begins_with("env_"):
+				env_saved = [wenv.glow_enabled, wenv.fog_enabled]
+				if str(st[0]) != "env_fog_off":
+					wenv.glow_enabled = false
+				if str(st[0]) != "env_glow_off":
+					wenv.fog_enabled = false
 			var old_meshes: Dictionary = {}
 			if st[2]:
 				for f in flames:
@@ -757,6 +791,9 @@ func _ablate() -> Dictionary:
 			if str(st[0]).begins_with("arch_materials_flipped"):
 				for am in arch_mats:
 					(am as BaseMaterial3D).transparency = int(arch_mats[am]) as BaseMaterial3D.Transparency
+			if wenv != null and str(st[0]).begins_with("env_"):
+				wenv.glow_enabled = env_saved[0]
+				wenv.fog_enabled = env_saved[1]
 	return res
 
 
@@ -797,6 +834,13 @@ func _sweep_lights() -> Dictionary:
 ## whole game running and records every frame: wall time, script and physics time, nodes created
 ## (node count delta), objects and static memory delta (allocation bursts), draw calls, live enemies.
 ## The slowest frames are listed with what happened in them, to attribute spikes.
+func _thread_cpu_ns() -> int:
+	var f := FileAccess.open("/proc/thread-self/schedstat", FileAccess.READ)
+	if f == null:
+		return 0
+	return int(f.get_as_text().split(" ")[0])
+
+
 func _soak(seconds: float) -> Dictionary:
 	if _player == null or _cam == null:
 		return {}
@@ -839,6 +883,15 @@ func _soak(seconds: float) -> Dictionary:
 	draws.resize(max_frames)
 	var enemies := PackedInt32Array()
 	enemies.resize(max_frames)
+	var cpu := PackedFloat32Array()   # on-CPU ms of the main thread per frame (/proc schedstat, Linux): wall - cpu = waiting / preempted
+	cpu.resize(max_frames)
+	var phys_ticks := PackedInt32Array()
+	phys_ticks.resize(max_frames)
+	var adds: Array = []
+	adds.resize(max_frames)
+	get_tree().node_added.connect(_on_node_added_probe)
+	var last_cpu_ns := _thread_cpu_ns()
+	var last_pf := Engine.get_physics_frames()
 	var n := 0
 	var pos: Vector3 = _player.global_position
 	var seg := 0
@@ -866,6 +919,14 @@ func _soak(seconds: float) -> Dictionary:
 			_player.velocity = Vector3.ZERO
 		if to.length() > 0.5:
 			_cam.global_transform = Transform3D(Basis.looking_at(to.normalized(), Vector3.UP), pos + Vector3(0, 1.6, 0))
+		adds[n] = _added_log.duplicate() if _added_count >= 8 else []
+		_added_log.clear()
+		_added_count = 0
+		var cpu_now := _thread_cpu_ns()
+		cpu[n] = float(cpu_now - last_cpu_ns) / 1.0e6
+		last_cpu_ns = cpu_now
+		phys_ticks[n] = Engine.get_physics_frames() - last_pf
+		last_pf = Engine.get_physics_frames()
 		proc[n] = Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
 		phys[n] = Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
 		var nn := get_tree().get_node_count()
@@ -884,6 +945,7 @@ func _soak(seconds: float) -> Dictionary:
 	var skip := mini(60, n / 4)   # the first frames still contain the teleport / spawn burst of the setup
 	for i in range(skip, n):
 		samples.append(ft[i])
+	get_tree().node_added.disconnect(_on_node_added_probe)
 	var res: Dictionary = {"frames": n, "seconds": snappedf(float(Time.get_ticks_msec() - t_start) / 1000.0, 0.1),
 		"distance_walked_m": snappedf(float(seg) * 20.0, 1.0), "dist_ms": _dist(samples)}
 	# slowest frames and what they contained
@@ -892,7 +954,7 @@ func _soak(seconds: float) -> Dictionary:
 	var worst: Array = []
 	for k in mini(12, order.size()):
 		var i: int = order[k]
-		worst.append({"frame": i, "ms": snappedf(ft[i], 0.1),
+		worst.append({"frame": i, "ms": snappedf(ft[i], 0.1), "physics_ticks": phys_ticks[i], "first_nodes_added": adds[i],
 			"nodes_created": dnodes[i], "objects_delta": dobjs[i], "static_mem_delta_kb": snappedf(dmem[i], 1.0), "draws": draws[i]})
 	res["slowest_frames"] = worst
 	# correlation summary: how many frames over 2x median contain node creation / allocation
@@ -969,7 +1031,8 @@ func _print_summary() -> void:
 	var views: Dictionary = _results["views"]
 	for k in views:
 		var v: Dictionary = views[k]
-		print("PERF   in view [meshes, tris, surfaces, material transparency modes (T0 opaque, T1 alpha blend, T2 scissor, T3 hash, T4 alpha+depth prepass)]: ", v.get("in_view_by_category", {}))
+		print("PERF   in-frustum meshes by distance (<=50, <=75, <=100, <=150, >150 m): ", v.get("in_view_distance_buckets_50_75_100_150_more", []))
+		print("PERF   in view [meshes, tris, surfaces, material modes (T0 opaque, T1 alpha, T2 scissor, T3 hash, T4 alpha+depth prepass), meshes farther than 50 m]: ", v.get("in_view_by_category", {}))
 		print("PERF view %-9s %-34s draws=%d objs=%d prims=%d | lights active=%d in_fade=%d | meshes=%d lights/mesh mean=%.2f p95=%d max=%d over8=%d pairs8=%d | frame=%.0f ms proc=%.2f phys=%.2f" % [
 			k, v.get("module", ""), v["draw_calls"], v["objects"], v["primitives"], v.get("lights_active_total", 0),
 			v.get("lights_within_fade_of_camera", 0), v.get("meshes_in_view", 0), v.get("lights_per_mesh_mean", 0.0),
