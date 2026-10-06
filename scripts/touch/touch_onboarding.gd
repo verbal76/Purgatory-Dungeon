@@ -11,9 +11,10 @@
 #
 #     move       -> at the start: "drag to move" until the stick has been used
 #     look       -> classic: "swipe to look" until the player has swiped
-#     look_stick -> twin-stick: "drag the right side to look" until the look stick has been held out
+#     aim        -> twin-stick, right after move: "drag from Attack to look and aim" (highlights ATTACK) until the
+#                   ATTACK drag has been held out for AIM_DONE_SECONDS. (Older installs may carry a completed
+#                   "look_stick" flag from the removed right stick: it is simply never read again.)
 #     attack     -> when the first enemy is near: highlights ATTACK until pressed
-#     aim        -> twin-stick, after the first attack: "drag from Attack to aim" until it has been done
 #     use        -> when something usable is in range (chest): highlights USE until pressed
 #     block      -> after the first hit taken (and attack learned): highlights BLOCK
 #     burst      -> when an enemy is close and a potion is held: highlights BURST
@@ -24,14 +25,14 @@ class_name TouchOnboarding
 extends Control
 
 const STEPS : Array[String] = ["move", "look", "attack", "use", "block", "burst"]   # classic order
-const STEPS_TWIN : Array[String] = ["move", "look_stick", "attack", "aim", "use", "block", "burst"]
+const STEPS_TWIN : Array[String] = ["move", "aim", "attack", "use", "block", "burst"]
 const SETTINGS_KEY := "touch_tutorial"
 const SHOWS_KEY := "touch_tutorial_shown"
 const MAX_SHOWS := 3
 const HINT_SECONDS := 9.0
 const LOOK_DONE_PX := 350.0
 const MOVE_DONE_SECONDS := 0.8
-const LOOK_STICK_DONE_SECONDS := 0.8
+const AIM_DONE_SECONDS := 0.8
 
 const TEXT := {
 	"move": "Drag here to move",
@@ -44,9 +45,8 @@ const TEXT := {
 # Twin-stick wording (same steps where the control is the same).
 const TEXT_TWIN := {
 	"move": "Drag the left side to move",
-	"look_stick": "Drag the right side to look around",
 	"attack": "Tap to attack - hold to charge",
-	"aim": "Drag from Attack to aim",
+	"aim": "Drag from Attack to look and aim",
 	"use": "Tap to use",
 	"block": "Hold to block",
 	"burst": "Burst costs a potion",
@@ -155,7 +155,6 @@ func on_scheme_changed() -> void:
 func _on_action(action: String) -> void:
 	var step: String = ""
 	match action:
-		"aim": step = "aim"
 		"attack": step = "attack"
 		"equip": step = "use"
 		"block": step = "block"
@@ -177,8 +176,8 @@ func _process(delta: float) -> void:
 	elif active == "look" and float(_tc.get("look_total")) >= LOOK_DONE_PX:
 		_mark_done("look")
 		_deactivate()
-	elif active == "look_stick" and float(_tc.get("look_time")) >= LOOK_STICK_DONE_SECONDS:
-		_mark_done("look_stick")
+	elif active == "aim" and float(_tc.get("look_time")) >= AIM_DONE_SECONDS:
+		_mark_done("aim")
 		_deactivate()
 	if active != "":
 		_shown_for += delta
@@ -226,14 +225,12 @@ func _choose_next() -> void:
 	var twin: bool = _twin()
 	if not is_done("move"):
 		next = "move"
-	elif twin and not is_done("look_stick"):
-		next = "look_stick"
+	elif twin and not is_done("aim"):
+		next = "aim"
 	elif not twin and not is_done("look"):
 		next = "look"
 	elif not is_done("attack") and _enemy_within(22.0):
 		next = "attack"
-	elif twin and not is_done("aim") and is_done("attack") and _enemy_within(22.0):
-		next = "aim"
 	elif not is_done("use") and int(_tc.get("_use_context")) > 0:
 		next = "use"
 	elif not is_done("block") and is_done("attack") and _took_damage:
@@ -298,9 +295,6 @@ func _position_label() -> void:
 			spots.append(Vector2(view.x * 0.55, view.y * 0.40))
 			spots.append(Vector2(view.x * 0.55, view.y * 0.30))
 			spots.append(Vector2(view.x * 0.45, view.y * 0.40))
-		"look_stick":
-			spots.append(_tc.look_default + Vector2(0.0, -150.0))
-			spots.append(Vector2(view.x * 0.55, view.y * 0.30))
 		_:
 			# Above the whole action cluster, so the hint never sits on a button the player must press; if the
 			# first spot would touch any control (map button, arc) try the ones further left.
