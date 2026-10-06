@@ -366,7 +366,7 @@ func _build_gameplay_tab() -> void:
 
 
 const SCHEME_HINTS : Dictionary = {
-	"twin": "Left thumb moves, right thumb looks. The big Attack button also aims: drag from it to turn while you attack.",
+	"twin": "Left thumb moves. The big Attack button also aims: drag from it to look around and turn while you attack.",
 	"classic": "Swipe the right side of the screen to look around.",
 }
 

@@ -130,7 +130,7 @@ func _ready() -> void:
 
 	# Right side -> look as mouse-look motion; no actions fire.
 	_probe_motion.clear()
-	var l0: Vector2 = Vector2(view.x * 0.55, view.y * 0.30)   # in the look zone, clear of every button
+	var l0: Vector2 = Vector2(view.x * 0.55, view.y * 0.30)   # Classic: free screen to swipe on, clear of every button
 	_touch(1, l0, true)
 	_drag(1, l0 + Vector2(100, 0), Vector2(100, 0))
 	_touch(1, l0, false)
