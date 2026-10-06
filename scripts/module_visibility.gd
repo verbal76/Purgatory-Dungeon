@@ -76,6 +76,8 @@ var _hidden_count : int = 0
 var _updates : int = 0
 var _hides_budget : int = 0
 var _flame_batches : Array = []
+var _gen : Node = null
+var _boot_module_count : int = 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -88,6 +90,9 @@ var _flame_batches : Array = []
 func boot(modules: Array, flame_batches: Array = [], flame_bounds: Array = []) -> void:
 	shutdown()
 	_flame_batches = flame_batches
+	_boot_module_count = modules.size()
+	var gen_node : Node = get_parent().get_node_or_null("DungeonGenerationFunction") if get_parent() != null else null
+	_gen = gen_node
 	for m in modules:
 		if not is_instance_valid(m) or not (m is Node3D):
 			continue
@@ -178,6 +183,10 @@ func refresh(instant: bool = false) -> void:
 		_show_all()
 		return
 	_map_was_open = false
+	if _generator_changed():
+		# the dungeon was regenerated (modules replaced): forget the old items, show them, pick up the new ones
+		boot(_gen.placed_modules, _gen.torch_flame_batches, _gen.torch_flame_bounds)
+		return
 	_pick_up_new_children()
 	_updates += 1
 	_hides_budget = 1000000 if instant else MAX_HIDES_PER_UPDATE
@@ -189,6 +198,8 @@ func refresh(instant: bool = false) -> void:
 # ══════════════════════════════════════════════════════════════════════════════
 
 func _ready() -> void:
+	# keeps following the map (which runs while the game is paused) so it is never drawn half culled
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	set_process(false)
 
 
@@ -278,6 +289,15 @@ func _update_items(cam: Camera3D) -> void:
 					_set_item(i, node, false)
 			elif k == KIND_ORB and node.visible:
 				node.visible = false   # a script showed it again (respawn) inside a hidden area
+
+
+func _generator_changed() -> bool:
+	if _gen == null or not is_instance_valid(_gen) or not ("placed_modules" in _gen):
+		return false
+	var mods : Array = _gen.placed_modules
+	if mods.size() != _boot_module_count:
+		return true
+	return mods.size() > 0 and not is_instance_valid(mods[0])
 
 
 func _forced(p: Vector3, keep2: float) -> bool:

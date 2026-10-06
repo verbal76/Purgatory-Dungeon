@@ -429,6 +429,17 @@ func _eye_position(d: Dictionary, strict: bool = false) -> Vector3:
 					dq.collision_mask = 1
 					if PhysicsUtil.ray_world(space, dq).is_empty():
 						continue
+					# enclosed: eight horizontal rays of 80 m all hit level geometry (rim modules have gaps)
+					var open_side := false
+					for k2 in 8:
+						var a2 := float(k2) * TAU / 8.0
+						var rq := PhysicsRayQueryParameters3D.create(p, p + Vector3(cos(a2), 0.0, sin(a2)) * 80.0)
+						rq.collision_mask = 1
+						if PhysicsUtil.ray_world(space, rq).is_empty():
+							open_side = true
+							break
+					if open_side:
+						continue
 				return Vector3(p.x, floor_y + 1.6, p.z)
 	if strict:
 		return Vector3.INF
@@ -475,7 +486,10 @@ func _sight_scan(eye: Vector3) -> Array:
 
 
 func _move_to(d: Dictionary) -> void:
-	var eye := _eye_position(d, d.has("force_dir"))
+	# a spot with a floor under it (inside the level); the older lenient spiral only as a fallback
+	var eye := _eye_position(d, true)
+	if eye == Vector3.INF:
+		eye = _eye_position(d, false)
 	var dir := _longest_dir(eye)
 	if d.has("force_dir"):
 		dir = d["force_dir"]
@@ -537,6 +551,9 @@ func _pixel_diff(name: String) -> Dictionary:
 	var res: Dictionary = {}
 	if _mv == null or _headless:
 		return res
+	var orbs_node := _main.get_node_or_null("HealthOrbManager") as Node3D
+	if orbs_node != null:
+		orbs_node.visible = false   # the pulsing orb lights differ between any two frames
 	if _player != null:
 		_player.visible = false   # the animated first-person weapon would differ between any two frames
 	_mv.refresh(true)
@@ -559,6 +576,8 @@ func _pixel_diff(name: String) -> Dictionary:
 	_mv.refresh(true)
 	if _player != null:
 		_player.visible = true
+	if orbs_node != null:
+		orbs_node.visible = true
 	a.convert(Image.FORMAT_RGB8)
 	b.convert(Image.FORMAT_RGB8)
 	b2.convert(Image.FORMAT_RGB8)

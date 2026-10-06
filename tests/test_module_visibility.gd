@@ -366,6 +366,23 @@ func _ready() -> void:
 		doomed.free()
 	vis.refresh(true)
 	_check(true, tag + "update survives a hidden module being freed")
+	# the generator's module list changes (a regenerated dungeon): the node rebuilds itself, nothing stays hidden by mistake
+	var items_before: int = vis.item_count()
+	var gone: Node3D = null
+	while gone == null and not modules.is_empty():
+		var cand = modules.pop_back()
+		if is_instance_valid(cand) and gen.get_module_aabb(cand).size != Vector3.ZERO:
+			gone = cand
+	if gone != null:
+		gone.get_parent().remove_child(gone)
+		gone.free()
+	vis.refresh(true)
+	_check(vis.item_count() == items_before - 1 or vis.item_count() < items_before, tag + "a changed module list is picked up (%d -> %d items)" % [items_before, vis.item_count()])
+	var invalid_hidden := 0
+	for m in modules:
+		if is_instance_valid(m) and not (m as Node3D).visible and _aabb_dist(gen.get_module_aabb(m), campos) < vis.R_BASE - 3.0:
+			invalid_hidden += 1
+	_check(invalid_hidden == 0, tag + "after the rebuild nothing near the camera is hidden")
 	vis.shutdown()
 	var left_hidden := 0
 	for m in modules:
