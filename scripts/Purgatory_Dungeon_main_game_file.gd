@@ -62,6 +62,8 @@ extends Node3D
 @export var jumpscare_texture : Texture2D   # Scary face image (.png, .jpg, etc.)
 @export var jumpscare_sound   : AudioStream # Scream / stinger audio file
 
+const PropSpawnerScript = preload("res://scripts/prop_spawner.gd")
+
 @onready var dungeon_generation_function : Node = get_node_or_null("DungeonGenerationFunction")
 @onready var kill_counter_label : Label = get_node_or_null("HUD/KillCounterMargin/KillCounterVBox/KillCounterLabel")
 
@@ -75,8 +77,26 @@ var placed_modules : Array[Node3D] = []
 const EXPLORE_INTERVAL : float = 0.5
 var _explore_timer     : float = 0.0
 
+# ── Entry-sequence timeline (diagnostics) ──────────────────────────────────────
+# One [label, Time.get_ticks_usec(), node_count] entry per phase of the dungeon entry. A handful of
+# appends per run; tests/entry_profile.gd prints them. Not used by gameplay.
+var entry_marks : Array = []
+var entry_profiling : bool = false   # set by tests/entry_profile.gd before the scene enters the tree
+
+
+func _mark(label: String) -> void:
+	if not entry_profiling:
+		return
+	entry_marks.append([label, Time.get_ticks_usec(), get_tree().get_node_count()])
+
+
+# Public so the managers booted from here can add their own phases (they check has_method first).
+func entry_mark(label: String) -> void:
+	_mark(label)
+
 
 func _ready() -> void:
+	_mark("ready_begin")
 	_reset_kill_counter()
 	_style_kill_counter()
 	add_to_group("dungeon_generator")
@@ -87,12 +107,14 @@ func _ready() -> void:
 		push_warning("AudioManager not found. Gameplay music will not start.")
 
 	_apply_run_seed()
+	_mark("pre_player")
 
 	# THE FIX: Directly capture the newly spawned player so we never grab a ghost
 	var active_player = _spawn_selected_character()
 
 	# Phones: the touch layer feeds the same input actions as keyboard / gamepad (no-op on desktop).
 	TouchControls.install(self)
+	_mark("player_spawned")
 
 	if dungeon_generation_function == null:
 		push_error("DungeonGenerationFunction node not found in main scene.")
@@ -100,19 +122,28 @@ func _ready() -> void:
 
 	_push_generation_settings_into_child()
 
-	# Yield two frames so the loading screen (created by the player's _ready)
-	# has time to composite and appear on screen before generation blocks the thread.
-	await get_tree().process_frame
-	await get_tree().process_frame
+	# Heavy resources the population passes need (prop models and textures) load on worker threads
+	# while the layout is being built, so they are ready by the time they are first instantiated.
+	_request_background_loads()
 
-	var generation_result : Dictionary = dungeon_generation_function.generate_dungeon()
+	# Yield two frames so the loading screen (created by the player's _ready)
+	# has time to composite and appear on screen before generation starts.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_mark("generate_begin")
+
+	# The layout is built in slices (about LOAD_SLICE_US of work per frame) so the loading screen keeps
+	# animating instead of the device freezing for the whole generation.
+	var generation_result : Dictionary = await dungeon_generation_function.generate_dungeon_async(LOAD_SLICE_US)
 	if not bool(generation_result.get("success", false)):
 		push_error("Dungeon generation failed.")
 		return
 
+	_mark("generate_end")
 	var starter : Node3D = generation_result.get("starter")
 	placed_modules = dungeon_generation_function.placed_modules
 
+	var spawn_origin : Vector3 = Vector3.ZERO
 	if starter != null:
 		var spawn_marker = starter.get_node_or_null("Player_Spawn") as Node3D
 		if active_player and spawn_marker:
@@ -138,19 +169,81 @@ func _ready() -> void:
 					safe_pos.z = centre.z
 			safe_pos.y += 2.5
 			active_player.global_position = safe_pos
+			spawn_origin = safe_pos
 
 			# 4. Turn physics back on
 			active_player.set_physics_process(true)
+			_mark("player_placed")
+	if spawn_origin == Vector3.ZERO and active_player != null:
+		spawn_origin = active_player.global_position
 
-	# T1.3: spawn props + chests FIRST (both stagger over frames via await),
-	# so by the time the enemy manager boots and its first spawn wave fires,
-	# props have already started materialising. Staggered prop-batch cost
-	# overlaps the enemy-manager-boot cost instead of stacking sequentially.
-	_boot_prop_spawner()
-	_boot_chest_manager()
+	await _boot_population(active_player, spawn_origin)
+	_mark("ready_end")
+
+
+# ══════════════════════════════════════════════════════════════
+#  STAGED ENTRY
+# ══════════════════════════════════════════════════════════════
+# Everything that fills the dungeon after the layout exists is a "stage worker": a manager coroutine that
+# places things nearest-the-player first and gives the frame back whenever stage_over() says this frame's
+# share of work is spent. The player's neighbourhood (every module with its centre within NEAR_RADIUS of the
+# spawn) must be finished before control is handed over; the rest completes in the background, in
+# distance order, a few milliseconds per frame, so no frame carries the cost of a whole pass.
+
+## Microseconds of layout work per frame while the loading screen is up.
+const LOAD_SLICE_US : int = 10000
+## Per-frame population budget (microseconds) behind the loading screen / once the player has control.
+const STAGE_BUDGET_LOADING_US : int = 10000
+const STAGE_BUDGET_PLAY_US : int = 2500
+## The player's neighbourhood: modules whose box centre is within this many metres (XZ) of the spawn.
+const NEAR_RADIUS : float = 40.0
+
+signal entry_ready      # the neighbourhood is complete and the first enemy wave exists: safe to hand over
+signal entry_complete   # every background stage has finished
+
+var entry_is_ready : bool = false
+var entry_is_complete : bool = false
+var _stage_workers : Array[Node] = []
+var _stage_frame : int = -1
+var _stage_t0 : int = 0
+
+
+# True once this frame's population budget is spent. Workers check it between small units of work and
+# `await stage_next_frame()` when it is. The budget is shared by every worker (first come, first served).
+func stage_over() -> bool:
+	var f : int = Engine.get_process_frames()
+	var now : int = Time.get_ticks_usec()
+	if f != _stage_frame:
+		_stage_frame = f
+		_stage_t0 = now
+		return false
+	var budget : int = STAGE_BUDGET_PLAY_US if entry_is_ready else STAGE_BUDGET_LOADING_US
+	return now - _stage_t0 >= budget
+
+
+func stage_next_frame() -> void:
+	await get_tree().process_frame
+
+
+# Workers register here; each has `stage_near_done: bool` and `stage_done: bool` (set by the worker).
+func register_stage_worker(worker: Node) -> void:
+	_stage_workers.append(worker)
+
+
+# One step per frame (each a few ms to a few tens of ms): creating the managers used to be one block of ~200 ms.
+func _boot_population(active_player: Node3D, spawn_origin: Vector3) -> void:
+	await get_tree().process_frame   # the layout's last frame (and the torch block) presents first
+	_boot_prop_spawner(spawn_origin)
+	_mark("props_booted")
+	await get_tree().process_frame
+	_boot_chest_manager(spawn_origin)
+	_mark("chests_booted")
+	await get_tree().process_frame
 	# Build and activate the Proximity Spawner natively (Health Orb Style)
 	_boot_enemy_manager(active_player)
-	_boot_room_lock_manager(active_player)
+	_mark("enemy_manager_booted")
+	await get_tree().process_frame
+	_boot_room_lock_manager(active_player, spawn_origin)
 
 	dungeon_generation_function.update_player_exploration()
 
@@ -160,14 +253,78 @@ func _ready() -> void:
 	_boot_torch_dimming_manager()
 	GameClock.start_run()
 	GameClock.run_ended.connect(_on_run_ended)
-	_boot_health_orb_manager()
+	_mark("clock_started")
+	await get_tree().process_frame
 	GlobeManager.spawn_globes(dungeon_generation_function)
-	_boot_trap_manager()
+	_mark("globes_spawned")
+	await get_tree().process_frame
+	_boot_health_orb_manager(spawn_origin)
+	await get_tree().process_frame
+	_boot_trap_manager(spawn_origin)
 	# SURGICAL ADD: Show the wallet overlay only in the dungeon.
 	# It is hidden by default and hidden again when returning to menus.
 	PlayerWallet.show_hud()
 
 	_update_kill_counter_label()
+	_run_stage_monitor()
+
+
+# Watches the workers: emits entry_ready when the neighbourhood is complete (and the enemy manager's first
+# wave exists), entry_complete when everything is. Polls once per frame; no per-frame allocation.
+func _run_stage_monitor() -> void:
+	var enemy_mgr := get_node_or_null("EnemyManager")
+	while not entry_is_complete:
+		var all_done : bool = true
+		var near_done : bool = true
+		for w in _stage_workers:
+			if not is_instance_valid(w):
+				continue
+			if not bool(w.get("stage_done")):
+				all_done = false
+			if not bool(w.get("stage_near_done")):
+				near_done = false
+		# The first enemy wave exists (an enemy manager without spawn points never reports one: nothing to wait for).
+		var enemies_done : bool = enemy_mgr == null or not is_instance_valid(enemy_mgr) \
+				or bool(enemy_mgr.get("_initial_spawn_done")) or (enemy_mgr.get("_all_spawns") as Array).is_empty()
+		if not entry_is_ready and near_done and enemies_done:
+			entry_is_ready = true
+			_mark("entry_ready")
+			entry_ready.emit()
+		if all_done and entry_is_ready:
+			entry_is_complete = true
+			_mark("entry_complete")
+			entry_complete.emit()
+			return
+		await get_tree().process_frame
+
+
+# Scripts, models and textures the population passes load on first use. Listed here so they are requested on
+# worker threads at the start of the entry (see _request_background_loads); a path that does not exist is skipped.
+const BACKGROUND_LOADS : Array[String] = [
+	"res://scripts/chest_manager.gd", "res://scripts/chest.gd", "res://scripts/health_orb_manager.gd",
+	"res://scripts/trap_manager.gd", "res://scripts/trap_banner_hud.gd", "res://scripts/room_lock_manager.gd",
+	"res://scripts/enemy_manager.gd", "res://scripts/destructible_prop.gd", "res://scripts/kickable_potion.gd",
+	"res://addons/props/chests and keys/SM_LockedChestBronze.fbx",
+	"res://addons/props/chests and keys/SM_LockedChestSilver.fbx",
+	"res://addons/props/chests and keys/SM_LockedChestGold.fbx",
+	"res://addons/props/chests and keys/SM_Chests_Mat_Chests_AlbedoTransparency.tga",
+	"res://addons/props/chests and keys/SM_Chests_Mat_Chests_MetallicSmoothness.tga",
+	"res://addons/props/chests and keys/SM_Chests_Mat_Chests_Normal.tga",
+	"res://addons/kenney_particle_pack/magic_04.png", "res://addons/kenney_particle_pack/smoke_07.png",
+]
+
+
+# Prop models and textures are requested on worker threads right away (they are only used after the layout
+# exists). load() later returns the cached resource, or waits for the thread that is still loading it.
+func _request_background_loads() -> void:
+	var paths : Array[String] = BACKGROUND_LOADS.duplicate()
+	paths.append_array(PropSpawnerScript.PROP_MODELS)
+	paths.append_array(PropSpawnerScript.WALL_FURNITURE_MODELS)
+	paths.append_array([PropSpawnerScript.ALBEDO_TEX, PropSpawnerScript.METALLIC_TEX,
+			PropSpawnerScript.NORMAL_TEX, "res://addons/props/SM_ManaPotion.fbx"])
+	for path in paths:
+		if ResourceLoader.exists(path):
+			ResourceLoader.load_threaded_request(path)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -254,7 +411,7 @@ func _boot_enemy_manager(player_node: Node3D) -> void:
 #  HEALTH ORB MANAGER
 # ══════════════════════════════════════════════════════════════
 
-func _boot_trap_manager() -> void:
+func _boot_trap_manager(spawn_origin: Vector3) -> void:
 	var trap_script := load("res://scripts/trap_manager.gd")
 	if trap_script == null:
 		push_warning("TrapManager script not found — no traps will spawn.")
@@ -266,10 +423,11 @@ func _boot_trap_manager() -> void:
 	if trap_mgr.has_method("boot_traps"):
 		var player_node = get_node_or_null("Player")
 		trap_mgr.boot_traps(dungeon_generation_function, player_node,
-				jumpscare_texture, jumpscare_sound)
+				jumpscare_texture, jumpscare_sound, spawn_origin)
+		register_stage_worker(trap_mgr)
 
 
-func _boot_health_orb_manager() -> void:
+func _boot_health_orb_manager(spawn_origin: Vector3) -> void:
 	var orb_script := load("res://scripts/health_orb_manager.gd")
 	if orb_script == null:
 		push_warning("HealthOrbManager: script not found at res://scripts/health_orb_manager.gd")
@@ -279,9 +437,11 @@ func _boot_health_orb_manager() -> void:
 	orb_manager.name = "HealthOrbManager"
 	orb_manager.set_script(orb_script)
 	add_child(orb_manager)
+	register_stage_worker(orb_manager)
+	orb_manager.stage_begin(spawn_origin)
 
 
-func _boot_prop_spawner() -> void:
+func _boot_prop_spawner(spawn_origin: Vector3) -> void:
 	var prop_script := load("res://scripts/prop_spawner.gd")
 	if prop_script == null:
 		push_warning("PropSpawner: script not found at res://scripts/prop_spawner.gd")
@@ -290,9 +450,11 @@ func _boot_prop_spawner() -> void:
 	spawner.name = "PropSpawner"
 	spawner.set_script(prop_script)
 	add_child(spawner)
+	register_stage_worker(spawner)
+	spawner.stage_begin(spawn_origin, NEAR_RADIUS)
 
 
-func _boot_chest_manager() -> void:
+func _boot_chest_manager(spawn_origin: Vector3) -> void:
 	var chest_script := load("res://scripts/chest_manager.gd")
 	if chest_script == null:
 		push_warning("ChestManager: script not found at res://scripts/chest_manager.gd")
@@ -301,9 +463,11 @@ func _boot_chest_manager() -> void:
 	mgr.name = "ChestManager"
 	mgr.set_script(chest_script)
 	add_child(mgr)
+	register_stage_worker(mgr)
+	mgr.stage_begin(spawn_origin, NEAR_RADIUS)
 
 
-func _boot_room_lock_manager(player_node: Node3D) -> void:
+func _boot_room_lock_manager(player_node: Node3D, spawn_origin: Vector3) -> void:
 	var script := load("res://scripts/room_lock_manager.gd")
 	if script == null:
 		push_warning("RoomLockManager: script not found.")
@@ -314,7 +478,8 @@ func _boot_room_lock_manager(player_node: Node3D) -> void:
 	add_child(mgr)
 	var enemy_mgr := get_node_or_null("EnemyManager")
 	if mgr.has_method("boot"):
-		mgr.boot(player_node, dungeon_generation_function, enemy_mgr)
+		mgr.boot(player_node, dungeon_generation_function, enemy_mgr, spawn_origin)
+		register_stage_worker(mgr)
 
 
 

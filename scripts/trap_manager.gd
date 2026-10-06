@@ -94,10 +94,17 @@ func _exit_tree() -> void:
 
 # ── Boot ──────────────────────────────────────────────────────────────────────
 
+# Staged arming (see Purgatory_Dungeon_main_game_file.gd): traps are invisible triggers, so they never gate the
+# hand-over (`stage_near_done` stays true); each trap is armed in its own budgeted step.
+var stage_near_done : bool = true
+var stage_done : bool = true
+
+
 # Called from Purgatory_Dungeon_main_game_file.gd after dungeon generation.
 func boot_traps(dungeon_gen: Node, player: Node3D,
 		jumpscare_texture: Texture2D = null,
-		jumpscare_sound: AudioStream = null) -> void:
+		jumpscare_sound: AudioStream = null,
+		_origin: Vector3 = Vector3.ZERO) -> void:
 	_dungeon_gen       = dungeon_gen
 	_player            = player
 	_jumpscare_texture = jumpscare_texture
@@ -114,10 +121,19 @@ func boot_traps(dungeon_gen: Node, player: Node3D,
 		push_warning("TrapManager: dungeon_gen not valid — no traps spawned.")
 		return
 
+	stage_done = false
+	call("_stage_arm")   # dynamic call: runs as a background coroutine
+
+
+func _stage_arm() -> void:
+	var main : Node = get_parent()
+	var budgeted : bool = main != null and main.has_method("stage_over")
 	var candidates : Array[Node3D] = _dungeon_gen.get_trap_candidates(trap_count)
 	for tile in candidates:
 		if is_instance_valid(tile):
 			_arm_trap(tile)
+		if budgeted and main.stage_over():
+			await get_tree().process_frame
 
 	# ── Forced fireball-mine traps ─────────────────────────────────────────────
 	# A separate request for fireball_trap_count additional tiles; these always
@@ -127,6 +143,9 @@ func boot_traps(dungeon_gen: Node, player: Node3D,
 		for tile in fb_candidates:
 			if is_instance_valid(tile):
 				_arm_trap(tile, EFFECT_FIREBALL_MINE)
+			if budgeted and main.stage_over():
+				await get_tree().process_frame
+	stage_done = true
 
 
 # ── Trap arming ───────────────────────────────────────────────────────────────

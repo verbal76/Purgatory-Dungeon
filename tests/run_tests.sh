@@ -78,6 +78,12 @@ done
 for seed in 1 2 3 7 42 123 2024 98765; do
 	GEN_TEST_SEEDS="$seed" run "res://tests/test_dungeon_generation.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_dungeon_generation.tscn
 done
+# Threaded dungeon scene load (no frozen menu while a run starts).
+run "res://tests/test_dungeon_entry.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_dungeon_entry.tscn
+# Staged dungeon entry: the sliced generation equals the synchronous one; the player's neighbourhood is complete at hand-over.
+for seed in 7 42; do
+	ENTRY_TEST_SEED="$seed" run "res://tests/test_entry_staging.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_entry_staging.tscn
+done
 # Torches: every module has at least one and every torch is seated on a wall (one seed per process, as above).
 for seed in 1 7 42; do
 	TORCH_TEST_SEEDS="$seed" run "res://tests/test_torch_placement.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_torch_placement.tscn
