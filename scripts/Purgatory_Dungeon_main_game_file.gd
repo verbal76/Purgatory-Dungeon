@@ -75,8 +75,26 @@ var placed_modules : Array[Node3D] = []
 const EXPLORE_INTERVAL : float = 0.5
 var _explore_timer     : float = 0.0
 
+# ── Entry-sequence timeline (diagnostics) ──────────────────────────────────────
+# One [label, Time.get_ticks_usec(), node_count] entry per phase of the dungeon entry. A handful of
+# appends per run; tests/entry_profile.gd prints them. Not used by gameplay.
+var entry_marks : Array = []
+var entry_profiling : bool = false   # set by tests/entry_profile.gd before the scene enters the tree
+
+
+func _mark(label: String) -> void:
+	if not entry_profiling:
+		return
+	entry_marks.append([label, Time.get_ticks_usec(), get_tree().get_node_count()])
+
+
+# Public so the managers booted from here can add their own phases (they check has_method first).
+func entry_mark(label: String) -> void:
+	_mark(label)
+
 
 func _ready() -> void:
+	_mark("ready_begin")
 	_reset_kill_counter()
 	_style_kill_counter()
 	add_to_group("dungeon_generator")
@@ -87,12 +105,14 @@ func _ready() -> void:
 		push_warning("AudioManager not found. Gameplay music will not start.")
 
 	_apply_run_seed()
+	_mark("pre_player")
 
 	# THE FIX: Directly capture the newly spawned player so we never grab a ghost
 	var active_player = _spawn_selected_character()
 
 	# Phones: the touch layer feeds the same input actions as keyboard / gamepad (no-op on desktop).
 	TouchControls.install(self)
+	_mark("player_spawned")
 
 	if dungeon_generation_function == null:
 		push_error("DungeonGenerationFunction node not found in main scene.")
@@ -104,12 +124,14 @@ func _ready() -> void:
 	# has time to composite and appear on screen before generation blocks the thread.
 	await get_tree().process_frame
 	await get_tree().process_frame
+	_mark("generate_begin")
 
 	var generation_result : Dictionary = dungeon_generation_function.generate_dungeon()
 	if not bool(generation_result.get("success", false)):
 		push_error("Dungeon generation failed.")
 		return
 
+	_mark("generate_end")
 	var starter : Node3D = generation_result.get("starter")
 	placed_modules = dungeon_generation_function.placed_modules
 
@@ -141,6 +163,7 @@ func _ready() -> void:
 
 			# 4. Turn physics back on
 			active_player.set_physics_process(true)
+			_mark("player_placed")
 
 	# T1.3: spawn props + chests FIRST (both stagger over frames via await),
 	# so by the time the enemy manager boots and its first spawn wave fires,
@@ -148,9 +171,12 @@ func _ready() -> void:
 	# overlaps the enemy-manager-boot cost instead of stacking sequentially.
 	_boot_prop_spawner()
 	_boot_chest_manager()
+	_mark("props_chests_booted")
 	# Build and activate the Proximity Spawner natively (Health Orb Style)
 	_boot_enemy_manager(active_player)
+	_mark("enemy_manager_booted")
 	_boot_room_lock_manager(active_player)
+	_mark("room_locks_booted")
 
 	dungeon_generation_function.update_player_exploration()
 
@@ -160,14 +186,18 @@ func _ready() -> void:
 	_boot_torch_dimming_manager()
 	GameClock.start_run()
 	GameClock.run_ended.connect(_on_run_ended)
+	_mark("clock_started")
 	_boot_health_orb_manager()
 	GlobeManager.spawn_globes(dungeon_generation_function)
+	_mark("globes_spawned")
 	_boot_trap_manager()
+	_mark("traps_booted")
 	# SURGICAL ADD: Show the wallet overlay only in the dungeon.
 	# It is hidden by default and hidden again when returning to menus.
 	PlayerWallet.show_hud()
 
 	_update_kill_counter_label()
+	_mark("ready_end")
 
 
 # ══════════════════════════════════════════════════════════════

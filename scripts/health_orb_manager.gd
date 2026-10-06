@@ -57,8 +57,17 @@ func _ready() -> void:
 		orb_count    = int(orb_count * 1.6)
 		respawn_time = respawn_time * 0.5
 
+	_entry_mark("orbs_begin")
 	_collect_spawn_points()
+	_entry_mark("orbs_points")
 	_spawn_all_orbs()
+	_entry_mark("orbs_end")
+
+
+func _entry_mark(label: String) -> void:
+	var main : Node = get_parent()
+	if main != null and main.has_method("entry_mark"):
+		main.entry_mark(label)
 
 
 func _collect_spawn_points() -> void:

@@ -27,7 +27,15 @@ const _COLORS      : Array[String] = ["bronze", "silver", "gold"]
 func _ready() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
+	_entry_mark("chests_begin")
 	_spawn_all_chests()
+	_entry_mark("chests_end")
+
+
+func _entry_mark(label: String) -> void:
+	var main : Node = get_parent()
+	if main != null and main.has_method("entry_mark"):
+		main.entry_mark(label)
 
 
 func _spawn_all_chests() -> void:

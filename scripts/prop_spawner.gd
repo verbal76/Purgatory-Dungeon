@@ -97,8 +97,17 @@ func _ready() -> void:
 	# Wait two frames for the dungeon generator to finish placing all modules.
 	await get_tree().process_frame
 	await get_tree().process_frame
+	_entry_mark("props_begin")
 	_build_shared_material()
-	_spawn_all_props()
+	_entry_mark("props_material")
+	await _spawn_all_props()
+	_entry_mark("props_end")
+
+
+func _entry_mark(label: String) -> void:
+	var main : Node = get_parent()
+	if main != null and main.has_method("entry_mark"):
+		main.entry_mark(label)
 
 
 func _build_shared_material() -> void:

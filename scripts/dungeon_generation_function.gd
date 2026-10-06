@@ -144,16 +144,24 @@ var layout_attempts : int = 0
 ## room failed...). Diagnostics only: the stress tests read it to find and reproduce bad seeds.
 var layout_history : Array[Dictionary] = []
 var _diag : Dictionary = {}
+## Entry-profile diagnostics for the whole generate_dungeon() call (reset on every call): phase
+## durations in ms, how many scenes were instantiated / overlap-tested / measured. Read by tests/entry_profile.gd.
+var gen_stats : Dictionary = {}
 
 
 func generate_dungeon() -> Dictionary:
 	layout_attempts = 0
 	layout_history.clear()
+	gen_stats = {"instantiated": 0, "overlap_checks": 0, "aabb_computed": 0, "attempt_ms": [], "torch_ms": 0.0}
+	var t_gen : int = Time.get_ticks_usec()
 	var result : Dictionary = {"success": false}
 	for i in maxi(max_layout_attempts, 1):
 		layout_attempts += 1
+		var t_att : int = Time.get_ticks_usec()
 		result = _generate_once()
+		gen_stats["attempt_ms"].append(float(Time.get_ticks_usec() - t_att) / 1000.0)
 		if not bool(result.get("success", false)):
+			_free_candidate_pool()
 			return result
 		if counted_piece_total >= int(ceil(float(target_piece_count) * minimum_fill_fraction)):
 			break
@@ -161,8 +169,11 @@ func generate_dungeon() -> Dictionary:
 			push_warning("DungeonGeneration: layout %d reached only %d of %d rooms - regenerating." % [
 				layout_attempts, counted_piece_total, target_piece_count])
 			_discard_layout()
+	_free_candidate_pool()   # the reusable candidates must not stay in the physics space for the torch rays
 	if bool(result.get("success", false)):
 		_place_all_torches()
+	gen_stats["torch_ms"] = torch_pass_ms
+	gen_stats["total_ms"] = float(Time.get_ticks_usec() - t_gen) / 1000.0
 	return result
 
 
@@ -195,7 +206,7 @@ func _generate_once() -> Dictionary:
 
 	_build_weighted_scene_pool()
 
-	var starter: Node3D = _starter_module.instantiate() as Node3D
+	var starter: Node3D = _instantiate_module(_starter_module)
 	_main_root.add_child(starter)
 	starter.global_position = Vector3.ZERO
 	starter.global_rotation = Vector3.ZERO
@@ -344,6 +355,8 @@ func _reset_generation_state() -> void:
 	registered_enemy_spawns.clear()
 	registered_waypoints.clear()
 	registered_torches.clear()
+	_grid.clear()
+	_point_grid_count = -1
 	counted_piece_total      = 0
 	enemy_spawn_marker_total = 0
 	waypoint_total           = 0
@@ -504,6 +517,7 @@ func _force_attach_code_plug(target: Node3D) -> bool:
 	# Track it in placed_modules so minimap/bounds include it, but skip spawn
 	# registration (no markers on a code-built plug).
 	placed_modules.append(plug)
+	_grid_add(plug)
 	plug.set_meta("explored", false)
 	plug.set_meta("counts_toward_goal", false)
 	plug.set_meta("lock_color", "")
@@ -521,56 +535,184 @@ func _get_all_unused_connections_from_all_modules() -> Array[Node3D]:
 
 
 func _try_attach_connector_then_piece(target: Node3D) -> Dictionary:
+	var conn_cand : Dictionary = _get_candidate(_room_connector_module)
 	var attempt: int = 0
 	while attempt < attempts_per_connection:
 		attempt += 1
-		var conn_mod: Node3D = _room_connector_module.instantiate()
-		_main_root.add_child(conn_mod)
-		_reset_module_transform(conn_mod)
-		var conns: Array[Node3D] = _get_connections(conn_mod)
-		if conns.size() < 2:
-			conn_mod.queue_free()
+		var conn_node : Node3D = conn_cand["node"]
+		_reset_module_transform(conn_node)
+		var base_conns : Array[Node3D] = conn_cand["conns"]
+		if base_conns.size() < 2:
 			return {"success": false}
+		var conns : Array[Node3D] = base_conns.duplicate()   # shuffled copy: the cached order stays the scene order
 		conns.shuffle()
 		var exit: Node3D = null
 		var entry: Node3D = null
+		var conn_aabb : AABB = AABB()
 		for c in conns:
 			var other = _get_other_connection(conns, c)
-			_reset_module_transform(conn_mod)
-			_align_module_to_connection(conn_mod, c, target)
-			if not _module_overlaps_anything(conn_mod, target):
+			_reset_module_transform(conn_node)
+			_align_module_to_connection(conn_node, c, target)
+			conn_aabb = _candidate_aabb(conn_cand)
+			if not _aabb_overlaps_placed(conn_aabb, target):
 				entry = c; exit = other; break
 		if entry == null:
-			conn_mod.queue_free()
 			continue
 		var scene: PackedScene = _pick_weighted_scene(_frontier_is_thin())
-		var main_mod: Node3D = scene.instantiate()
-		_main_root.add_child(main_mod)
-		_reset_module_transform(main_mod)
-		var main_conns: Array[Node3D] = _get_connections(main_mod)
+		var main_cand : Dictionary = _get_candidate(scene)
+		var main_node : Node3D = main_cand["node"]
+		_reset_module_transform(main_node)
+		var main_base : Array[Node3D] = main_cand["conns"]
 		# A dead-end room placed on the LAST open doorway ends generation: a rare random run
 		# produced a 5-room dungeon with no enemy spawns. Below the target, only rooms that
 		# keep a doorway open may take the last one.
-		if main_conns.size() < 2 and _frontier_is_thin():
-			main_mod.queue_free()
-			conn_mod.queue_free()
+		if main_base.size() < 2 and _frontier_is_thin():
 			continue
+		var main_conns : Array[Node3D] = main_base.duplicate()
 		main_conns.shuffle()
 		var main_entry: Node3D = null
+		var main_aabb : AABB = AABB()
 		for mc in main_conns:
-			_reset_module_transform(main_mod)
-			_align_module_to_connection(main_mod, mc, exit)
-			if not _module_overlaps_anything(main_mod, exit):
+			_reset_module_transform(main_node)
+			_align_module_to_connection(main_node, mc, exit)
+			main_aabb = _candidate_aabb(main_cand)
+			if not _aabb_overlaps_placed(main_aabb, exit):
 				main_entry = mc; break
 		if main_entry:
+			# Keep the two candidates: instantiate each once, at the transform it was tested at.
+			var entry_idx : int = base_conns.find(entry)
+			var exit_idx : int = base_conns.find(exit)
+			var main_idx : int = main_base.find(main_entry)
+			var conn_mod : Node3D = _commit_candidate(_room_connector_module, conn_node, conn_aabb)
+			var main_mod : Node3D = _commit_candidate(scene, main_node, main_aabb)
+			var conn_real : Array[Node3D] = _get_connections(conn_mod)
+			var main_real : Array[Node3D] = _get_connections(main_mod)
 			_mark_connection_used(target)
-			_mark_connection_used(entry)
-			_mark_connection_used(exit)
-			_mark_connection_used(main_entry)
+			_mark_connection_used(conn_real[entry_idx])
+			_mark_connection_used(conn_real[exit_idx])
+			_mark_connection_used(main_real[main_idx])
 			return {"success": true, "connector": conn_mod, "main": main_mod}
-		main_mod.queue_free()
-		conn_mod.queue_free()
 	return {"success": false}
+
+
+# ── Candidate pool ────────────────────────────────────────────────────────────
+# Fitting a room used to instantiate the scene, add it to the tree, test it and free it again for every
+# try: ~2000 instantiations (50,000+ nodes freed in a single frame) for the ~330 modules a dungeon keeps.
+# A candidate is now ONE reusable instance per scene that is only moved and measured (same engine
+# transforms and AABB maths as before, so the same seed gives the same layout); the module that is kept
+# is instantiated once, at the transform its candidate was accepted at. The pool is freed before the
+# torch pass so its bodies never reach the physics queries.
+var _cand_holder : Node3D = null
+var _cand_pool : Dictionary = {}   # PackedScene instance id -> {"node", "conns", "meshes"}
+
+
+func _get_candidate(scene: PackedScene) -> Dictionary:
+	var key : int = scene.get_instance_id()
+	if _cand_pool.has(key):
+		return _cand_pool[key]
+	if _cand_holder == null or not is_instance_valid(_cand_holder):
+		_cand_holder = Node3D.new()
+		_cand_holder.name = "LayoutCandidates"
+		_main_root.add_child(_cand_holder)
+	var node : Node3D = _instantiate_module(scene)
+	_cand_holder.add_child(node)
+	var meshes : Array[MeshInstance3D] = []
+	_find_meshes_recursive(node, meshes)
+	var conns : Array[Node3D] = []
+	_find_connections_recursive(node, conns)
+	var entry : Dictionary = {"node": node, "conns": conns, "meshes": meshes}
+	_cand_pool[key] = entry
+	return entry
+
+
+func _free_candidate_pool() -> void:
+	if _cand_holder != null and is_instance_valid(_cand_holder):
+		if _cand_holder.get_parent() != null:
+			_cand_holder.get_parent().remove_child(_cand_holder)
+		_cand_holder.free()
+	_cand_holder = null
+	_cand_pool.clear()
+
+
+# World AABB of a candidate at its current transform: the same merge of the per-mesh AABBs that
+# _get_combined_world_aabb() computes, over the cached mesh list.
+func _candidate_aabb(cand: Dictionary) -> AABB:
+	var res: AABB = AABB()
+	var started := false
+	for m in cand["meshes"]:
+		if m.mesh == null: continue
+		var waabb = _transform_aabb(m.global_transform, m.get_aabb())
+		if not started:
+			res = waabb; started = true
+		else:
+			res = res.merge(waabb)
+	return res
+
+
+# Instantiates the kept module at the candidate's transform and seeds its cached AABB with the one it
+# was tested at. The transform is set before add_child so the physics body is registered where it stays.
+func _commit_candidate(scene: PackedScene, cand_node: Node3D, aabb: AABB) -> Node3D:
+	var mod : Node3D = _instantiate_module(scene)
+	var root_xf : Transform3D = _main_root.global_transform
+	var g : Transform3D = cand_node.global_transform
+	mod.transform = g if root_xf == Transform3D.IDENTITY else root_xf.affine_inverse() * g
+	_main_root.add_child(mod)
+	mod.set_meta("module_world_aabb", aabb)
+	mod.set_meta("aabb_calculated", true)
+	return mod
+
+
+# ── Placed-module grid ────────────────────────────────────────────────────────
+# Overlap tests ask "does this box touch any placed module?": a coarse XZ grid of the placed boxes
+# answers it from the few modules near the candidate instead of looping over all of them. Boxes are
+# registered in every cell they cover, so a strict overlap always shares a cell (same answers).
+const _GRID_CELL : float = 16.0
+var _grid : Dictionary = {}   # Vector2i -> Array of [module, shrunk aabb]
+
+
+func _grid_add(mod: Node3D) -> void:
+	var a : AABB = _shrink_aabb(_get_module_cached_aabb(mod), overlap_shrink)
+	var entry : Array = [mod, a]
+	var lo : Vector2i = _grid_cell(a.position)
+	var hi : Vector2i = _grid_cell(a.position + a.size)
+	for x in range(lo.x, hi.x + 1):
+		for z in range(lo.y, hi.y + 1):
+			var key := Vector2i(x, z)
+			if _grid.has(key):
+				(_grid[key] as Array).append(entry)
+			else:
+				_grid[key] = [entry]
+
+
+func _grid_cell(p: Vector3) -> Vector2i:
+	return Vector2i(int(floorf(p.x / _GRID_CELL)), int(floorf(p.z / _GRID_CELL)))
+
+
+# True when the box (shrunk like the placed ones) overlaps a placed module other than the one
+# `target_conn` belongs to.
+func _aabb_overlaps_placed(world_aabb: AABB, target_conn: Node3D) -> bool:
+	gen_stats["overlap_checks"] = int(gen_stats.get("overlap_checks", 0)) + 1
+	var cand_aabb: AABB = _shrink_aabb(world_aabb, overlap_shrink)
+	if cand_aabb.size == Vector3.ZERO: return false
+	var target_root = _find_module_root_from_connection(target_conn)
+	var lo : Vector2i = _grid_cell(cand_aabb.position)
+	var hi : Vector2i = _grid_cell(cand_aabb.position + cand_aabb.size)
+	for x in range(lo.x, hi.x + 1):
+		for z in range(lo.y, hi.y + 1):
+			var cell = _grid.get(Vector2i(x, z))
+			if cell == null:
+				continue
+			for entry in cell:
+				if entry[0] == target_root:
+					continue
+				if cand_aabb.intersects(entry[1]):
+					return true
+	return false
+
+
+func _instantiate_module(scene: PackedScene) -> Node3D:
+	gen_stats["instantiated"] = int(gen_stats.get("instantiated", 0)) + 1
+	return scene.instantiate() as Node3D
 
 
 func _get_other_connection(conns: Array[Node3D], used: Node3D) -> Node3D:
@@ -587,6 +729,7 @@ func _get_other_connection(conns: Array[Node3D], used: Node3D) -> Node3D:
 func _register_module(mod: Node3D, counts: bool) -> void:
 	if mod == null: return
 	placed_modules.append(mod)
+	_grid_add(mod)
 	mod.set_meta("explored", false)
 	mod.set_meta("counts_toward_goal", counts)
 	mod.set_meta("lock_color", "")
@@ -953,8 +1096,13 @@ func _clean_open_connections() -> void:
 
 
 func _get_connections(mod: Node3D) -> Array[Node3D]:
+	# Placed modules never change shape: the connection list is found once and kept on the module.
+	if mod.has_meta("_connections"):
+		return mod.get_meta("_connections")
 	var f: Array[Node3D] = []
 	_find_connections_recursive(mod, f)
+	if mod.get_parent() == _main_root:
+		mod.set_meta("_connections", f)
 	return f
 
 
@@ -968,19 +1116,20 @@ func _find_connections_recursive(node: Node, f: Array[Node3D]) -> void:
 
 func _try_attach_specific_module_to_connection(target: Node3D, scene: PackedScene) -> Node3D:
 	if scene == null: return null
-	var mod: Node3D = scene.instantiate()
-	_main_root.add_child(mod)
-	_reset_module_transform(mod)
-	var conns: Array[Node3D] = _get_connections(mod)
+	var cand : Dictionary = _get_candidate(scene)
+	var node : Node3D = cand["node"]
+	var base_conns : Array[Node3D] = cand["conns"]
+	var conns : Array[Node3D] = base_conns.duplicate()
 	conns.shuffle()
 	for c in conns:
-		_reset_module_transform(mod)
-		_align_module_to_connection(mod, c, target)
-		if not _module_overlaps_anything(mod, target):
+		_reset_module_transform(node)
+		_align_module_to_connection(node, c, target)
+		var aabb : AABB = _candidate_aabb(cand)
+		if not _aabb_overlaps_placed(aabb, target):
+			var mod : Node3D = _commit_candidate(scene, node, aabb)
 			_mark_connection_used(target)
-			_mark_connection_used(c)
+			_mark_connection_used(_get_connections(mod)[base_conns.find(c)])
 			return mod
-	mod.queue_free()
 	return null
 
 
@@ -1024,17 +1173,6 @@ func _align_module_to_connection(mod: Node3D, mc: Node3D, target: Node3D) -> voi
 	mod.rotate_y(yaw)
 	mod.global_position += (target.global_position - mc.global_position) + \
 						   (-target.global_basis.z.normalized() * connection_nudge)
-
-
-func _module_overlaps_anything(cand: Node3D, target_conn: Node3D) -> bool:
-	var cand_aabb: AABB = _shrink_aabb(_get_combined_world_aabb(cand), overlap_shrink)
-	if cand_aabb.size == Vector3.ZERO: return false
-	var target_root = _find_module_root_from_connection(target_conn)
-	for existing in placed_modules:
-		if not is_instance_valid(existing) or existing == target_root: continue
-		if cand_aabb.intersects(_shrink_aabb(_get_module_cached_aabb(existing), overlap_shrink)):
-			return true
-	return false
 
 
 func _find_module_root_from_connection(conn: Node3D) -> Node3D:
@@ -1102,6 +1240,7 @@ func _get_module_cached_aabb(mod: Node3D) -> AABB:
 	if mod.has_meta("aabb_calculated") and bool(mod.get_meta("aabb_calculated")):
 		var c = mod.get_meta("module_world_aabb")
 		if c is AABB: return c
+	gen_stats["aabb_computed"] = int(gen_stats.get("aabb_computed", 0)) + 1
 	var res = _get_combined_world_aabb(mod)
 	mod.set_meta("module_world_aabb", res)
 	mod.set_meta("aabb_calculated", true)
@@ -1220,21 +1359,54 @@ func get_explorable_modules() -> Array[Node3D]:
 # XZ-only check because module Y extents vary and spawn markers can sit at
 # different heights within the same module.
 func is_position_inside_dungeon(pos: Vector3) -> bool:
-	for mod in placed_modules:
-		if not is_instance_valid(mod):
-			continue
+	# Slight inward margin so points right on the edge of a module wall
+	# (where geometry is ambiguous) are rejected conservatively.
+	var margin : float = 0.3
+	for mod in _modules_near_point(pos):
 		var aabb : AABB = _get_module_cached_aabb(mod)
 		if aabb.size == Vector3.ZERO:
 			continue
-		# Slight inward margin so points right on the edge of a module wall
-		# (where geometry is ambiguous) are rejected conservatively.
-		var margin : float = 0.3
 		if pos.x >= aabb.position.x + margin \
 		and pos.x <= aabb.position.x + aabb.size.x - margin \
 		and pos.z >= aabb.position.z + margin \
 		and pos.z <= aabb.position.z + aabb.size.z - margin:
 			return true
 	return false
+
+
+# Point queries (is_position_inside_dungeon, get_module_containing_point) used to loop over every placed
+# module: the enemy manager alone asks once per spawn marker (~340 x ~330 boxes). The XZ footprints are
+# bucketed once, lazily, after generation; a point only meets the modules whose footprint covers its cell.
+# Rebuilt when the module list changes size. Returns the modules in placed_modules order.
+var _point_grid : Dictionary = {}   # Vector2i -> Array[Node3D] (placed order)
+var _point_grid_count : int = -1
+
+
+func _modules_near_point(pos: Vector3) -> Array:
+	if _point_grid_count != placed_modules.size():
+		_rebuild_point_grid()
+	var cell = _point_grid.get(_grid_cell(pos))
+	return cell if cell != null else []
+
+
+func _rebuild_point_grid() -> void:
+	_point_grid.clear()
+	for mod in placed_modules:
+		if not is_instance_valid(mod):
+			continue
+		var a : AABB = _get_module_cached_aabb(mod)
+		if a.size == Vector3.ZERO:
+			continue
+		var lo : Vector2i = _grid_cell(a.position)
+		var hi : Vector2i = _grid_cell(a.position + a.size)
+		for x in range(lo.x, hi.x + 1):
+			for z in range(lo.y, hi.y + 1):
+				var key := Vector2i(x, z)
+				if _point_grid.has(key):
+					(_point_grid[key] as Array).append(mod)
+				else:
+					_point_grid[key] = [mod]
+	_point_grid_count = placed_modules.size()
 
 
 # Returns up to trap_count MeshInstance3D nodes whose names start with
@@ -1293,9 +1465,7 @@ func _collect_coursec_recursive(node: Node, result: Array[Vector3]) -> void:
 # Returns which placed module contains a given world position (XZ check).
 # Used by TrapManager to find the room a trap tile belongs to.
 func get_module_containing_point(pos: Vector3) -> Node3D:
-	for mod in placed_modules:
-		if not is_instance_valid(mod):
-			continue
+	for mod in _modules_near_point(pos):
 		var aabb : AABB = _get_module_cached_aabb(mod)
 		if aabb.size == Vector3.ZERO:
 			continue

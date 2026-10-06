@@ -296,6 +296,59 @@ func _dist_sq_to_nearest(pos: Vector3, positions: Array) -> float:
 	return 0.0 if best == INF else best
 
 
+# Same answer as _dist_sq_to_nearest() for a torch list bucketed by _bucket_positions(): scans square
+# rings of cells outward from the point and stops as soon as no farther ring can hold a closer torch.
+# The boot used to compare every candidate spawn with every torch (~150 x ~760 distances).
+const _BUCKET : float = 10.0
+
+func _bucket_positions(positions: Array) -> Dictionary:
+	var grid : Dictionary = {}
+	var lo := Vector2i(1 << 30, 1 << 30)
+	var hi := Vector2i(-(1 << 30), -(1 << 30))
+	for p in positions:
+		var c := Vector2i(int(floorf(p.x / _BUCKET)), int(floorf(p.z / _BUCKET)))
+		if grid.has(c):
+			(grid[c] as Array).append(p)
+		else:
+			grid[c] = [p]
+		lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
+		hi = Vector2i(maxi(hi.x, c.x), maxi(hi.y, c.y))
+	if not positions.is_empty():
+		grid["_lo"] = lo
+		grid["_hi"] = hi
+	return grid
+
+
+func _dist_sq_to_nearest_bucketed(pos: Vector3, grid: Dictionary) -> float:
+	if not grid.has("_lo"):
+		return 0.0
+	var lo : Vector2i = grid["_lo"]
+	var hi : Vector2i = grid["_hi"]
+	var cx : int = int(floorf(pos.x / _BUCKET))
+	var cz : int = int(floorf(pos.z / _BUCKET))
+	var best : float = INF
+	var ring : int = 0
+	# Rings reach every torch once they span the whole bucketed area from the point's own cell.
+	var max_ring : int = maxi(maxi(absi(cx - lo.x), absi(cx - hi.x)), maxi(absi(cz - lo.y), absi(cz - hi.y)))
+	while ring <= max_ring:
+		# Rings from `ring` outward are at least (ring - 1) cells away horizontally.
+		if ring > 1 and best <= (float(ring - 1) * _BUCKET) * (float(ring - 1) * _BUCKET):
+			break
+		for dx in range(-ring, ring + 1):
+			for dz in range(-ring, ring + 1):
+				if maxi(absi(dx), absi(dz)) != ring:
+					continue
+				var cell = grid.get(Vector2i(cx + dx, cz + dz))
+				if cell == null:
+					continue
+				for p in cell:
+					var d : float = pos.distance_squared_to(p)
+					if d < best:
+						best = d
+		ring += 1
+	return 0.0 if best == INF else best
+
+
 # Delegates to dungeon_generation_function.is_position_inside_dungeon() which
 # uses the already-cached AABBs — zero additional raycasts needed.
 # This replaces the downward raycast which was hitting the safety floor and
@@ -334,7 +387,7 @@ func _refresh_active_zone() -> void:
 
 	# Cache the torch list once up-front — iterating it per-candidate would be
 	# O(candidates × torches) which is still fine at 50 × 300 but this saves it.
-	var torches : Array = _collect_torch_positions()
+	var torches : Dictionary = _bucket_positions(_collect_torch_positions())
 
 	# Collect and sort all candidates within the doughnut zone (min to max distance).
 	var candidates : Array = []
@@ -346,7 +399,7 @@ func _refresh_active_zone() -> void:
 				"data": entry,
 				"pos": pos,
 				"dist_sq": dist_sq,
-				"torch_dist_sq": _dist_sq_to_nearest(pos, torches),
+				"torch_dist_sq": _dist_sq_to_nearest_bucketed(pos, torches),
 			})
 
 	# Sort by composite score: mostly nearest-to-player, with a soft nudge
@@ -410,6 +463,9 @@ func _spawn_next_batch() -> void:
 	else:
 		print("✅ Initial spawn complete. Live enemies: ", _live_count)
 		_initial_spawn_done = true
+		var main : Node = get_parent()
+		if main != null and main.has_method("entry_mark"):
+			main.entry_mark("initial_spawn_done")
 		emit_signal("spawn_complete")
 		set_physics_process(true)
 
