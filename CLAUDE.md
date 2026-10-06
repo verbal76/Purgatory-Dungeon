@@ -64,6 +64,14 @@ GitHub can give. Rules:
   the exact OTA SHA (`ota-tests.yml`) stay mandatory. Do not publish a release/OTA/APK merely because workflows were audited or edited.
 - Prefer one verified run per SHA; push several commits together rather than one at a time; do not push to a branch with an open non-draft PR for every small edit.
 
+## Release cadence (standing owner philosophy)
+
+Develop locally -> accumulate related changes -> validate locally -> freeze a meaningful candidate -> one necessary CI/release gate -> one meaningful OTA/APK.
+Do not publish tiny OTAs for cosmetic or minor gameplay corrections, and consolidate native changes into worthwhile APK generations (do not build an APK to
+inspect one native tweak; validate assets/config locally first). Immediate small releases are justified only for urgent problems: crashes, save/data corruption,
+severe update failure, release-blocking defects, security/integrity problems, or a release that is substantially unusable. Otherwise batch. A finished, green
+candidate is HELD until the owner authorises publication (more playtest findings may arrive); never publish just because it is green.
+
 ## Studio splash (Hot Attic Games standing requirement — do not remove)
 
 Every Hot Attic Games application opens with the studio splash before its own title screen:
