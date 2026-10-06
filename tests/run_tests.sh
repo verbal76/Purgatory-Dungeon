@@ -51,6 +51,10 @@ done
 for cls in barbarian mage; do
 	BUFF_CLASS="$cls" run "res://tests/test_buffs.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_buffs.tscn
 done
+# Reversed View lasts exactly as long as Intoxicated and can never stay stuck (expiry, pause, death, fresh run).
+for cls in barbarian mage; do
+	REVERSE_CLASS="$cls" run "res://tests/test_reversed_view.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_reversed_view.tscn
+done
 for seed in 11 5 2024; do
 	CHEST_SEED="$seed" run "res://tests/test_chests.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_chests.tscn
 done

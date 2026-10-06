@@ -139,6 +139,7 @@ var _status_acid_dps          : float = 1.0   # Set by the trap (TrapManager.aci
 # Tracked timers (the brute's pattern) instead of fire-and-forget SceneTree timers: re-applying an
 # effect refreshes it, and the countdown pauses with the game.
 var _status_drunk_timer       : float = 0.0
+var _status_reversed_view_timer : float = 0.0   # Seconds remaining on Reversed View (same length as Intoxicated)
 # On-screen list of active trap effects (same panel the Barbarian has): the trap banner only
 # flashes at trigger time, and day-long effects (reversed view, heavy gravity) would otherwise be
 # invisible afterwards.
@@ -548,6 +549,7 @@ func _on_buff_pick_finished() -> void:
 
 
 func _on_die() -> void:
+	clear_timed_statuses()
 	# SURGICAL FIX: Stop the day clock immediately on death so buff picks
 	# and day ticks cannot fire after the player is dead.
 	if has_node("/root/GameClock"):
@@ -660,11 +662,16 @@ func _physics_tick(delta: float) -> void:
 		_status_drunk_timer -= delta
 		if _status_drunk_timer <= 0.0:
 			_status_drunk = false
+	if _status_reversed_view and _status_reversed_view_timer > 0.0:
+		_status_reversed_view_timer -= delta
+		if _status_reversed_view_timer <= 0.0:
+			_status_reversed_view = false
+			_refresh_status_label()
 	if _status_reversed_controls and _status_controls_timer > 0.0:
 		_status_controls_timer -= delta
 		if _status_controls_timer <= 0.0:
 			_status_reversed_controls = false
-	if _status_drunk or _status_reversed_controls or _status_acid or _status_panel != null and _status_panel.visible:
+	if _status_drunk or _status_reversed_view or _status_reversed_controls or _status_acid or _status_panel != null and _status_panel.visible:
 		_status_update_timer -= delta
 		if _status_update_timer <= 0.0:
 			_status_update_timer = STATUS_UPDATE_INTERVAL
@@ -1686,10 +1693,9 @@ func _do_block() -> void:
 func apply_status(effect_name: String, days_duration: int, strength: float = 0.0) -> void:
 	match effect_name:
 		"reversed_view":
-			_status_reversed_view    = true
-			_status_day_effects_days = maxi(_status_day_effects_days, days_duration)
-			if not GameClock.day_changed.is_connected(_on_day_changed):
-				GameClock.day_changed.connect(_on_day_changed)
+			# Timer-based like Intoxicated (and the same length); the day count argument is ignored. Re-applying refreshes it.
+			_status_reversed_view       = true
+			_status_reversed_view_timer = STATUS_REVERSED_VIEW_SECONDS
 		"heavy_gravity":
 			if not _status_heavy_gravity:
 				_status_heavy_gravity    = true
@@ -1699,7 +1705,7 @@ func apply_status(effect_name: String, days_duration: int, strength: float = 0.0
 				GameClock.day_changed.connect(_on_day_changed)
 		"drunk":
 			_status_drunk       = true
-			_status_drunk_timer = 30.0
+			_status_drunk_timer = STATUS_DRUNK_SECONDS
 		"reversed_controls":
 			_status_reversed_controls = true
 			_status_controls_timer    = 30.0
@@ -1717,7 +1723,7 @@ func _refresh_status_label() -> void:
 	var lines : Array[String] = []
 	var day_s : String = "s" if _status_day_effects_days != 1 else ""
 	if _status_reversed_view:
-		lines.append("Vision Reversed  (%d day%s)" % [_status_day_effects_days, day_s])
+		lines.append("Vision Reversed  (%.0fs)" % maxf(_status_reversed_view_timer, 0.0))
 	if _status_heavy_gravity:
 		lines.append("Heavy Gravity  (%d day%s)" % [_status_day_effects_days, day_s])
 	if _status_drunk:
@@ -1733,10 +1739,29 @@ func _refresh_status_label() -> void:
 		_status_panel.visible = true
 
 
+# Ends every timed trap status at once (death: the screen must not stay upside-down / swaying behind the death overlay,
+# and nothing may carry into whatever comes next). Day-based Heavy Gravity is restored here too.
+func clear_timed_statuses() -> void:
+	_status_reversed_view       = false
+	_status_reversed_view_timer = 0.0
+	_status_drunk               = false
+	_status_drunk_timer         = 0.0
+	_status_reversed_controls   = false
+	_status_controls_timer      = 0.0
+	_status_acid                = false
+	_status_acid_timer          = 0.0
+	if _status_heavy_gravity:
+		_status_heavy_gravity = false
+		slide_power           *= 2.0
+	_status_day_effects_days = 0
+	if GameClock.day_changed.is_connected(_on_day_changed):
+		GameClock.day_changed.disconnect(_on_day_changed)
+	_refresh_status_label()
+
+
 func _on_day_changed(_day: int) -> void:
 	_status_day_effects_days -= 1
 	if _status_day_effects_days <= 0:
-		_status_reversed_view = false
 		if _status_heavy_gravity:
 			_status_heavy_gravity = false
 			slide_power           *= 2.0

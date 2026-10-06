@@ -13,7 +13,7 @@
 #   trap_trigger_height — how tall the trigger box is above the tile (default 0.4)
 #   acid_damage_per_sec — damage per second from the acid pool effect (default 1.0)
 #   acid_duration       — seconds the acid lasts (default 15.0)
-#   effect_day_duration — in-game days the "1 day" effects last (default 1)
+#   effect_day_duration — in-game days the "1 day" effects (Heavy Gravity) last (default 1)
 #   homing_fireball_speed — speed of the mine fireballs (default 10.0)
 #   homing_fireball_damage — damage each homing fireball deals (default 15.0)
 #
@@ -244,9 +244,13 @@ func _apply_effect(player: Node3D, effect: String, trap_pos: Vector3) -> void:
 	# ── Banner notification ────────────────────────────────────────────────────
 	if _banner_hud != null and _banner_hud.has_method("show_trap"):
 		match effect:
-			"reversed_view", "heavy_gravity":
+			"heavy_gravity":
 				_banner_hud.show_trap(effect, -1.0, effect_day_duration)
-			"drunk", "reversed_controls":
+			"reversed_view":
+				_banner_hud.show_trap(effect, BruteCharacter.STATUS_REVERSED_VIEW_SECONDS)
+			"drunk":
+				_banner_hud.show_trap(effect, BruteCharacter.STATUS_DRUNK_SECONDS)
+			"reversed_controls":
 				_banner_hud.show_trap(effect, 30.0)
 			"acid_pool":
 				_banner_hud.show_trap(effect, acid_duration)
@@ -259,9 +263,10 @@ func _apply_effect(player: Node3D, effect: String, trap_pos: Vector3) -> void:
 
 		EFFECT_REVERSED_VIEW:
 			# Flip the camera X by PI so the player sees upside-down.
-			# Lasts effect_day_duration in-game days — reset on day_changed.
+			# Lasts as long as Intoxicated (BruteCharacter.STATUS_REVERSED_VIEW_SECONDS, owned by the player): a full
+			# in-game day of it was far too long. The day argument is ignored by the player.
 			if player.has_method("apply_status"):
-				player.apply_status("reversed_view", effect_day_duration)
+				player.apply_status("reversed_view", 0)
 
 		EFFECT_HEAVY_GRAVITY:
 			# Halves jump velocity for effect_day_duration days.
