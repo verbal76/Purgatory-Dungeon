@@ -122,6 +122,19 @@ var _live_count           : int   = 0    # Live (not dead) enemy count
 # loading_screen.gd polls this as a race-condition safety check.
 var _initial_spawn_done   : bool  = false
 
+# ── Pool pre-warm (entry stage worker) ─────────────────────────────────────────
+# Instantiating an enemy (scene instance, its _ready, a mage's six pooled fireballs) costs about 5-10 ms on a desktop
+# core and several times that on a phone. During play that landed as a spike whenever the pool was empty: the first
+# top-ups after the opening wave, every pressure spawn, and every enemy that was freed (not recycled) and replaced.
+# So a few spare enemies are built here, behind the loading screen, one per frame, and parked in the pools; the
+# main game file waits for stage_near_done before it hands control over (same protocol as the other stage workers).
+const PREWARM_MAX   : int     = 12                       # upper bound on parked spares built at entry
+const PREWARM_SPARE : int     = 2                        # spares beyond the opening wave's shortfall
+const PARK_POSITION : Vector3 = Vector3(0.0, -400.0, 0.0)  # far under the dungeon: no AoE / distance query reaches a parked enemy
+var stage_near_done : bool = false
+var stage_done      : bool = false
+var _prewarmed      : int  = 0
+
 # Set true when the run ends (day 30) — stops all reinforcement spawning.
 # The live population drains naturally as the player kills enemies.
 var _spawning_locked      : bool  = false
@@ -235,10 +248,14 @@ func boot_up(
 
 	if typed_spawns.is_empty():
 		push_warning("EnemyManager: no spawn points registered. No enemies will spawn.")
+		stage_near_done = true
+		stage_done = true
 		return
 
 	if _brute_scene == null and _mage_scene == null:
 		push_warning("EnemyManager: no enemy scenes assigned. No enemies will spawn.")
+		stage_near_done = true
+		stage_done = true
 		return
 
 	_all_spawns = typed_spawns.duplicate()
@@ -468,6 +485,7 @@ func _spawn_next_batch() -> void:
 			main.entry_mark("initial_spawn_done")
 		emit_signal("spawn_complete")
 		set_physics_process(true)
+		_prewarm_pool()   # coroutine: one spare per frame, flags stage_near_done / stage_done when finished
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -746,9 +764,14 @@ func _on_enemy_returned_to_pool(enemy: Node3D, is_brute: bool) -> void:
 	if not is_instance_valid(enemy):
 		return
 
-	enemy.visible = false
-	enemy.set_physics_process(false)
-	enemy.set_process(false)
+	# An enemy retired alive (stuck for 12 s, see brute_ai._retire_stuck) is still in the live list: take it out now
+	# so the pool and the live list never both hold it (a corpse was already dropped by the 1 s sweep).
+	var live_idx : int = _active_enemies.find(enemy)
+	if live_idx >= 0:
+		_active_enemies.remove_at(live_idx)
+		_live_count = maxi(_live_count - 1, 0)
+
+	_park(enemy)
 
 	var pool : Array = _brute_pool if is_brute else _mage_pool
 	if pool.size() < _current_pop_cap:
@@ -756,6 +779,58 @@ func _on_enemy_returned_to_pool(enemy: Node3D, is_brute: bool) -> void:
 	else:
 		# Pool full — just free. Keeps memory bounded on very long runs.
 		enemy.queue_free()
+
+
+# Parks an enemy: hidden, no processing, its animation stopped (an AnimationPlayer keeps evaluating a ~100-650 bone
+# skeleton every frame whatever is visible), and out of the "enemy" / "enemies" groups so the many loops over them
+# (area attacks, kill flashes, room locks, the touch tutorial) never see it. reset_for_pool() puts it back.
+func _park(enemy: Node3D) -> void:
+	enemy.visible = false
+	enemy.set_physics_process(false)
+	enemy.set_process(false)
+	var ap : Variant = enemy.get("anim_player")
+	if ap is AnimationPlayer:
+		(ap as AnimationPlayer).stop()
+	enemy.remove_from_group("enemy")
+	enemy.remove_from_group("enemies")
+
+
+# Builds one spare enemy and parks it in the pool (see PREWARM_MAX). Dead + collision-less + far below the level
+# until reset_for_pool() revives it, so it can neither be hit, counted nor seen while parked.
+func _park_new_enemy(scene: PackedScene, is_brute: bool) -> bool:
+	if scene == null or _main_root == null:
+		return false
+	var enemy : Node3D = scene.instantiate() as Node3D
+	if enemy == null:
+		return false
+	enemy.visible = false
+	_main_root.add_child(enemy)   # _ready() runs here (the expensive part)
+	enemy.set("_is_dead", true)
+	enemy.set("collision_layer", 0)
+	enemy.global_position = PARK_POSITION
+	_park(enemy)
+	(_brute_pool if is_brute else _mage_pool).append(enemy)
+	_prewarmed += 1
+	return true
+
+
+# Entry stage: parks enough spares to cover the opening wave's shortfall (cap - live) plus PREWARM_SPARE, in the
+# type mix the spawner uses (mage_spawn_chance). One build per frame: the loading screen keeps animating.
+func _prewarm_pool() -> void:
+	var want : int = clampi(_current_pop_cap - _live_count + PREWARM_SPARE, PREWARM_SPARE, PREWARM_MAX)
+	var mages : int = int(round(float(want) * mage_spawn_chance)) if _mage_scene != null else 0
+	if _brute_scene == null:
+		mages = want
+	if GlobalRunData.debug_no_mages:
+		mages = 0
+	if GlobalRunData.debug_no_brutes:
+		mages = want
+	for i in want:
+		var as_mage : bool = i < mages
+		_park_new_enemy(_mage_scene if as_mage else _brute_scene, not as_mage)
+		await get_tree().process_frame
+	stage_near_done = true
+	stage_done = true
 
 
 # ══════════════════════════════════════════════════════════════════════════════
