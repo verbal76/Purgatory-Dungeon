@@ -51,8 +51,8 @@ sensitivity apply to both.
 | Touch control | Action | Keyboard | Controller |
 |---|---|---|---|
 | Left thumb: floating stick (anywhere in the lower-left 40%) | move_forward/back/left/right (analog) | WASD | left stick |
-| Right side: floating LOOK stick (touch-down anywhere free in the right 60% spawns it) | look: continuous turn rate | mouse | right stick |
-| Big sword button, lower-right rim (hold to charge). **Dragging from it aims** | attack (+ look while dragging) | Left Mouse | RT |
+| Big sword button, lower-right rim (hold to charge). **Dragging from it aims**: a continuous turn rate measured from the touch-down point | attack (+ look while dragging) | Left Mouse (+ mouse) | RT (+ right stick) |
+| Empty screen on the right (no button under the finger) | nothing: there is no look stick and no look zone | - | - |
 | Slide chevrons, kick boot, shield (hold), flask (cooldown ring, potion count) on an arc around Attack | jump, kick, block, AOE | Space, F, Right Mouse, Q | B, RB, D-pad down, LB |
 | USE / OPEN (appears only at a chest you can open), second ring | equip | E | A |
 | Pause / Map (top right, map toggles) | ui_menu / minimap | Esc / Tab | Start / - |
@@ -66,15 +66,17 @@ sensitivity apply to both.
 | Big sword button (hold to charge), boot, chevrons, shield (hold), flask, USE, Pause, Map | attack, kick, jump, block, AOE, equip, ui_menu, minimap |
 
 ### Twin-stick design notes
-- **Why**: Classic has no right stick, so turning while moving needed repeated swipes. Twin-stick follows
-  the genre (Brawl Stars: drag from the attack button to aim, abilities in an arc around it; CoD
-  Mobile: look pad plus a fire button that also turns; twin-stick shooters: right stick = turn rate).
+- **Why**: Classic needs repeated swipes to turn while moving. In twin-stick the Attack button is the aim control, as
+  in Brawl Stars (drag from the attack button to aim, abilities in an arc around it): the right thumb rests on Attack
+  and turning is a drag from it, at a turn rate, while attacking. There is no separate right stick.
 - **Ownership**: every finger is owned by exactly one thing from touch-down to touch-up (`Owner`:
-  `BUTTON` > `STICK` (left zone) > `LOOK` (right zone) > `NONE`). A touch on a button is that button;
-  extra fingers in an occupied zone are owned by `NONE` and do nothing. A finger that goes down on
-  ATTACK stays a BUTTON finger (press/hold/release, `MIN_PRESS_MS` stretching unchanged) and also measures
-  a drag from its touch-down point; the drag never releases or re-presses attack. Look stick and attack
-  drag add and are limited to full deflection. Releasing ATTACK ends the drag at once.
+  `BUTTON` > `STICK` (left lower 40%) > `NONE`; Classic also has `LOOK` for its swipe). A touch on a button is that
+  button. **A finger that starts on empty screen outside the move zone is ignored** in twin-stick (there is no look
+  zone): it is owned by `NONE`, so it cannot turn into anything later, whatever it does. Extra fingers in the occupied
+  move zone are ignored the same way. A finger that goes down on ATTACK stays a BUTTON finger (press/hold/release,
+  `MIN_PRESS_MS` stretching unchanged) and also measures an aim drag from its touch-down point; it keeps aiming
+  wherever it wanders (even far outside the button) until it is lifted, and the drag never releases or re-presses
+  attack. Releasing ATTACK ends the drag at once. Left-thumb movement and the aim drag work together.
 - **Input path**: the look command is turned into one `InputEventMouseMotion` (device 0) per **physics
   frame** by `TouchControls._physics_process` - the same mouse-look path the Classic swipe uses - so
   `brute_player.gd` / `mage_player.gd` are untouched (they turn by `relative.x * 0.0025` rad). The
@@ -82,21 +84,22 @@ sensitivity apply to both.
   The players have no pitch today and ignore `relative.y`; it is sent at `LOOK_PITCH_RATIO` for when they get one.
 - **Response** (`look_response`): d = offset / radius; inside `LOOK_DEADZONE` nothing; then
   x = (d - dz) / (1 - dz) and rate = `LOOK_MAX_YAW_RATE` * x^`LOOK_CURVE_EXP` * Look Sensitivity.
-  The base follows a thumb dragged past the radius (never runs out of travel, reversing is immediate).
+  The drag origin follows a thumb dragged past the radius (never runs out of travel, reversing is immediate).
 - **Lifecycle**: `release_all()` (background, lock, call, shade, pause menu, layer disabled, scheme
-  change, node exit) clears every finger, stick, drag and the look command, so nothing keeps
-  turning or attacking after returning; stale drags from the old fingers are ignored.
-- **Visuals**: same brand language as the move stick - faint idle marker at rest (`STICK_IDLE_ALPHA`), ember
-  rim when held; a faint ember drag ring (drawn above the buttons) while dragging from ATTACK. No shaders,
-  nothing redrawn per frame.
-- **Onboarding** teaches the active scheme: move (left stick), look (right stick, step `look_stick`),
-  attack, aim ("Drag from Attack to aim", after the first attack), use, block, burst. Same persistence and
-  3-showing retirement; hints are placed on the first spot that touches no control.
+  change, node exit) and an engine touch cancel clear every finger, the stick, the drag and the look command, so
+  nothing keeps moving, turning or attacking after returning; stale drags from the old fingers are ignored.
+- **Visuals**: the move stick has a faint idle marker at rest (`STICK_IDLE_ALPHA`) and an ember rim when held; a
+  faint ember drag ring (drawn above the buttons) shows while dragging from ATTACK. No other marker exists on the right.
+  No shaders, nothing redrawn per frame.
+- **Onboarding** teaches the active scheme: move ("Drag the left side to move"), aim ("Drag from Attack to look and
+  aim", pulses ATTACK, done once the drag has been held out `AIM_DONE_SECONDS`), attack, use, block, burst. Same
+  persistence and 3-showing retirement; a saved `look_stick` flag from the removed right-stick hint is ignored (it never
+  replays and teaches nothing now); hints are placed on the first spot that touches no control.
 
 ### Twin-stick tuning constants (`scripts/touch/touch_controls.gd`)
 | Constant | Value | Meaning |
 |---|---|---|
-| `LOOK_STICK_RADIUS` | 90 px | thumb travel for full deflection (x Control Size) |
+| `AIM_DRAG_RADIUS` | 90 px | drag travel from the touch-down point for full deflection (x Control Size) |
 | `LOOK_DEADZONE` | 0.12 | fraction of the radius that does nothing |
 | `LOOK_CURVE_EXP` | 1.7 | response exponent (fine aim near centre, fast at the rim) |
 | `LOOK_MAX_YAW_RATE` | 4.2 rad/s (~240 deg/s) | full deflection at 100% sensitivity |
@@ -116,7 +119,7 @@ burst (1482, 406), all r 56; USE (1218, 360) r 60; Pause (1526, 140) and Map (15
 floored by the mm minimums (so Control Size 70% never makes them smaller), and the arc radius grows when
 needed so neighbours cannot overlap. Hit areas are 1.3x the drawn radius; a touch inside a drawn button
 always resolves to that button. Canvases shorter than 720 px shrink the cluster (down to 0.8x) instead of
-colliding with Pause/Map. Idle look marker sits left of the cluster at the move stick's height.
+colliding with Pause/Map.
 
 ### Button anatomy and baked art (`scripts/touch/touch_button.gd`, `assets/touch/`)
 Art direction: `docs/art/PD_Mobile_Control_Art_Reference.png` (direction only, never shipped or traced). The buttons are
@@ -155,7 +158,7 @@ mipmaps, has the expected size and mip chain, has all four states, and that the 
 
 Code-drawn fallback / Pause / Map / sticks (same family, from primitives): shadow (cached radial, alpha 0.55, reach 1.16 r,
 offset 0.07 r down), bezel 0.22 r (Pause/Map 0.18 r) with a hairline and inner shadow line, recessed iron face, bone icon, ember
-bezel when held. The move and look sticks use this language: a recessed well in a 0.10 r aged-brass bezel with a bone thumb in its
+bezel when held. The move stick uses this language: a recessed well in a 0.10 r aged-brass bezel with a bone thumb in its
 own bezel; resting sticks keep the idle alpha (`STICK_IDLE_ALPHA` 0.62); the Control Opacity setting scales everything.
 
 Options > Gameplay > Touch Controls: control scheme, opacity, size, look sensitivity. Buttons are laid out inside the
@@ -196,6 +199,6 @@ calls; the same line goes to `adb logcat` every 30 s. Real-device numbers are st
 `tests/run_tests.sh` includes `test_touch_controls` (the Classic scheme, run with `PURGATORY_FORCE_TOUCH=1`),
 `test_twin_stick` (default/persisted scheme, layout at five canvas shapes with and without cutouts, mm minimums,
 ownership of simultaneous fingers, look response and frame-rate independence, attack drag, lifecycle,
-Options selector, onboarding, plus the real Barbarian and Mage turned by the right stick),
+Options selector, onboarding, plus the real Barbarian and Mage turned by the ATTACK drag, empty right-side screen inert),
 `test_mobile_ui`, `test_app_lifecycle` and `test_input_desktop` (proves keyboard/controller bindings
 are unchanged). Procedural generation is untouched by the Android work.
