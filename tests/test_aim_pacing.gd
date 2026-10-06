@@ -264,5 +264,23 @@ func _behaviour_tests() -> void:
 	_check(events[0] > 0 and events[0] <= 21, "the live layer sent one look event per rendered frame (%d in 20 frames)" % events[0])
 	_check(absf(_yaw) > 0.05, "...and the camera turned (%.3f rad)" % _yaw)
 	tc.release_all()
+	# The ATTACK gesture classification (tap / hold = one attack, drag = look) must cost the camera nothing: the drag that
+	# leaves the slop circle is a look gesture on the very event, the camera turns in the first rendered frame after it
+	# (no hold-intent wait, no extra frame), and the whole drag attacks zero times, however long it lasts.
+	SettingsManager.gameplay_settings[TouchControls.KEY_AIM_SMOOTH] = 0.0
+	tc._apply_settings()
+	var pulses0: int = tc.attack_pulses
+	var atk: TouchButton = tc.buttons["attack"]
+	_yaw = 0.0
+	tc._touch_down(1, atk.center)
+	tc._touch_move(1, atk.center + Vector2(TouchControls.AIM_SETTLE_PX + TouchControls.AIM_DRAG_RADIUS * 0.5, 0), Vector2.ZERO)
+	_check(tc._atk_gesture == TouchControls.Gesture.LOOK, "the drag is a look gesture on its first event (classification adds no wait)")
+	await get_tree().process_frame
+	_check(absf(_yaw) > 0.0, "...and the camera turned in the first frame after the drag event (%.5f rad)" % _yaw)
+	for i in 40:
+		await get_tree().process_frame
+	await get_tree().create_timer(0.4).timeout   # well past ATTACK_INTENT_MS in real time
+	_check(tc.attack_pulses == pulses0 and not Input.is_action_pressed("attack"), "...and a long drag attacks zero times")
+	tc.release_all()
 	counter.queue_free()
 	tc.queue_free()

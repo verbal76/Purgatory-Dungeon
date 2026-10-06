@@ -637,6 +637,16 @@ func _physics_tick(delta: float) -> void:
 		_stop_footsteps()
 		return
 
+	# INPUT-STATE FAIL-SAFE: the hold flag may never outlive the attack action. The release arrives as an event, and an
+	# event that comes while the tree is paused (pause menu, buff pick, app in the background) is never delivered to
+	# this node: the flag then stayed true, the Rapid Attack charge kept filling, and the next plain tap's release
+	# started the 4 s machine gun with no finger on the screen. Reconcile with the engine's own action state each tick;
+	# a missed release only cancels the charge, it never starts the Rapid Attack.
+	if _attack_held and not Input.is_action_pressed("attack"):
+		_attack_held = false
+		_rapid_attack_charge = 0.0
+		_refresh_rapid_attack_bar()
+
 	# Blocking check moved before view input so the rotation tween
 	# in _do_block() owns rotation.y cleanly.
 	if _is_blocking:

@@ -46,11 +46,6 @@ func _ready() -> void:
 	_check(menu != null and not menu.is_menu_open(), "pause menu present and closed during play")
 	_check(not get_tree().paused, "running before backgrounding")
 
-	# A finger is on the attack button when the phone locks.
-	tc._button_down(tc.buttons["attack"])
-	_check(tc._held.has("attack"), "touch layer registers the held attack")
-	await _frames(3)
-	_check(Input.is_action_pressed("attack"), "attack held before the lock")
 	# Twin-stick (the default): a finger dragging from ATTACK is turning the camera.
 	_check(tc.is_twin(), "the run uses the twin-stick scheme by default")
 	tc.view_override = Vector2(1602, 720)   # the headless window is tiny: lay the layer out as on a phone
@@ -64,7 +59,14 @@ func _ready() -> void:
 	await _frames(2)
 	_check(Input.is_action_pressed("move_right"), "the move stick is live before the lock")
 	var atk_btn: TouchButton = tc.buttons["attack"]
+	# A finger is on the attack button when the phone locks: its attack pulse is in flight (the clock is frozen so the pulse
+	# cannot end by itself before the lock does), and the same finger is dragging to look.
+	tc.now_override_ms = Time.get_ticks_msec()
 	tc._touch_down(6, atk_btn.center)
+	tc._fire_attack_pulse()
+	_check(tc._held.has("attack"), "touch layer registers the attack in flight")
+	await _frames(3)
+	_check(Input.is_action_pressed("attack"), "attack held before the lock")
 	tc._touch_move(6, atk_btn.center + Vector2(-90, 0), Vector2.ZERO)
 	await _frames(3)
 	_check(tc._look_cmd != Vector2.ZERO and tc._atk_index == 6 and tc._owners[5]["kind"] == TouchControls.Owner.NONE, "the attack drag is live before the lock")
@@ -81,6 +83,7 @@ func _ready() -> void:
 	var saves_before := SaveManager.save_count
 	life.on_background()
 	await _frames(3)
+	tc.now_override_ms = -1
 	_check(not Input.is_action_pressed("attack"), "held attack released on background")
 	_check(tc._owners.is_empty() and tc._held.is_empty(), "touch layer holds no fingers/actions after background")
 	_check(not Input.is_action_pressed("move_right") and not tc._stick_active, "movement is released by the background too")
