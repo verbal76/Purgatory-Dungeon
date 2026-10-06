@@ -2166,18 +2166,16 @@ class TestOtherWorkflows(unittest.TestCase):
             self.assertNotRegex(text, r"gh release (create|upload)[^\n]*ota-", name)
             self.assertNotIn("ota-channel-", text.replace("ota-channel-dev", ""), name)
 
-    def test_the_dev_utility_workflow_only_prints_a_public_key(self):
-        y = wf("ota-pubkey.yml")
-        self.assertIn("--public-only", y)
-        self.assertNotRegex(y, r"gh release (create|upload|edit|delete)")
-        self.assertNotIn("PRIVATE", y.replace("never the private key", "").replace("private key is never", "").replace("private draft", ""))
+    def test_the_one_off_key_printer_is_gone(self):
+        # it existed only to read the public half once so that it could be compiled into scripts/boot/ota_config.gd
+        self.assertFalse(os.path.exists(os.path.join(ROOT, ".github", "workflows", "ota-pubkey.yml")))
 
 
 # ------------------------------------------------------------------------------------------------ hygiene
 
 class TestHygiene(unittest.TestCase):
     NAMES = [r"scripts/ota/", r"ota_trust\.pem", r"ota_channel\.json", r"make_bundle", r"verify_bundle", r"\bchannel\.py\b", r"ota_rules\.json",
-             r"build_ota\.sh", r"\bchannel\.json\b", r"\bOtaBoot\b", r"\bOtaUpdater\b"]
+             r"build_ota\.sh", r"\bchannel\.json\b", r"\bOtaBoot\b", r"OtaUpdater=\"\*res://scripts/ota"]
     OWNED = ("tools/", ".github/", "ota/", "tests/ota_e2e.py", "tests/ota_e2e_probe.gd", "tests/ota_standin/")
     SELF = ("tests/test_ota_tools.py", "docs/OTA.md", "tools/verify_package.py")   # these name the removed files on purpose
 

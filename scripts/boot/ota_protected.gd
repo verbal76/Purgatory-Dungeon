@@ -26,6 +26,7 @@ const EXACT: Array[String] = [
 ]
 const PREFIXES: Array[String] = [
 	"android/",
+	"ota/",
 	"scripts/boot/",
 ]
 const SUFFIXES: Array[String] = [
