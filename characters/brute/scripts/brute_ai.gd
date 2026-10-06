@@ -272,22 +272,20 @@ func _update_los(player: Node3D, delta: float) -> void:
 	_los_query.from    = start
 	_los_query.to      = end
 
-	var result := space.intersect_ray(_los_query)
-	
-	if result.is_empty() or result.get("collider") == player:
+	# Line of sight is blocked by level geometry only. Allies, props and chests between
+	# the brute and the player used to cut sight (the old ally branch set false in both
+	# arms), dropping crowds of brutes to waypoint pathing with a clear view.
+	var player_rid : Array[RID] = []
+	if player is CollisionObject3D:
+		player_rid.append(player.get_rid())
+	var result := PhysicsUtil.ray_world(space, _los_query, player_rid)
+
+	if result.is_empty():
 		if not _has_los:
 			_approach_boost = false   # First sighting — drop the approach speed bonus
 		_has_los = true
 	else:
-		var col = result.get("collider")
-		if col != null and col.is_in_group("enemy"):
-			var ally_speed : float = col.velocity.length() if "velocity" in col else 0.0
-			if ally_speed < 1.5:
-				_has_los = false
-			else:
-				_has_los = false
-		else:
-			_has_los = false
+		_has_los = false
 
 
 func _update_nav_target(player_pos: Vector3, _delta: float) -> void:
@@ -356,6 +354,7 @@ func take_damage(amount: float, _source: Node = null) -> void:
 
 
 func _play_hit_react() -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	if anim_player == null: return
 	_is_reacting  = true
 	_is_attacking = false
@@ -379,6 +378,7 @@ func _play_hit_react() -> void:
 	anim_player.speed_scale = react_anim_speed
 	_play_anim(anim_to_play)
 	await anim_player.animation_finished
+	if _life != _life_id: return
 	anim_player.speed_scale = 1.0
 	_is_reacting = false
 	if not _is_dead:
@@ -448,6 +448,7 @@ func _build_stun_indicator() -> void:
 
 
 func _on_die() -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	var main = get_tree().current_scene
 	if main and main.has_method("register_enemy_kill"):
 		main.register_enemy_kill()
@@ -497,6 +498,7 @@ func _on_die() -> void:
 
 	await get_tree().create_timer(_current_anim_length()).timeout
 	if not is_instance_valid(self): return
+	if _life != _life_id: return
 
 	# Pool path: return to EnemyManager's pool instead of freeing.
 	# Falls back to queue_free() if this enemy was not spawned from a pool
@@ -516,6 +518,10 @@ func set_pool_return(cb: Callable) -> void:
 # Called by EnemyManager when re-activating this enemy from the pool.
 # Resets all AI and CharacterBase state so the enemy behaves as freshly spawned.
 func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -> void:
+	_life_id += 1                      # invalidate any delayed work from the previous life
+	_state = ""                        # force the idle transition below to actually play
+	if anim_player != null:
+		anim_player.speed_scale = 1.0  # death/react/attack speed must not leak into the new life
 	# ── CharacterBase state ──────────────────────────────────────────────────
 	_buff_multiplier = 1.0
 	max_health       = _base_max_health
@@ -544,6 +550,7 @@ func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -
 	_visited_wp_set.clear()
 	_nav_timer             = randf() * nav_refresh_interval
 	_los_timer             = randf() * los_check_interval
+	_frustration_timer     = randf() * 4.0   # a reborn brute must not inherit the old life's stuck timer
 	_last_global_pos       = new_pos
 	_smoothed_actual_speed = 0.0
 	# Reset movement state so stale directions from the previous life don't carry over.
@@ -815,6 +822,7 @@ func _set_horizontal_velocity(target: Vector3, accel: float, delta: float) -> vo
 
 
 func _do_attack(player: Node3D) -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	_is_attacking = true
 	var player_mod : float = 1.0
 	if player and "enemy_speed_modifier" in player:
@@ -825,13 +833,14 @@ func _do_attack(player: Node3D) -> void:
 	var anim_len : float = _current_anim_length() / (attack_speed_scale * player_mod)
 
 	await get_tree().create_timer(anim_len * 0.5).timeout
+	if _life != _life_id: return
 
 	# SURGICAL FIX: Re-check range at the moment of impact.
 	# The attack started when the player was in range, but the timer delay
 	# means the player may have moved away by the time damage fires.
 	# A 1.5× tolerance handles the brief overlap at the edge of attack_range
 	# while still blocking phantom hits on players who clearly dodged.
-	if not _is_stunned and player and is_instance_valid(player) and player.has_method("take_damage"):
+	if not _is_dead and not _is_stunned and player and is_instance_valid(player) and player.has_method("take_damage"):
 		var current_dist : float = global_position.distance_to(player.global_position)
 		if current_dist <= attack_range * 1.5:
 			var player_damage_mod : float = 1.0
@@ -840,6 +849,7 @@ func _do_attack(player: Node3D) -> void:
 			player.take_damage(attack_damage * player_damage_mod * _cached_damage_mod, self)
 
 	await get_tree().create_timer(anim_len * 0.5).timeout
+	if _life != _life_id: return
 	anim_player.speed_scale = 1.0
 	_is_attacking           = false
 	_attack_cooldown_timer  = attack_cooldown
@@ -847,6 +857,7 @@ func _do_attack(player: Node3D) -> void:
 
 
 func _do_ai_kick(player: Node3D) -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	_is_kicking_ai = true
 	_is_attacking  = true
 
@@ -866,6 +877,7 @@ func _do_ai_kick(player: Node3D) -> void:
 	var anim_len : float = _current_anim_length()
 
 	await get_tree().create_timer(anim_len * 0.50).timeout
+	if _life != _life_id: return
 
 	if not _is_dead and is_instance_valid(player):
 		var dist : float = global_position.distance_to(player.global_position)
@@ -882,6 +894,7 @@ func _do_ai_kick(player: Node3D) -> void:
 				player.take_knockback(push_dir, enemy_kick_force, enemy_kick_stun)
 
 	await get_tree().create_timer(anim_len * 0.50).timeout
+	if _life != _life_id: return
 	_is_kicking_ai       = false
 	_is_attacking        = false
 	_kick_cooldown_timer  = enemy_kick_cooldown

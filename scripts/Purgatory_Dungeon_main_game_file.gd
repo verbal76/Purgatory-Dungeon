@@ -65,6 +65,7 @@ extends Node3D
 @onready var dungeon_generation_function : Node = get_node_or_null("DungeonGenerationFunction")
 @onready var kill_counter_label : Label = get_node_or_null("HUD/KillCounterMargin/KillCounterVBox/KillCounterLabel")
 
+var _kill_margin : Control = null
 var placed_modules : Array[Node3D] = []
 
 # ── Exploration update throttle ────────────────────────────────────────────────
@@ -77,6 +78,7 @@ var _explore_timer     : float = 0.0
 
 func _ready() -> void:
 	_reset_kill_counter()
+	_style_kill_counter()
 	add_to_group("dungeon_generator")
 
 	if has_node("/root/AudioManager"):
@@ -88,6 +90,9 @@ func _ready() -> void:
 
 	# THE FIX: Directly capture the newly spawned player so we never grab a ghost
 	var active_player = _spawn_selected_character()
+
+	# Phones: the touch layer feeds the same input actions as keyboard / gamepad (no-op on desktop).
+	TouchControls.install(self)
 
 	if dungeon_generation_function == null:
 		push_error("DungeonGenerationFunction node not found in main scene.")
@@ -173,6 +178,10 @@ func _ready() -> void:
 func _spawn_selected_character() -> Node3D:
 	var existing_player := get_node_or_null("Player")
 	if existing_player != null:
+		# Detach first: queue_free() alone leaves the old node in the tree until
+		# end of frame, so the new "Player" would be auto-renamed (@Node3D@N) and
+		# every get_node_or_null("Player") lookup would fail.
+		remove_child(existing_player)
 		existing_player.queue_free()
 
 	var chosen_class := "barbarian"
@@ -319,6 +328,37 @@ func register_enemy_kill() -> void:
 
 func _reset_kill_counter() -> void:
 	CharacterBase.GLOBAL_KILL_COUNT = 0
+
+
+# Kills row of the top-left HUD cluster (under the health / ability bars, see HudKit): a small blade icon and
+# "Kills: N" in the HudValue role. The label keeps its node path and name; the icon is its child, so hiding or
+# freeing the label takes the icon along.
+func _style_kill_counter() -> void:
+	if kill_counter_label == null:
+		return
+	kill_counter_label.theme_type_variation = &"HudValue"
+	kill_counter_label.remove_theme_font_size_override("font_size")   # the scene's hard-coded 22 would fight the role
+	var icon_px: float = HudKit.icon_px()
+	var pad := StyleBoxEmpty.new()
+	pad.content_margin_left = icon_px + float(PUI.S2)
+	kill_counter_label.add_theme_stylebox_override("normal", pad)
+	kill_counter_label.custom_minimum_size.y = float(HudKit.ROW_KILLS_H)
+	kill_counter_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	var icon := PUIIcon.make("blade", icon_px)
+	icon.position = Vector2(0.0, (float(HudKit.ROW_KILLS_H) - icon_px) * 0.5)
+	kill_counter_label.add_child(icon)
+	_kill_margin = get_node_or_null("HUD/KillCounterMargin") as Control
+	if _kill_margin != null:
+		_place_kill_counter()
+		get_viewport().size_changed.connect(_place_kill_counter)
+
+
+func _place_kill_counter() -> void:
+	var o: Vector2 = HudKit.origin(get_viewport())
+	_kill_margin.offset_left = o.x
+	_kill_margin.offset_top = o.y + HudKit.kills_row_top()
+	_kill_margin.offset_right = o.x
+	_kill_margin.offset_bottom = _kill_margin.offset_top
 
 
 func _update_kill_counter_label() -> void:

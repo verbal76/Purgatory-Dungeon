@@ -113,8 +113,58 @@ func setup_generation(
 	_end_cap_module        = end_cap_module
 
 
+## A layout that ends far short of the room target is thrown away and generated again (the
+## generator is random; a rare unlucky run closed itself in after a handful of rooms and left
+## a dungeon with no enemies). The last attempt is kept whatever its size.
+@export var minimum_fill_fraction : float = 0.8
+## While the layout is below its target and this few doorways (or fewer) are still open, the layout
+## protects its frontier: no dead-end room is placed on one, and a doorway that fails to take a
+## room is retried (up to door_retry_limit times) instead of being capped. A layout that closes its
+## last open doorway can never grow again.
+@export var frontier_reserve  : int = 3
+@export var door_retry_limit  : int = 30
+@export var max_layout_attempts   : int   = 6
+var layout_attempts : int = 0
+## One entry per layout attempt (why it stopped, how many rooms it reached, how often attaching a
+## room failed...). Diagnostics only: the stress tests read it to find and reproduce bad seeds.
+var layout_history : Array[Dictionary] = []
+var _diag : Dictionary = {}
+
+
 func generate_dungeon() -> Dictionary:
+	layout_attempts = 0
+	layout_history.clear()
+	var result : Dictionary = {"success": false}
+	for i in maxi(max_layout_attempts, 1):
+		layout_attempts += 1
+		result = _generate_once()
+		if not bool(result.get("success", false)):
+			return result
+		if counted_piece_total >= int(ceil(float(target_piece_count) * minimum_fill_fraction)):
+			break
+		if i < maxi(max_layout_attempts, 1) - 1:
+			push_warning("DungeonGeneration: layout %d reached only %d of %d rooms - regenerating." % [
+				layout_attempts, counted_piece_total, target_piece_count])
+			_discard_layout()
+	return result
+
+
+# Removes every module of the current layout from the tree at once (their physics bodies and
+# markers must not linger while the replacement layout is built) and frees them.
+func _discard_layout() -> void:
+	for mod in placed_modules:
+		if is_instance_valid(mod):
+			var parent : Node = mod.get_parent()
+			if parent != null:
+				parent.remove_child(mod)
+			mod.queue_free()
+	placed_modules.clear()
+
+
+func _generate_once() -> Dictionary:
 	_reset_generation_state()
+	_diag = {"attach_fail": 0, "end_caps": 0, "wall_plugs": 0, "code_plugs": 0, "blocked": 0,
+			"dead_end_rooms": 0, "last_door_retries": 0, "stop": "", "rooms_at_stop": 0}
 
 	if _main_root == null:            return {"success": false}
 	if _starter_module == null:       return {"success": false}
@@ -141,6 +191,9 @@ func generate_dungeon() -> Dictionary:
 	_retry_fill_pass()
 	_close_open_ends_full_sweep()
 	_clean_open_connections()
+	_diag["rooms"] = counted_piece_total
+	_diag["modules"] = placed_modules.size()
+	layout_history.append(_diag.duplicate())
 
 	print("Dungeon complete. Modules: ", placed_modules.size(),
 		  "  Rooms: ", counted_piece_total, " / target ", target_piece_count,
@@ -329,19 +382,37 @@ func _generate_layout() -> void:
 			_register_module(res.get("main"), true)
 			_collect_open_connections(res.get("main"))
 			counted_piece_total += 1
+			if _get_connections(res.get("main")).size() < 2:
+				_diag["dead_end_rooms"] += 1
 			continue
 
+		_diag["attach_fail"] += 1
+		# Failing to fit a room is down to the random picks, not the doorway: while the frontier is
+		# thin keep the doorway open and try again rather than closing it for good.
+		if _frontier_is_thin():
+			var fails: int = int(target.get_meta("door_fails", 0)) + 1
+			target.set_meta("door_fails", fails)
+			if fails < door_retry_limit:
+				_diag["last_door_retries"] += 1
+				continue
 		var cap: Node3D = _try_attach_specific_module_to_connection(target, _end_cap_module)
 		if cap != null:
 			_register_module(cap, false)
 			cap.set_meta("is_end_cap", true)
+			_diag["end_caps"] += 1
 		elif _try_attach_wall_plug(target):
 			wall_plug_count += 1
+			_diag["wall_plugs"] += 1
 		elif _force_attach_code_plug(target):
 			code_plug_count += 1
+			_diag["code_plugs"] += 1
 		else:
 			target.set_meta("blocked", true)
 			blocked_final_count += 1
+			_diag["blocked"] += 1
+	_diag["stop"] = "target" if counted_piece_total >= target_piece_count \
+			else ("open_exhausted" if open_connections.is_empty() else "attempt_cap")
+	_diag["rooms_at_stop"] = counted_piece_total
 
 
 func _close_open_ends_full_sweep() -> void:
@@ -381,9 +452,11 @@ func _try_attach_wall_plug(target: Node3D) -> bool:
 # refuse to fit at a connection, build a thin box wall in code directly at the
 # connection's transform. Has no geometry constraints of its own, so it's
 # guaranteed to land; the player can never see outside the dungeon.
-# 1.6 m wide × 3.5 m tall × 0.15 m thick — wide enough to cover a doorway,
-# tall enough to reach the ceiling, thin enough to not overlap anything on
-# the other side of the wall.
+# Connection markers sit 2 m above the module floor (local y = 2) and doorways
+# are ~4 m wide, so the box is 4.2 m wide × 4.15 m tall × 0.15 m thick and is
+# centred at the marker's height offset so it spans floor level to ceiling.
+# (It used to be 1.6 × 3.5 centred 1.75 m above the marker, which left the
+# lower half of the doorway open.)
 func _force_attach_code_plug(target: Node3D) -> bool:
 	if target == null or not is_instance_valid(target) or _main_root == null:
 		return false
@@ -400,9 +473,9 @@ func _force_attach_code_plug(target: Node3D) -> bool:
 
 	var col := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(1.6, 3.5, 0.15)
+	box.size = Vector3(4.2, 4.15, 0.15)
 	col.shape = box
-	col.position = Vector3(0.0, 1.75, 0.0)   # centre the height 0..3.5
+	col.position = Vector3(0.0, 0.075, 0.0)   # local y -2.0 (floor) .. +2.15 (ceiling)
 	plug.add_child(col)
 
 	# Mark the connection used so it doesn't show up in later sweeps.
@@ -450,11 +523,18 @@ func _try_attach_connector_then_piece(target: Node3D) -> Dictionary:
 		if entry == null:
 			conn_mod.queue_free()
 			continue
-		var scene: PackedScene = _pick_weighted_scene()
+		var scene: PackedScene = _pick_weighted_scene(_frontier_is_thin())
 		var main_mod: Node3D = scene.instantiate()
 		_main_root.add_child(main_mod)
 		_reset_module_transform(main_mod)
 		var main_conns: Array[Node3D] = _get_connections(main_mod)
+		# A dead-end room placed on the LAST open doorway ends generation: a rare random run
+		# produced a 5-room dungeon with no enemy spawns. Below the target, only rooms that
+		# keep a doorway open may take the last one.
+		if main_conns.size() < 2 and _frontier_is_thin():
+			main_mod.queue_free()
+			conn_mod.queue_free()
+			continue
 		main_conns.shuffle()
 		var main_entry: Node3D = null
 		for mc in main_conns:
@@ -730,9 +810,25 @@ func _try_attach_specific_module_to_connection(target: Node3D, scene: PackedScen
 	return null
 
 
-func _pick_weighted_scene() -> PackedScene:
+# True while the layout is short of its target and nearly out of open doorways.
+func _frontier_is_thin() -> bool:
+	return counted_piece_total < target_piece_count and open_connections.size() <= frontier_reserve
+
+
+func _pick_weighted_scene(avoid_dead_ends: bool = false) -> PackedScene:
 	if weighted_scene_pool.is_empty(): return null
+	if avoid_dead_ends:
+		# Weighted draws that skip one-doorway rooms (classified by file name like the weights are).
+		for _i in 40:
+			var pick: PackedScene = weighted_scene_pool[randi() % weighted_scene_pool.size()]
+			if not _is_dead_end_scene(pick):
+				return pick
 	return weighted_scene_pool[randi() % weighted_scene_pool.size()]
+
+
+func _is_dead_end_scene(scene: PackedScene) -> bool:
+	var path: String = scene.resource_path.to_lower()
+	return path.contains("1_opening") or path.contains("end")
 
 
 func _matches_excluded_keyword(path: String) -> bool:
@@ -843,6 +939,56 @@ func get_module_aabb(mod: Node3D) -> AABB:
 	return _get_module_cached_aabb(mod)
 
 
+# A candidate point is usable if a small sphere there touches no level geometry (module
+# boxes are axis-aligned, so L/T-shaped rooms contain wall volume) and there is floor
+# beneath it. Only possible once the colliders are in the physics space; callers run a
+# couple of frames after generation. Without a physics space the point is accepted as-is.
+var _clear_query : PhysicsShapeQueryParameters3D = null
+
+func _point_is_clear(p: Vector3, probe_y: float) -> bool:
+	if not is_inside_tree():
+		return true
+	var world : World3D = get_viewport().world_3d if get_viewport() != null else null
+	var space : PhysicsDirectSpaceState3D = world.direct_space_state if world != null else null
+	if space == null:
+		return true
+	if _clear_query == null:
+		_clear_query = PhysicsShapeQueryParameters3D.new()
+		var s := SphereShape3D.new()
+		s.radius = 0.35
+		_clear_query.shape = s
+		_clear_query.collision_mask = 1
+	_clear_query.transform = Transform3D(Basis(), Vector3(p.x, probe_y, p.z))
+	for hit in space.intersect_shape(_clear_query, 8):
+		if PhysicsUtil.is_world_geometry(hit.get("collider")):
+			return false
+	var rq := PhysicsRayQueryParameters3D.create(Vector3(p.x, probe_y, p.z), Vector3(p.x, probe_y - 4.0, p.z))
+	rq.collision_mask = 1
+	return not PhysicsUtil.ray_world(space, rq).is_empty()
+
+
+# True if a sphere of `radius` at p touches no level geometry (walls, floors, door plugs).
+# Used for objects that are deliberately placed near walls (flush furniture) where the
+# larger clearance of _point_is_clear() would be wrong.
+func is_position_clear(p: Vector3, radius: float = 0.1) -> bool:
+	if not is_inside_tree():
+		return true
+	var world : World3D = get_viewport().world_3d if get_viewport() != null else null
+	var space : PhysicsDirectSpaceState3D = world.direct_space_state if world != null else null
+	if space == null:
+		return true
+	var q := PhysicsShapeQueryParameters3D.new()
+	var s := SphereShape3D.new()
+	s.radius = radius
+	q.shape = s
+	q.transform = Transform3D(Basis(), p)
+	q.collision_mask = 1
+	for hit in space.intersect_shape(q, 8):
+		if PhysicsUtil.is_world_geometry(hit.get("collider")):
+			return false
+	return true
+
+
 func get_random_safe_interior_point(mod: Node3D, y: float = 0.9, margin: float = 1.25) -> Vector3:
 	var a = _get_module_cached_aabb(mod)
 	if a.size == Vector3.ZERO:
@@ -853,26 +999,33 @@ func get_random_safe_interior_point(mod: Node3D, y: float = 0.9, margin: float =
 	# enemy spawn marker — prevents props from materialising on top of a
 	# typed_spawn so enemies can never pop out of a prop on frame 1.
 	const SPAWN_MIN_DIST_SQ : float = 4.0   # 2 m squared
-	const MAX_RETRIES : int = 5
+	const SPAWN_FILTER_TRIES : int = 5      # spawn-marker distance is a soft preference
+	const MAX_RETRIES : int = 24            # not being inside a wall is not
+	var probe_y : float = mod.global_position.y + maxf(y, 0.7)
 	for _i in MAX_RETRIES:
 		var candidate := Vector3(
 			randf_range(a.position.x + mx, a.position.x + a.size.x - mx),
 			mod.global_position.y + y,
 			randf_range(a.position.z + mz, a.position.z + a.size.z - mz)
 		)
+		if not _point_is_clear(candidate, probe_y):
+			continue
 		var clear : bool = true
-		for spawn in registered_typed_spawns:
-			var p : Vector3 = spawn.get("position", Vector3.ZERO)
-			var dx : float = p.x - candidate.x
-			var dz : float = p.z - candidate.z
-			if dx * dx + dz * dz < SPAWN_MIN_DIST_SQ:
-				clear = false
-				break
+		if _i < SPAWN_FILTER_TRIES:
+			for spawn in registered_typed_spawns:
+				var p : Vector3 = spawn.get("position", Vector3.ZERO)
+				var dx : float = p.x - candidate.x
+				var dz : float = p.z - candidate.z
+				if dx * dx + dz * dz < SPAWN_MIN_DIST_SQ:
+					clear = false
+					break
 		if clear:
 			return candidate
-	# All retries failed — return the last candidate anyway; the filter is a
-	# soft preference, not a hard guarantee, to avoid infinite retries in
-	# rooms densely packed with spawn markers.
+	# No candidate was clear of the level geometry after MAX_RETRIES: report "no safe point"
+	# (Vector3.ZERO, which every caller skips) instead of returning a point known to be in a
+	# wall. Without a physics space nothing could be validated, so keep the old behaviour.
+	if is_inside_tree():
+		return Vector3.ZERO
 	return Vector3(
 		randf_range(a.position.x + mx, a.position.x + a.size.x - mx),
 		mod.global_position.y + y,

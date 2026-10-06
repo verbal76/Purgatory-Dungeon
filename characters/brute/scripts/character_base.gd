@@ -66,11 +66,29 @@ var damage_reduction   : float = 0.0
 # Multiplies outgoing damage when the target is below 30% health.
 # Set by the Executioner buff.
 var low_health_damage  : float = 0.0
+# Adrenaline Spike: flat bonus damage added to the player's attacks while at or below
+# LOW_HEALTH_FRACTION of max health (see get_low_health_attack_bonus()).
+var low_hp_attack_bonus : float = 0.0
+const LOW_HEALTH_FRACTION := 0.3
+# Shadow Dancer: +kill_haste (a fraction, 0.18 = +18%) movement speed for KILL_HASTE_SECONDS after
+# each kill. The timer is ticked in the player's _physics_tick, so it freezes while paused.
+var kill_haste          : float = 0.0
+var _kill_haste_timer   : float = 0.0
+const KILL_HASTE_SECONDS := 5.0
+# Globe curses / buffs that scale how hard the dungeon hits back. enemy_*_modifier are multipliers
+# (1.0 = unchanged) read by the enemy AI; they live here so BOTH player classes can carry them.
+var enemy_speed_modifier  : float = 1.0
+var enemy_damage_modifier : float = 1.0
 
 signal health_changed(new_health: float, max_val: float)
 signal died
 
 static var GLOBAL_KILL_COUNT : int = 0
+
+# Incremented every time a pooled enemy is reborn (reset_for_pool). Delayed behaviour
+# (attacks, hit reactions, death-return timers) captures it before awaiting and aborts
+# if it changed, so nothing from a previous life can touch the new one.
+var _life_id : int = 0
 # World position of the most recent enemy kill — used by on-kill effects
 # (spark_damage AOE, poison cloud, light flash) to know where to spawn.
 static var GLOBAL_LAST_KILL_POS : Vector3 = Vector3.ZERO
@@ -403,8 +421,9 @@ func take_damage(amount: float, _source_node: Node3D = null) -> void:
 		CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME = Time.get_ticks_msec() * 0.001
 		# Apply damage reduction (Iron Will buff).  Cap at 90% so the player
 		# always takes at least 10% of any hit — prevents full immunity stacking.
-		if damage_reduction > 0.0:
-			amount *= maxf(0.1, 1.0 - clampf(damage_reduction, 0.0, 0.9))
+		# A negative value (Pain Mirror, Void Embrace curses) makes the player take MORE damage.
+		if damage_reduction != 0.0:
+			amount *= maxf(0.1, 1.0 - clampf(damage_reduction, -1.0, 0.9))
 
 	_current_health = maxf(_current_health - amount, 0.0)
 	health_changed.emit(_current_health, max_health)
@@ -421,6 +440,39 @@ func receive_heal(amount: float) -> void:
 
 	_current_health = minf(_current_health + amount, max_health)
 	health_changed.emit(_current_health, max_health)
+
+
+# Bonus attack damage that depends on the player's current health (Adrenaline Spike).
+func get_low_health_attack_bonus() -> float:
+	if low_hp_attack_bonus > 0.0 and max_health > 0.0 \
+			and _current_health / max_health < LOW_HEALTH_FRACTION:
+		return low_hp_attack_bonus
+	return 0.0
+
+
+# Kill curses (Blood Thirst: negative health_on_kill; Shattered Spark: negative spark_damage) hurt
+# the player directly. They can drain the player to 1 HP but never kill them outright.
+func _take_curse_damage(amount: float) -> void:
+	if amount <= 0.0 or _is_dead:
+		return
+	var safe : float = minf(amount, _current_health - 1.0)
+	if safe > 0.0:
+		take_damage(safe)
+
+
+# Called by the player after kills are registered (Shadow Dancer).
+func _on_kill_haste_trigger() -> void:
+	if kill_haste > 0.0:
+		_kill_haste_timer = KILL_HASTE_SECONDS
+
+
+func _tick_kill_haste(delta: float) -> void:
+	if _kill_haste_timer > 0.0:
+		_kill_haste_timer = maxf(_kill_haste_timer - delta, 0.0)
+
+
+func kill_haste_multiplier() -> float:
+	return 1.0 + kill_haste if _kill_haste_timer > 0.0 and kill_haste > 0.0 else 1.0
 
 
 func take_knockback(direction: Vector3, force: float, stun_duration: float = 1.0) -> void:
@@ -707,7 +759,9 @@ func _update_footsteps(delta: float) -> void:
 		footstep_player.volume_db   = _get_footstep_db()
 		footstep_player.pitch_scale = randf_range(footstep_pitch_min, footstep_pitch_max)
 		footstep_player.play()
-		_footstep_timer = footstep_interval_seconds / clampf(h_speed / _get_effective_move_speed(), 0.65, 1.35)
+		# Buffs add to footstep_interval_seconds as an absolute (Footstep Stalker is -0.5 on a 0.38
+		# default), which could go to or below 0 and retrigger the sound every frame. Floor it.
+		_footstep_timer = maxf(footstep_interval_seconds, 0.12) / clampf(h_speed / _get_effective_move_speed(), 0.65, 1.35)
 
 
 func _apply_head_bob(delta: float) -> void:
@@ -716,7 +770,7 @@ func _apply_head_bob(delta: float) -> void:
 	var h_speed := Vector2(velocity.x, velocity.z).length()
 	if is_on_floor() and h_speed > minimum_movement_for_footsteps and not _is_blocking:
 		_head_bob_time += delta * h_speed * head_bob_speed
-		var bob_offset := sin(_head_bob_time) * head_bob_intensity
+		var bob_offset := sin(_head_bob_time) * maxf(head_bob_intensity, 0.0)   # a buff must not invert the bob
 		camera_3d.position.y = lerp(camera_3d.position.y, _default_cam_y + bob_offset, delta * 10.0)
 	else:
 		_head_bob_time = 0.0

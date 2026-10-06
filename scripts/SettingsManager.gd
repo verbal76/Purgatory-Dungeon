@@ -14,7 +14,7 @@
 # ==============================================================================
 extends Node
 
-const GAME_FOLDER := "PurgetoryDungeon"
+const GAME_FOLDER := StoragePaths.GAME_FOLDER
 
 # All settings in one dictionary. Keys match slider/control names used by
 # the options screen. Defaults are applied on first launch (no file yet).
@@ -30,6 +30,12 @@ var gameplay_settings : Dictionary = {
 	"SpeedSlider"   : 100.0,
 	"DamageSlider"  : 100.0,
 	"EnemySpeed"    : 100.0,
+	# Touch layer (phones): percent values, see scripts/touch/touch_controls.gd.
+	"TouchOpacity"  : 70.0,
+	"TouchScale"    : 100.0,
+	"TouchLookSens" : 100.0,
+	"TouchScheme"   : "twin",   # "twin" (default: move stick + Attack, which also aims by dragging) or "classic" (swipe to look)
+	"ShowPerf"      : false,   # phone playtests: frame-time readout (Options > Gameplay)
 }
 
 # Computed in _ready() — points to Documents/PurgetoryDungeon/settings.json.
@@ -44,10 +50,7 @@ func _ready() -> void:
 
 
 func _build_settings_path() -> void:
-	var docs : String = OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
-	var game_dir : String = docs.path_join(GAME_FOLDER)
-	if not DirAccess.dir_exists_absolute(game_dir):
-		DirAccess.make_dir_recursive_absolute(game_dir)
+	var game_dir : String = StoragePaths.ensure_root()
 	_settings_path = game_dir.path_join("settings.json")
 	print("SettingsManager: settings → ", _settings_path)
 
@@ -78,12 +81,8 @@ func load_settings() -> void:
 func save_settings() -> void:
 	if _settings_path.is_empty():
 		return
-	var file := FileAccess.open(_settings_path, FileAccess.WRITE)
-	if file == null:
+	if not StoragePaths.write_text_atomic(_settings_path, JSON.stringify(gameplay_settings, "\t")):
 		push_warning("SettingsManager: could not write settings to " + _settings_path)
-		return
-	file.store_string(JSON.stringify(gameplay_settings, "\t"))
-	file.close()
 
 
 # ── Apply a single setting ──────────────────────────────────────────────────
@@ -131,27 +130,44 @@ func _apply_all() -> void:
 # Only touches the type of binding that was remapped (keyboard vs gamepad)
 # so unmodified bindings remain from project.godot.
 func _apply_custom_controls() -> void:
-	var controls : Dictionary = gameplay_settings.get("controls", {})
+	# settings.json is user-editable and may be damaged: tolerate any shape, and never erase
+	# a default binding unless a valid replacement was actually built (an action with no key
+	# bound at all makes the game unplayable until the file is fixed by hand).
+	var controls_v : Variant = gameplay_settings.get("controls", {})
+	if not (controls_v is Dictionary):
+		return
+	var controls : Dictionary = controls_v
 	for action in controls.keys():
 		if not InputMap.has_action(action):
 			continue
-		var binding : Dictionary = controls[action]
-		var current  : Array     = InputMap.action_get_events(action)
-		if binding.has("keyboard"):
-			for e in current:
-				if e is InputEventKey or e is InputEventMouseButton:
-					InputMap.action_erase_event(action, e)
-			var new_e := deserialize_event(binding["keyboard"])
-			if new_e != null:
-				InputMap.action_add_event(action, new_e)
-		if binding.has("gamepad"):
-			current = InputMap.action_get_events(action)
-			for e in current:
-				if e is InputEventJoypadButton or e is InputEventJoypadMotion:
-					InputMap.action_erase_event(action, e)
-			var new_e := deserialize_event(binding["gamepad"])
-			if new_e != null:
-				InputMap.action_add_event(action, new_e)
+		var binding_v : Variant = controls[action]
+		if not (binding_v is Dictionary):
+			continue
+		var binding : Dictionary = binding_v
+		if binding.get("keyboard") is Dictionary:
+			var new_key := deserialize_event(binding["keyboard"])
+			if _event_is_valid(new_key):
+				for e in InputMap.action_get_events(action):
+					if e is InputEventKey or e is InputEventMouseButton:
+						InputMap.action_erase_event(action, e)
+				InputMap.action_add_event(action, new_key)
+		if binding.get("gamepad") is Dictionary:
+			var new_pad := deserialize_event(binding["gamepad"])
+			if _event_is_valid(new_pad):
+				for e in InputMap.action_get_events(action):
+					if e is InputEventJoypadButton or e is InputEventJoypadMotion:
+						InputMap.action_erase_event(action, e)
+				InputMap.action_add_event(action, new_pad)
+
+
+func _event_is_valid(e: InputEvent) -> bool:
+	if e == null:
+		return false
+	if e is InputEventKey:
+		return int(e.keycode) != 0 or int(e.physical_keycode) != 0
+	if e is InputEventMouseButton:
+		return int(e.button_index) != 0
+	return true
 
 
 func serialize_event(event: InputEvent) -> Dictionary:
@@ -172,29 +188,33 @@ func serialize_event(event: InputEvent) -> Dictionary:
 	return {}
 
 
+func _to_int(v: Variant) -> int:
+	return int(v) if (v is int or v is float) else 0
+
+
 func deserialize_event(data: Dictionary) -> InputEvent:
 	match data.get("type", ""):
 		"key":
 			var e := InputEventKey.new()
 			e.device           = -1
-			e.keycode          = data.get("keycode", 0) as Key
-			e.physical_keycode = data.get("physical_keycode", 0) as Key
+			e.keycode          = _to_int(data.get("keycode", 0)) as Key
+			e.physical_keycode = _to_int(data.get("physical_keycode", 0)) as Key
 			return e
 		"mouse_button":
 			var e := InputEventMouseButton.new()
 			e.device       = -1
-			e.button_index = data.get("button_index", 0) as MouseButton
+			e.button_index = _to_int(data.get("button_index", 0)) as MouseButton
 			return e
 		"joypad_button":
 			var e := InputEventJoypadButton.new()
 			e.device       = -1
-			e.button_index = data.get("button_index", 0) as JoyButton
+			e.button_index = _to_int(data.get("button_index", 0)) as JoyButton
 			return e
 		"joypad_motion":
 			var e := InputEventJoypadMotion.new()
 			e.device      = -1
-			e.axis        = data.get("axis", 0) as JoyAxis
-			e.axis_value  = float(data.get("axis_value", 1.0))
+			e.axis        = _to_int(data.get("axis", 0)) as JoyAxis
+			e.axis_value  = float(_to_int(data.get("axis_value", 1.0)) if not (data.get("axis_value", 1.0) is float) else data.get("axis_value", 1.0))
 			return e
 	return null
 
@@ -204,6 +224,10 @@ func deserialize_event(data: Dictionary) -> InputEvent:
 
 func apply_window_mode(mode: int) -> void:
 	gameplay_settings["WindowMode"] = mode
+	# Phones are always full-screen: window modes, sizes and positions do not exist there.
+	if OS.has_feature("mobile") or TouchControls.is_touch_platform():
+		save_settings()
+		return
 	var screen_id  := DisplayServer.window_get_current_screen()
 	var native_res := DisplayServer.screen_get_size(screen_id)
 	match mode:

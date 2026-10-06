@@ -6,8 +6,9 @@
 #
 # Description:
 #   An on-screen virtual keyboard for text entry. Supports mouse and gamepad
-#   navigation with dynamic spatial focus mapping for the D-Pad. Features
-#   a dynamic shader background.
+#   navigation with dynamic spatial focus mapping for the D-Pad. Styled by the
+#   Purgatory UI theme (iron panel, inset text field, iron keys, ember focus) -
+#   no shader, no blur: a flat dark scrim keeps the form behind it quiet.
 #
 # Mod Notes:
 #   - Programmatic ClickBlocker added to prevent ghost-clicks through UI.
@@ -26,10 +27,10 @@ var max_length: int = 20
 var accept_spaces: bool = true
 
 @export var key_width: int = 72
-@export var key_height: int = 44
+@export var key_height: int = 56
 
 @onready var blur_overlay: ColorRect = $BlurOverlay
-@onready var panel: Panel = $Panel
+@onready var panel: PanelContainer = $Panel
 @onready var input_label: Label = $Panel/VBox/InputDisplay
 
 @onready var row_1: HBoxContainer = $Panel/VBox/KeyboardRows/Row1
@@ -38,13 +39,11 @@ var accept_spaces: bool = true
 @onready var row_4: HBoxContainer = $Panel/VBox/KeyboardRows/Row4
 @onready var row_5: HBoxContainer = $Panel/VBox/KeyboardRows/Row5
 
-var _blur_material: ShaderMaterial
 var _keyboard_buttons: Array[Button] = []
 var _trapped_focus_nodes: Dictionary = {}
 
 func _ready() -> void:
-	_setup_blur_overlay()
-	_style_keyboard_panel()
+	_setup_scrim()
 	_style_input_display()
 
 	_build_code_click_blocker()
@@ -153,82 +152,23 @@ func _unlock_background_focus() -> void:
 #  STYLING & SETUP
 # ══════════════════════════════════════════════════════════════
 
-func _setup_blur_overlay() -> void:
+# The old frosted-glass shader is gone (no shaders in the UI): a flat warm-black scrim dims what is behind.
+func _setup_scrim() -> void:
 	if blur_overlay == null:
 		return
+	blur_overlay.color = Color(PUI.VOID.r, PUI.VOID.g, PUI.VOID.b, 0.72)
 
-	var shader := Shader.new()
-	shader.code = """
-shader_type canvas_item;
-
-uniform sampler2D SCREEN_TEXTURE : hint_screen_texture, repeat_disable, filter_linear_mipmap;
-uniform float blur_strength = 2.0;
-uniform vec4 tint_color : source_color = vec4(0.0, 0.0, 0.0, 0.28);
-
-void fragment() {
-	vec2 size = vec2(textureSize(SCREEN_TEXTURE, 0));
-	vec2 pixel = 1.0 / size;
-
-	vec4 c = textureLod(SCREEN_TEXTURE, SCREEN_UV, blur_strength);
-	c += textureLod(SCREEN_TEXTURE, SCREEN_UV + vec2(pixel.x, 0.0) * 2.0, blur_strength);
-	c += textureLod(SCREEN_TEXTURE, SCREEN_UV - vec2(pixel.x, 0.0) * 2.0, blur_strength);
-	c += textureLod(SCREEN_TEXTURE, SCREEN_UV + vec2(0.0, pixel.y) * 2.0, blur_strength);
-	c += textureLod(SCREEN_TEXTURE, SCREEN_UV - vec2(0.0, pixel.y) * 2.0, blur_strength);
-	c /= 5.0;
-
-	COLOR = mix(c, tint_color, tint_color.a);
-}
-"""
-	_blur_material = ShaderMaterial.new()
-	_blur_material.shader = shader
-	_blur_material.set_shader_parameter("blur_strength", 2.4)
-	_blur_material.set_shader_parameter("tint_color", Color(0, 0, 0, 0.40))
-	blur_overlay.material = _blur_material
-
-func _style_keyboard_panel() -> void:
-	if panel == null:
-		return
-
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.06, 0.07, 0.09, 0.96)
-	style.corner_radius_top_left = 16
-	style.corner_radius_top_right = 16
-	style.corner_radius_bottom_right = 16
-	style.corner_radius_bottom_left = 16
-	style.border_width_left = 1
-	style.border_width_top = 1
-	style.border_width_right = 1
-	style.border_width_bottom = 1
-	style.border_color = Color(0.50, 0.54, 0.62, 0.60)
-	style.shadow_color = Color(0, 0, 0, 0.50)
-	style.shadow_size = 12
-	style.content_margin_left = 10
-	style.content_margin_top = 10
-	style.content_margin_right = 10
-	style.content_margin_bottom = 10
-	panel.add_theme_stylebox_override("panel", style)
-
+# The typed text sits in the theme's recessed iron field (InsetPanel), the same look as every text input.
 func _style_input_display() -> void:
 	if input_label == null:
 		return
-
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.12, 0.13, 0.16, 0.98)
-	style.corner_radius_top_left = 10
-	style.corner_radius_top_right = 10
-	style.corner_radius_bottom_right = 10
-	style.corner_radius_bottom_left = 10
-	style.border_width_left = 1
-	style.border_width_top = 1
-	style.border_width_right = 1
-	style.border_width_bottom = 1
-	style.border_color = Color(0.58, 0.63, 0.72, 0.50)
-	style.content_margin_left = 12
-	style.content_margin_top = 8
-	style.content_margin_right = 12
-	style.content_margin_bottom = 8
-	input_label.add_theme_stylebox_override("normal", style)
-	input_label.add_theme_font_size_override("font_size", 20)
+	var inset := PUI.theme().get_stylebox("panel", "InsetPanel").duplicate() as StyleBoxTexture
+	inset.content_margin_left = PUI.S4
+	inset.content_margin_right = PUI.S4
+	inset.content_margin_top = PUI.S2
+	inset.content_margin_bottom = PUI.S2
+	input_label.add_theme_stylebox_override("normal", inset)
+	input_label.add_theme_color_override("font_color", PUI.BONE_BRIGHT)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -264,7 +204,7 @@ func _add_keys_to_row(row: HBoxContainer, keys: Array[String]) -> void:
 
 	for key in keys:
 		var btn := Button.new()
-		btn.text = key
+		btn.text = _key_caption(key)
 		btn.custom_minimum_size = _get_button_size_for_key(key)
 		btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -273,6 +213,15 @@ func _add_keys_to_row(row: HBoxContainer, keys: Array[String]) -> void:
 		_style_key_button(btn, key)
 		row.add_child(btn)
 		_keyboard_buttons.append(btn)
+
+# Captions: letters and digits as typed; the five command keys in sentence case.
+func _key_caption(key: String) -> String:
+	match key:
+		"SPACE": return "Space"
+		"BACK": return "Back"
+		"CLEAR": return "Clear"
+		"CANCEL": return "Cancel"
+	return key
 
 func _get_button_size_for_key(key: String) -> Vector2:
 	match key:
@@ -289,55 +238,16 @@ func _get_button_size_for_key(key: String) -> Vector2:
 		_:
 			return Vector2(key_width, key_height)
 
-func _style_key_button(btn: Button, _key: String) -> void:
-	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(0.16, 0.17, 0.20, 0.98)
-	normal.corner_radius_top_left = 8
-	normal.corner_radius_top_right = 8
-	normal.corner_radius_bottom_right = 8
-	normal.corner_radius_bottom_left = 8
-	normal.border_width_left = 1
-	normal.border_width_top = 1
-	normal.border_width_right = 1
-	normal.border_width_bottom = 1
-	normal.border_color = Color(0.42, 0.45, 0.52, 0.55)
-	normal.shadow_color = Color(0, 0, 0, 0.35)
-	normal.shadow_size = 4
-	normal.content_margin_left = 4
-	normal.content_margin_top = 3
-	normal.content_margin_right = 4
-	normal.content_margin_bottom = 3
-
-	var hover := normal.duplicate()
-	hover.bg_color = Color(0.21, 0.22, 0.26, 1.0)
-	hover.border_color = Color(0.62, 0.67, 0.78, 0.8)
-
-	var pressed := normal.duplicate()
-	pressed.bg_color = Color(0.11, 0.12, 0.15, 1.0)
-	pressed.content_margin_top = 5
-	pressed.content_margin_bottom = 1
-
-	var focus := hover.duplicate()
-	focus.border_width_left = 2
-	focus.border_width_top = 2
-	focus.border_width_right = 2
-	focus.border_width_bottom = 2
-	focus.border_color = Color(0.85, 0.90, 1.0, 0.95)
-
-	var disabled := normal.duplicate()
-	disabled.bg_color = Color(0.12, 0.12, 0.13, 0.70)
-	disabled.border_color = Color(0.25, 0.25, 0.28, 0.50)
-
-	btn.add_theme_stylebox_override("normal", normal)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_stylebox_override("focus", focus)
-	btn.add_theme_stylebox_override("disabled", disabled)
-
-	btn.add_theme_color_override("font_color", Color(0.93, 0.95, 0.98, 1.0))
-	btn.add_theme_color_override("font_focus_color", Color(1, 1, 1, 1))
-	btn.add_theme_color_override("font_hover_color", Color(1, 1, 1, 1))
-	btn.add_theme_font_size_override("font_size", 15)
+# Keys are plain theme buttons: letters/digits and Space use the default iron button, Back/Clear/Cancel the quieter
+# NavButton, OK the one primary action. Hover / focus (ember ring) / pressed come from the theme.
+func _style_key_button(btn: Button, key: String) -> void:
+	match key:
+		"OK":
+			btn.theme_type_variation = &"PrimaryButton"
+		"BACK", "CLEAR", "CANCEL":
+			btn.theme_type_variation = &"NavButton"
+		_:
+			btn.theme_type_variation = &""
 
 
 # ══════════════════════════════════════════════════════════════

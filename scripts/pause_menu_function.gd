@@ -30,6 +30,13 @@ var _pending_windowed_resolution: Vector2i = Vector2i(1280, 720)
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	add_to_group("pause_menu")   # the Android lifecycle handler opens it when the app is backgrounded
+
+	# The menu hangs off a CanvasLayer, which does not pass the root window's theme down: apply the shared one.
+	if pause_menu != null:
+		pause_menu.theme = PUI.theme()
+	if pause_shade != null:
+		pause_shade.theme = PUI.theme()
 
 	_hook_controls()
 	_build_display_mode_options()
@@ -37,8 +44,27 @@ func _ready() -> void:
 	_initialize_pause_menu_values()
 	_apply_panel_style()
 	_inject_options_button()
+	if TouchControls.is_touch_platform():
+		_fit_for_phone()
 	_set_pause_menu_visible(false)
 	_wire_button_clicks()
+
+
+# Phones: Resume / Options / Exit as big buttons. Volume lives in Options (Sound), and fullscreen /
+# window size mean nothing on a phone, so those rows would only crowd the 720-high canvas.
+func _fit_for_phone() -> void:
+	for row_name in ["MasterVolumeRow", "MusicVolumeRow", "SfxVolumeRow", "DisplayModeRow", "ResolutionRow", "ButtonSpacer"]:
+		var row := find_child(row_name, true, false) as Control
+		if row != null:
+			row.hide()
+	# The desktop panel is wider; on a phone it is a compact column. Its height is whatever the three
+	# buttons need (the panel is a container), centred on the canvas.
+	var panel := find_child("PausePanel", true, false) as Control
+	if panel != null:
+		panel.offset_left = -300.0
+		panel.offset_right = 300.0
+		panel.offset_top = -1.0
+		panel.offset_bottom = 1.0
 
 
 func _wire_button_clicks() -> void:
@@ -47,101 +73,70 @@ func _wire_button_clicks() -> void:
 
 
 # ── Visual style ───────────────────────────────────────────────────────────────
+# Everything comes from the shared theme: the panel is the brand surface, the title is a ScreenTitle,
+# Resume is the primary action, Exit to Main Menu carries the danger edge (it abandons the run).
 func _apply_panel_style() -> void:
-	# Title
+	# veil over the paused dungeon: a light darkening + vignette (the shade node itself stays a ColorRect)
+	if pause_shade != null and pause_shade.find_child("UiBackground", false, false) == null:
+		pause_shade.add_child(PUI.background("veil"))
+
 	var title := find_child("PauseTitle", true, false) as Label
 	if title != null:
-		title.add_theme_color_override("font_color", Color(0.80, 0.18, 0.18, 1.0))
-		title.add_theme_font_size_override("font_size", 30)
+		title.theme_type_variation = &"ScreenTitle"
 
-	# Red separator line under the title
 	_inject_title_separator()
 
-	# Style all existing buttons
-	_style_all_buttons()
+	if resume_button != null:
+		PUI.style_button(resume_button, "primary")
+	if exit_to_main_menu_button != null:
+		PUI.style_button(exit_to_main_menu_button, "danger")
 
-	# Wire percentage text onto the volume slider labels
+	# the rows share the Options screen's components (label left, control right, HudValue read-out)
+	for row_name in ["MasterVolumeRow", "MusicVolumeRow", "SfxVolumeRow", "DisplayModeRow", "ResolutionRow"]:
+		var row := find_child(row_name, true, false) as Control
+		if row != null:
+			# slider rows are a touch shorter than option rows so the desktop panel fits a 1280x720 window
+			row.custom_minimum_size.y = SettingsRows.SLIDER_H + PUI.S1 if row_name.contains("Volume") else SettingsRows.ROW_H
+			for child in row.get_children():
+				if child is Label:
+					(child as Label).theme_type_variation = &"ShortLabel"   # same Cinzel setting names as Options
+					(child as Label).custom_minimum_size.x = SettingsRows.LABEL_W - 50.0
+					(child as Label).vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+				elif child is HSlider:
+					SettingsRows.prepare_slider(child as HSlider)
+				elif child is OptionButton:
+					(child as OptionButton).size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_wire_volume_labels()
-
-
-func _make_btn_stylebox(bg: Color, border: Color) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = bg
-	s.border_color = border
-	s.set_border_width_all(1)
-	s.set_corner_radius_all(5)
-	s.content_margin_left   = 12.0
-	s.content_margin_right  = 12.0
-	s.content_margin_top    = 8.0
-	s.content_margin_bottom = 8.0
-	return s
-
-
-func _style_button(btn: Button) -> void:
-	btn.add_theme_font_size_override("font_size", 16)
-	btn.add_theme_color_override("font_color",          Color(0.92, 0.88, 0.88))
-	btn.add_theme_color_override("font_hover_color",    Color(1.00, 1.00, 1.00))
-	btn.add_theme_color_override("font_pressed_color",  Color(1.00, 0.75, 0.75))
-	btn.add_theme_color_override("font_focus_color",    Color(1.00, 1.00, 1.00))
-	btn.add_theme_stylebox_override("normal",
-		_make_btn_stylebox(Color(0.12, 0.07, 0.10), Color(0.48, 0.10, 0.10)))
-	btn.add_theme_stylebox_override("hover",
-		_make_btn_stylebox(Color(0.20, 0.08, 0.13), Color(0.72, 0.20, 0.18)))
-	btn.add_theme_stylebox_override("pressed",
-		_make_btn_stylebox(Color(0.08, 0.04, 0.07), Color(0.85, 0.28, 0.20)))
-	btn.add_theme_stylebox_override("focus",
-		_make_btn_stylebox(Color(0.16, 0.07, 0.11), Color(0.85, 0.28, 0.20)))
-
-
-func _style_all_buttons() -> void:
-	for btn in find_children("*", "Button", true):
-		_style_button(btn as Button)
 
 
 func _inject_title_separator() -> void:
 	var vbox := find_child("PauseVBox", true, false) as VBoxContainer
 	if vbox == null or vbox.find_child("TitleSep", false, false) != null:
 		return
-	var sep := HSeparator.new()
+	var sep := SettingsRows.brass_line()
 	sep.name = "TitleSep"
-	var sep_style := StyleBoxFlat.new()
-	sep_style.bg_color = Color(0.55, 0.10, 0.10, 0.85)
-	sep_style.set_content_margin_all(0.0)
-	sep.add_theme_stylebox_override("separator", sep_style)
-	sep.add_theme_constant_override("separation", 2)
 	vbox.add_child(sep)
 	vbox.move_child(sep, 1)   # Right after the title
 
 
 func _wire_volume_labels() -> void:
-	_wire_slider_label(master_volume_slider, "Master Volume")
-	_wire_slider_label(music_volume_slider,  "Music Volume")
-	_wire_slider_label(sfx_volume_slider,    "SFX Volume")
+	_wire_slider_label(master_volume_slider)
+	_wire_slider_label(music_volume_slider)
+	_wire_slider_label(sfx_volume_slider)
 
 
-# Finds the Label inside the slider's parent VBoxContainer and rewrites it to
-# show the current percentage.  Reconnects value_changed so it stays in sync.
-func _wire_slider_label(slider: HSlider, title: String) -> void:
+# Adds the numeric read-out (HudValue, like Options) to the right of the slider and keeps it in sync.
+func _wire_slider_label(slider: HSlider) -> void:
 	if slider == null:
 		return
 	var row := slider.get_parent()
-	if row == null:
+	if row == null or row.find_child("ValueLabel", false, false) != null:
 		return
-	for child in row.get_children():
-		if not (child is Label):
-			continue
-		var lbl := child as Label
-		lbl.add_theme_color_override("font_color", Color(0.72, 0.60, 0.60))
-		lbl.add_theme_font_size_override("font_size", 15)
-		# Update text now
-		lbl.text = "%s   %d%%" % [title, int(slider.value * 100.0)]
-		# Reconnect — disconnect any existing lambda first so we don't stack duplicates
-		for c in slider.value_changed.get_connections():
-			if c.get("callable", Callable()).get_object() == null:
-				slider.value_changed.disconnect(c.callable)
-		slider.value_changed.connect(
-			func(v: float): lbl.text = "%s   %d%%" % [title, int(v * 100.0)])
-		break
+	var vl := SettingsRows.value_label()
+	vl.name = "ValueLabel"
+	row.add_child(vl)
+	vl.text = "%d%%" % int(round(slider.value * 100.0))
+	slider.value_changed.connect(func(v: float) -> void: vl.text = "%d%%" % int(round(v * 100.0)))
 
 
 # ── Options button injection ───────────────────────────────────────────────────
@@ -156,11 +151,8 @@ func _inject_options_button() -> void:
 	if vbox.find_child("OptionsButton", false, false) != null:
 		return
 
-	var options_btn := Button.new()
+	var options_btn := PUI.button("Options")
 	options_btn.name = "OptionsButton"
-	options_btn.text = "Options"
-	options_btn.custom_minimum_size = Vector2(0, 44)
-	_style_button(options_btn)
 	options_btn.pressed.connect(_on_options_button_pressed)
 
 	# Insert before ExitToMainMenuButton
@@ -173,21 +165,48 @@ func _inject_options_button() -> void:
 		vbox.move_child(options_btn, exit_idx)
 
 
-func _on_options_button_pressed() -> void:
-	# Tell the options screen to return here (dungeon) when Back is pressed.
-	# We use the static var on options_screen so no scene reference is needed.
-	if ResourceLoader.exists(OPTIONS_SCENE):
-		var OptionsScreen = load("res://scripts/options_screen.gd")
-		if OptionsScreen:
-			OptionsScreen._return_scene = DUNGEON_SCENE
+# Options opens as an overlay on top of the paused run. It must NOT change scene:
+# change_scene_to_file() frees the whole dungeon, and returning would reload a fresh one,
+# silently abandoning the run (world, enemies, clock, player position).
+var _options_layer : CanvasLayer = null
 
-	_set_pause_menu_visible(false)
-	get_tree().paused = false
-	get_tree().change_scene_to_file(OPTIONS_SCENE)
+func _on_options_button_pressed() -> void:
+	if _options_layer != null or not ResourceLoader.exists(OPTIONS_SCENE):
+		return
+	var options_scene : PackedScene = load(OPTIONS_SCENE)
+	var options : Control = options_scene.instantiate() as Control
+	if options == null:
+		return
+	options.set("embedded", true)
+	options.process_mode = Node.PROCESS_MODE_ALWAYS
+	options.connect("closed", _on_options_closed)
+	_options_layer = CanvasLayer.new()
+	_options_layer.name = "OptionsOverlay"
+	_options_layer.layer = 128
+	_options_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_options_layer)
+	_options_layer.add_child(options)
+	if pause_menu != null:
+		pause_menu.visible = false
+
+
+func _on_options_closed() -> void:
+	if _options_layer != null:
+		_options_layer.queue_free()
+		_options_layer = null
+	if pause_menu != null and _is_open:
+		pause_menu.visible = true
+		if resume_button != null:
+			resume_button.grab_focus()
+	_initialize_pause_menu_values()   # reflect any audio/display changes made in Options
 
 
 func open_menu() -> void:
 	if _is_open:
+		return
+	# A buff pick is modal. Opening the pause menu over it let a second Escape "resume"
+	# the tree while the pick UI was still up, so the world ran behind it.
+	if has_node("/root/BuffManager") and BuffManager.is_picking():
 		return
 
 	_initialize_pause_menu_values()
@@ -198,6 +217,9 @@ func open_menu() -> void:
 func close_menu() -> void:
 	if not _is_open:
 		return
+	if _options_layer != null:   # never leave the Options overlay behind a resumed game
+		_options_layer.queue_free()
+		_options_layer = null
 
 	_set_pause_menu_visible(false)
 	get_tree().paused = false
@@ -431,6 +453,9 @@ func _on_resume_button_pressed() -> void:
 func _on_exit_to_main_menu_button_pressed() -> void:
 	_set_pause_menu_visible(false)
 	get_tree().paused = false
+	# Leaving the run: stop the day clock/buffs/globes so a buff pick or day HUD cannot
+	# appear over the main menu a minute later.
+	RunLifecycle.end_run_cleanup()
 
 	if has_node("/root/AudioManager"):
 		AudioManager.play_menu_music()

@@ -309,6 +309,15 @@ func _on_ready() -> void:
 
 # ── Fireball pool management ──────────────────────────────────────────────────
 
+# The pool is parented to the scene root, not to this enemy, so it must be freed with
+# the enemy or every freed mage (pool full, frustration timeout, run end) leaks 6 nodes.
+func _exit_tree() -> void:
+	for fb in _fireball_pool:
+		if is_instance_valid(fb) and not fb.is_queued_for_deletion():
+			fb.queue_free()
+	_fireball_pool.clear()
+
+
 func _init_fireball_pool() -> void:
 	if fireball_scene == null:
 		return
@@ -510,6 +519,7 @@ func take_damage(amount: float, _source: Node = null) -> void:
 
 
 func _play_hit_react() -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	if anim_player == null: return
 	_is_reacting  = true
 	_is_attacking = false
@@ -533,6 +543,7 @@ func _play_hit_react() -> void:
 	anim_player.speed_scale = react_anim_speed
 	_play_anim(anim_to_play)
 	await anim_player.animation_finished
+	if _life != _life_id: return
 	anim_player.speed_scale = 1.0
 	_is_reacting            = false
 	if not _is_dead: _change_state(_get_idle_state())
@@ -566,6 +577,7 @@ func pick_death_direction() -> String:
 
 
 func _on_die() -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	var main = get_tree().current_scene
 	if main and main.has_method("register_enemy_kill"):
 		main.register_enemy_kill()
@@ -612,6 +624,7 @@ func _on_die() -> void:
 	if _hp_bar_root != null: _hp_bar_root.visible = false
 	await get_tree().create_timer(_current_anim_length()).timeout
 	if not is_instance_valid(self): return
+	if _life != _life_id: return
 
 	if _pool_return.is_valid():
 		_pool_return.call()
@@ -626,6 +639,10 @@ func set_pool_return(cb: Callable) -> void:
 
 
 func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -> void:
+	_life_id += 1                      # invalidate any delayed work from the previous life
+	_state = ""                        # force the idle transition below to actually play
+	if anim_player != null:
+		anim_player.speed_scale = 1.0  # death/react/attack speed must not leak into the new life
 	# ── CharacterBase state ──────────────────────────────────────────────────
 	_buff_multiplier = 1.0
 	max_health       = _base_max_health
@@ -972,6 +989,7 @@ func _physics_tick(delta: float) -> void:
 
 
 func _do_spell_attack(player: Node3D) -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	_is_attacking = true
 	var player_mod : float = float(player.enemy_speed_modifier) if "enemy_speed_modifier" in player else 1.0
 	_play_anim(pick_attack())
@@ -979,6 +997,7 @@ func _do_spell_attack(player: Node3D) -> void:
 	var anim_len : float = _current_anim_length() / (attack_speed_scale * player_mod)
 
 	await get_tree().create_timer(anim_len * 0.85).timeout
+	if _life != _life_id: return
 
 	if not _is_stunned and not _is_dead and is_instance_valid(player):
 		var flat_to_player := Vector3(player.global_position.x - global_position.x, 0.0, player.global_position.z - global_position.z)
@@ -1012,10 +1031,12 @@ func _do_spell_attack(player: Node3D) -> void:
 					fireball.setup(final_damage, true_aim_dir)
 
 	await get_tree().create_timer(anim_len * 0.15).timeout
+	if _life != _life_id: return
 	_is_attacking = false; _attack_cooldown_timer = attack_cooldown
 
 
 func _do_ai_shove(player: Node3D) -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	_is_shoving   = true
 	_is_attacking = true
 
@@ -1035,6 +1056,7 @@ func _do_ai_shove(player: Node3D) -> void:
 	var anim_len : float = _current_anim_length()
 
 	await get_tree().create_timer(anim_len * 0.55).timeout
+	if _life != _life_id: return
 
 	if not _is_dead and is_instance_valid(player):
 		var dist : float = global_position.distance_to(player.global_position)
@@ -1051,6 +1073,7 @@ func _do_ai_shove(player: Node3D) -> void:
 				player.take_knockback(push_dir, enemy_shove_force, enemy_shove_stun)
 
 	await get_tree().create_timer(anim_len * 0.45).timeout
+	if _life != _life_id: return
 	_is_shoving          = false
 	_is_attacking        = false
 	_shove_cooldown_timer = enemy_shove_cooldown

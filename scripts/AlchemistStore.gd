@@ -1,59 +1,58 @@
 # ==============================================================================
 # File Name: AlchemistStore.gd
 # Path: res://scripts/AlchemistStore.gd
-# Description: 9-Perk hub store with parchment background and page navigation.
-#              12 perks across 2 pages (9 per page).
-#              Page arrows sit at the bottom of the parchment panel.
-#              Load Character (bottom-left) and Start Another Run (bottom-right)
-#              sit outside the parchment, always visible regardless of page.
-#
-#  ADJUSTABLE SETTINGS:
-#    PERKS_PER_PAGE   — how many perks show per page (default 9 = 3×3 grid)
-#    PARCHMENT_COLOR  — warm tan used as the store background
-#    CARD_MIN_SIZE    — minimum pixel size of each perk card
+# Description: The Alchemist's Lab - the perk ledger, on the Purgatory design system
+#              (docs/UI_DESIGN_SYSTEM.md). A parchment sheet (PUI.paper_panel) on the void background,
+#              upgrade slips of paper with iron/brass buttons, and a bottom bar of iron controls:
+#                  [ Load Character ]       [ < 1 / 2 > ]       [ Start Another Run ]
+#              Perks per page: 9 (3x3) on desktop, 6 (3x2) on touch - see perks_per_page().
 #
 #  MOD NOTES:
-#  - SURGICAL CHANGE: "Sanctuary" renamed to "Hare's Delight".
-#    Save key "sanctuary" preserved so existing saves are not broken.
-#  - SURGICAL ADD: Parchment panel built in code to match the minimap aesthetic.
-#  - SURGICAL ADD: Pagination system — 9 perks per page, ◄ / ► to navigate.
-#  - SURGICAL ADD: Load Character and Start Another Run nav buttons.
+#  - "Sanctuary" was renamed "Hare's Delight"; save key "sanctuary" is preserved.
+#  - Mechanics (costs, caps, requirements, the single-write purchase) are untouched by the visual pass.
+#  - Test hooks kept: visible_perks(), perks_per_page(), _purchase_perk(), _start_new_run(), and the
+#    nodes UpgradeBtn_<key>, LoadCharacterButton, StartAnotherRunButton.
 # ==============================================================================
 extends Control
 
 @export var character_selection_scene : String = "res://scenes/CharacterSelection.tscn"
 const DUNGEON_SCENE    : String = "res://scenes/Purgatory_Dungeon_main_game_file.tscn"
 const PERKS_PER_PAGE   : int    = 9
-const PARCHMENT_COLOR  : Color  = Color(0.82, 0.72, 0.52, 0.97)
-const INK_COLOR        : Color  = Color(0.15, 0.09, 0.04, 1.0)
+const PERKS_PER_PAGE_PHONE : int = 6   # 3x2: thumb-sized Trade buttons need the room
 const CARD_MIN_SIZE    : Vector2 = Vector2(210, 138)
+const MAX_SHEET_WIDTH  : float  = 1560.0   # the ledger never stretches across an ultra-wide window
 
-@onready var currency_label : Label         = find_child("CurrencyLabel")
-@onready var grid           : GridContainer = find_child("PerkGrid")
+# Built in code (the scene is only the root + this script).
+var currency_label : Label         = null   # "Potions Stashed"
+var grid           : GridContainer = null   # PerkGrid
 
-# ── Pagination state ───────────────────────────────────────────────────────────
+# -- Pagination state -----------------------------------------------------------
 var _current_page  : int = 0
 var _total_pages   : int = 1
 
-# ── Parchment UI nodes (built in code) ────────────────────────────────────────
-var _parchment_panel : Panel    = null
-var _page_label      : Label    = null
-var _prev_btn        : Button   = null
-var _next_btn        : Button   = null
-
-# ── Nav buttons (outside parchment) ───────────────────────────────────────────
-var _load_char_btn   : Button   = null
-var _new_run_btn     : Button   = null
-var _back_btn        : Button   = null   # hidden legacy button
+# -- Nodes built in code ---------------------------------------------------------
+var _margin          : MarginContainer = null
+var _parchment_panel : PanelContainer  = null   # the ledger sheet ("ParchmentPanel")
+var _scroll          : ScrollContainer = null
+var _count_label     : Label           = null   # the potion count (HudValue, ember)
+var _page_label      : Label           = null
+var _prev_btn        : Button          = null
+var _next_btn        : Button          = null
+var _prev_icon       : PUIIcon         = null
+var _next_icon       : PUIIcon         = null
+var _nav_bar         : HBoxContainer   = null
+var _load_char_btn   : Button          = null
+var _new_run_btn     : Button          = null
+var _back_btn        : Button          = null   # hidden legacy button (old scenes)
 
 var perks_def : Array = [
-	{"key": "magnitude",   "name": "Magnitude",      "desc": "Dome Radius +10%"},
-	{"key": "persistence", "name": "Persistence",    "desc": "Dome Duration +15%"},
-{"key": "vitality",    "name": "Vitality",        "desc": "Max Health +10"},
+	{"key": "magnitude",   "name": "Magnitude",      "desc": "Dome Radius +10%", "desc_mage": "+2 Dome Bolts", "desc_barbarian": "AOE Blast Radius +10%"},
+	{"key": "persistence", "name": "Persistence",    "desc": "Dome Duration +15%", "desc_mage": "Spell Range +15%", "hide_for": ["barbarian"]},
+	{"key": "vitality",    "name": "Vitality",        "desc": "Max Health +10"},
 	{"key": "adrenaline",  "name": "Adrenaline",      "desc": "Attack Speed +8%"},
 	{"key": "ferocity",    "name": "Ferocity",         "desc": "Attack Damage +10%"},
-	{"key": "scavenge",    "name": "Scavenge",         "desc": "Drop Rate +5%"},
-	{"key": "greed",       "name": "Greed",            "desc": "Double Drop Chance +10%"},
+	{"key": "scavenge",    "name": "Scavenge",         "desc": "Potion Drop Rate +3%"},
+	{"key": "greed",       "name": "Greed",            "desc": "Double Drop Chance +5%"},
 	{"key": "swiftness",   "name": "Swiftness",        "desc": "Move Speed +5%"},
 	{"key": "health_regen","name": "Regeneration",     "desc": "+0.5 HP/sec per level"},
 	{"key": "cyclone",     "name": "Cyclone",          "desc": "+0.5s Rapid Attack / -3s Cooldown"},
@@ -61,8 +60,14 @@ var perks_def : Array = [
 ]
 
 
+func perks_per_page() -> int:
+	return PERKS_PER_PAGE_PHONE if TouchControls.is_touch_platform() else PERKS_PER_PAGE
+
+
 func _ready() -> void:
-	_total_pages = int(ceil(float(perks_def.size()) / float(PERKS_PER_PAGE)))
+	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_total_pages = maxi(1, int(ceil(float(visible_perks().size()) / float(perks_per_page()))))
 	_hide_legacy_back_button()
 	_build_parchment()
 	_build_nav_buttons()
@@ -71,10 +76,12 @@ func _ready() -> void:
 	if _load_char_btn:
 		_load_char_btn.call_deferred("grab_focus")
 	_wire_button_clicks()
+	resized.connect(_apply_margins)
+	_apply_margins()
 
 
 # ══════════════════════════════════════════════════════════════
-#  PARCHMENT PANEL
+#  LEDGER SHEET
 # ══════════════════════════════════════════════════════════════
 
 func _wire_button_clicks() -> void:
@@ -82,207 +89,198 @@ func _wire_button_clicks() -> void:
 		AudioManager.wire_click_sounds(self)
 
 
+# Screen margins: phone-safe on touch, a roomy 48 on desktop, and the sheet is held to a readable
+# maximum width on very wide windows.
+func _apply_margins() -> void:
+	if _margin == null:
+		return
+	var touch: bool = TouchControls.is_touch_platform()
+	var side: float = float(PUI.S6 + PUI.S2) if touch else float(PUI.SCREEN_MARGIN)
+	side = maxf(side, (size.x - MAX_SHEET_WIDTH) * 0.5)
+	var vert: float = float(PUI.S3) if touch else float(PUI.S5)
+	_margin.add_theme_constant_override("margin_left", int(side))
+	_margin.add_theme_constant_override("margin_right", int(side))
+	_margin.add_theme_constant_override("margin_top", int(vert))
+	_margin.add_theme_constant_override("margin_bottom", int(vert))
+
+
 func _build_parchment() -> void:
-	# Dark vignette behind the parchment
-	var bg := ColorRect.new()
-	bg.color = Color(0.0, 0.0, 0.0, 0.55)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(bg)
+	# The scene is only the root + script: everything is built here on the shared design system.
+	add_child(PUI.background("void"))
 
-	# Parchment panel — TextureRect using the actual parchment.jpeg asset,
-	# same source as the minimap overlay. A ColorRect child tints it slightly
-	# darker so ink-colored text stays readable over the texture variation.
-	_parchment_panel = Panel.new()
-	_parchment_panel.name = "ParchmentPanel"
+	_margin = MarginContainer.new()
+	_margin.name = "Margin"
+	_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(_margin)
 
-	# Transparent panel so the TextureRect beneath shows through.
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.0, 0.0, 0.0, 0.0)
-	_parchment_panel.add_theme_stylebox_override("panel", style)
+	var touch: bool = TouchControls.is_touch_platform()
+	var root_v := VBoxContainer.new()
+	root_v.name = "MainLayout"
+	root_v.add_theme_constant_override("separation", PUI.S3 if touch else PUI.S4)
+	_margin.add_child(root_v)
 
-	_parchment_panel.anchor_left   = 0.05
-	_parchment_panel.anchor_top    = 0.04
-	_parchment_panel.anchor_right  = 0.95
-	_parchment_panel.anchor_bottom = 0.90
+	# The paper ledger (parchment.jpeg, toned once by PUI.paper_box).
+	_parchment_panel = PUI.paper_panel(Vector2(PUI.S6, PUI.S5 if touch else PUI.S5 + PUI.S1))
+	_parchment_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_parchment_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root_v.add_child(_parchment_panel)
 
-	add_child(_parchment_panel)
+	var sheet_v := VBoxContainer.new()
+	sheet_v.add_theme_constant_override("separation", PUI.S3)
+	_parchment_panel.add_child(sheet_v)
 
-	# Parchment texture fills the panel
-	var parchment_tex : Texture2D = load("res://Music & background images/parchment.jpeg")
-	var tex_rect := TextureRect.new()
-	tex_rect.texture      = parchment_tex
-	tex_rect.expand_mode  = TextureRect.EXPAND_IGNORE_SIZE
-	tex_rect.stretch_mode = TextureRect.STRETCH_SCALE
-	tex_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-	tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_parchment_panel.add_child(tex_rect)
+	# Header: title on the left, the iron potion plate on the right.
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", PUI.S4)
+	sheet_v.add_child(header)
 
-	# Slight darkening tint so text is readable over texture highlights
-	var tint := ColorRect.new()
-	tint.color        = Color(0.0, 0.0, 0.0, 0.18)
-	tint.set_anchors_preset(Control.PRESET_FULL_RECT)
-	tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_parchment_panel.add_child(tint)
+	var title := PUI.label("The Alchemist's Lab", "ParchmentTitle")
+	title.name = "Title"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.clip_text = true
+	header.add_child(title)
 
-	# ── Title ─────────────────────────────────────────────────
-	var title := Label.new()
-	title.text = "THE ALCHEMIST'S LAB"
-	title.add_theme_font_size_override("font_size", 30)
-	title.add_theme_color_override("font_color", INK_COLOR)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.anchor_left   = 0.0
-	title.anchor_top    = 0.0
-	title.anchor_right  = 1.0
-	title.anchor_bottom = 0.0
-	title.offset_top    = 18.0
-	title.offset_bottom = 58.0
-	_parchment_panel.add_child(title)
+	header.add_child(_build_potion_plate())
+	sheet_v.add_child(PUI.divider())
 
-	# ── Divider under title ────────────────────────────────────
-	var divider := ColorRect.new()
-	divider.color           = Color(0.45, 0.30, 0.12, 0.6)
-	divider.anchor_left     = 0.05
-	divider.anchor_right    = 0.95
-	divider.anchor_top      = 0.0
-	divider.anchor_bottom   = 0.0
-	divider.offset_top      = 60.0
-	divider.offset_bottom   = 63.0
-	_parchment_panel.add_child(divider)
+	# Perk grid inside a scroller: nothing is ever clipped on a short or narrow window.
+	_scroll = ScrollContainer.new()
+	_scroll.name = "PerkScroll"
+	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_scroll.follow_focus = true
+	sheet_v.add_child(_scroll)
 
-	# ── Currency label ─────────────────────────────────────────
-	# If the scene has a CurrencyLabel node, hide it — we build our own
-	# inside the parchment so it fits the aesthetic.
-	if currency_label != null:
-		currency_label.visible = false
-
-	var potions_label := Label.new()
-	potions_label.name = "ParchmentCurrencyLabel"
-	potions_label.add_theme_font_size_override("font_size", 15)
-	potions_label.add_theme_color_override("font_color", INK_COLOR)
-	potions_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	potions_label.anchor_left   = 0.0
-	potions_label.anchor_top    = 0.0
-	potions_label.anchor_right  = 1.0
-	potions_label.anchor_bottom = 0.0
-	potions_label.offset_top    = 66.0
-	potions_label.offset_bottom = 92.0
-	_parchment_panel.add_child(potions_label)
-	# Keep a reference so _update_ui can write to it
-	currency_label = potions_label
-
-	# ── Perk grid ─────────────────────────────────────────────
-	# Reuse the scene's GridContainer if present; otherwise use the
-	# @onready ref. If neither exists, build one fresh.
-	if grid == null:
-		grid = GridContainer.new()
-		grid.name = "PerkGrid"
-	else:
-		# Reparent into parchment — grid was already in the scene tree.
-		# We do this here (not deferred) because the parchment was just
-		# created in the same frame so layout hasn't run yet; no size
-		# conflict can occur.
-		grid.get_parent().remove_child(grid)
-		grid.set_owner(null)
-
-	grid.columns          = 3
-	grid.anchor_left      = 0.03
-	grid.anchor_top       = 0.0
-	grid.anchor_right     = 0.97
-	grid.anchor_bottom    = 0.0
-	grid.offset_top       = 96.0
-	grid.offset_bottom    = -10.0
-	grid.anchor_bottom    = 1.0
+	grid = GridContainer.new()
+	grid.name = "PerkGrid"
+	grid.columns = 3
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid.size_flags_vertical   = Control.SIZE_EXPAND_FILL
-	grid.add_theme_constant_override("h_separation", 10)
-	grid.add_theme_constant_override("v_separation", 10)
-	_parchment_panel.add_child(grid)
+	grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	grid.add_theme_constant_override("h_separation", PUI.CARD_GAP)
+	grid.add_theme_constant_override("v_separation", PUI.CARD_GAP)
+	_scroll.add_child(grid)
+	_scroll.resized.connect(_fit_grid_to_scroll)
 
-	# ── Page navigation ────────────────────────────────────────
-	# Parented to the root control (not the parchment) so they sit on
-	# the same baseline as Load Character and Start Another Run.
-	_prev_btn = Button.new()
-	_prev_btn.text = "◄"
-	_prev_btn.add_theme_font_size_override("font_size", 20)
-	_prev_btn.custom_minimum_size = Vector2(52, 52)
-	_prev_btn.anchor_left   = 0.5
-	_prev_btn.anchor_top    = 1.0
-	_prev_btn.anchor_right  = 0.5
-	_prev_btn.anchor_bottom = 1.0
-	_prev_btn.offset_left   = -110.0
-	_prev_btn.offset_top    = -70.0
-	_prev_btn.offset_right  = -58.0
-	_prev_btn.offset_bottom = -18.0
-	_prev_btn.pressed.connect(_on_prev_page)
-	add_child(_prev_btn)
 
-	_page_label = Label.new()
-	_page_label.add_theme_font_size_override("font_size", 15)
-	_page_label.add_theme_color_override("font_color", Color(0.92, 0.92, 0.95, 1.0))
-	_page_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_page_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_page_label.anchor_left   = 0.5
-	_page_label.anchor_top    = 1.0
-	_page_label.anchor_right  = 0.5
-	_page_label.anchor_bottom = 1.0
-	_page_label.offset_left   = -55.0
-	_page_label.offset_top    = -70.0
-	_page_label.offset_right  =  55.0
-	_page_label.offset_bottom = -18.0
-	add_child(_page_label)
+# Keeps the card rows filling the sheet when there is room (they scroll when there is not).
+func _fit_grid_to_scroll() -> void:
+	if grid == null or _scroll == null:
+		return
+	var h: float = maxf(0.0, _scroll.size.y)
+	if absf(grid.custom_minimum_size.y - h) > 0.5:
+		grid.custom_minimum_size.y = h
 
-	_next_btn = Button.new()
-	_next_btn.text = "►"
-	_next_btn.add_theme_font_size_override("font_size", 20)
-	_next_btn.custom_minimum_size = Vector2(52, 52)
-	_next_btn.anchor_left   = 0.5
-	_next_btn.anchor_top    = 1.0
-	_next_btn.anchor_right  = 0.5
-	_next_btn.anchor_bottom = 1.0
-	_next_btn.offset_left   =  58.0
-	_next_btn.offset_top    = -70.0
-	_next_btn.offset_right  = 110.0
-	_next_btn.offset_bottom = -18.0
-	_next_btn.pressed.connect(_on_next_page)
-	add_child(_next_btn)
+
+# The "Potions Stashed" plate: a small iron plate, bone potion icon, dim label, ember count.
+func _build_potion_plate() -> PanelContainer:
+	var plate := PanelContainer.new()
+	plate.name = "PotionPlate"
+	var sb: StyleBoxTexture = PUI.box(PUI.IRON, PUI.EDGE_BRASS, PUI.IRON.darkened(0.12), 0.08, 0.32, 0.016)
+	sb.content_margin_left = PUI.S4
+	sb.content_margin_right = PUI.S4
+	sb.content_margin_top = PUI.S2
+	sb.content_margin_bottom = PUI.S2
+	plate.add_theme_stylebox_override("panel", sb)
+	plate.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", PUI.S3)
+	plate.add_child(row)
+
+	var icon := PUIIcon.make("potion", 40.0 if TouchControls.is_touch_platform() else 34.0)
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(icon)
+
+	currency_label = PUI.label("Potions Stashed", "HudLabel")
+	currency_label.name = "CurrencyLabel"
+	currency_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(currency_label)
+
+	_count_label = PUI.label("0", "HudValue")
+	_count_label.name = "PotionCount"
+	_count_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_count_label.add_theme_color_override("font_color", PUI.EMBER_BRIGHT)
+	_count_label.add_theme_font_size_override("font_size", PUI.fs("card_title"))
+	row.add_child(_count_label)
+	return plate
 
 
 # ══════════════════════════════════════════════════════════════
-#  NAV BUTTONS (outside parchment)
+#  NAV BAR (iron controls on the void, below the sheet)
 # ══════════════════════════════════════════════════════════════
 
 func _build_nav_buttons() -> void:
-	_load_char_btn = Button.new()
-	_load_char_btn.name = "LoadCharacterButton"
-	_load_char_btn.text = "← Load Character"
-	_load_char_btn.custom_minimum_size = Vector2(220, 52)
-	_load_char_btn.add_theme_font_size_override("font_size", 16)
-	_load_char_btn.anchor_left   = 0.0
-	_load_char_btn.anchor_top    = 1.0
-	_load_char_btn.anchor_right  = 0.0
-	_load_char_btn.anchor_bottom = 1.0
-	_load_char_btn.offset_left   = 20.0
-	_load_char_btn.offset_top    = -70.0
-	_load_char_btn.offset_right  = 240.0
-	_load_char_btn.offset_bottom = -18.0
-	add_child(_load_char_btn)
-	_load_char_btn.pressed.connect(_go_to_character_selection)
+	var root_v := _parchment_panel.get_parent() as VBoxContainer
+	_nav_bar = HBoxContainer.new()
+	_nav_bar.name = "NavBar"
+	_nav_bar.add_theme_constant_override("separation", PUI.S4)
+	root_v.add_child(_nav_bar)
 
-	_new_run_btn = Button.new()
+	_load_char_btn = PUI.button("Load Character", "nav")
+	_load_char_btn.name = "LoadCharacterButton"
+	_load_char_btn.custom_minimum_size = Vector2(400, PUI.BUTTON_H)
+	_load_char_btn.pressed.connect(_go_to_character_selection)
+	PUI.button_chevron(_load_char_btn, "chevron_left")
+	_nav_bar.add_child(_load_char_btn)
+
+	_nav_bar.add_child(_expander())
+
+	# Pager: [<]  1 / 2  [>]
+	_prev_btn = PUI.button("", "nav")
+	_prev_btn.name = "PrevPageButton"
+	_prev_btn.custom_minimum_size = Vector2(PUI.BUTTON_H, PUI.BUTTON_H)
+	_prev_btn.pressed.connect(_on_prev_page)
+	_prev_icon = PUI.button_chevron(_prev_btn, "chevron_left", true)
+	_nav_bar.add_child(_prev_btn)
+
+	_page_label = PUI.label("1 / 1", "StatLabel")
+	_page_label.name = "PageLabel"
+	_page_label.custom_minimum_size.x = 96.0
+	_page_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_page_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_nav_bar.add_child(_page_label)
+
+	_next_btn = PUI.button("", "nav")
+	_next_btn.name = "NextPageButton"
+	_next_btn.custom_minimum_size = Vector2(PUI.BUTTON_H, PUI.BUTTON_H)
+	_next_btn.pressed.connect(_on_next_page)
+	_next_icon = PUI.button_chevron(_next_btn, "chevron_right", true)
+	_nav_bar.add_child(_next_btn)
+
+	_nav_bar.add_child(_expander())
+
+	_new_run_btn = PUI.button("Start Another Run", "primary")
 	_new_run_btn.name = "StartAnotherRunButton"
-	_new_run_btn.text = "Start Another Run →"
-	_new_run_btn.custom_minimum_size = Vector2(220, 52)
-	_new_run_btn.add_theme_font_size_override("font_size", 16)
-	_new_run_btn.anchor_left   = 1.0
-	_new_run_btn.anchor_top    = 1.0
-	_new_run_btn.anchor_right  = 1.0
-	_new_run_btn.anchor_bottom = 1.0
-	_new_run_btn.offset_left   = -240.0
-	_new_run_btn.offset_top    = -70.0
-	_new_run_btn.offset_right  = -20.0
-	_new_run_btn.offset_bottom = -18.0
-	add_child(_new_run_btn)
+	_new_run_btn.custom_minimum_size = Vector2(400, PUI.BUTTON_H_PRIMARY)
 	_new_run_btn.pressed.connect(_start_new_run)
+	PUI.button_chevron(_new_run_btn, "chevron_right")
+	_nav_bar.add_child(_new_run_btn)
+
+	if TouchControls.is_touch_platform():
+		_fit_nav_for_phone()
+		_fit_pager_for_phone()
+
+
+func _expander() -> Control:
+	var c := Control.new()
+	c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return c
+
+
+# Phones: a 72-high bottom bar with wider buttons. The ledger takes the remaining height.
+func _fit_nav_for_phone() -> void:
+	for b in [_load_char_btn, _new_run_btn]:
+		b.custom_minimum_size = Vector2(420, 72)
+
+
+func _fit_pager_for_phone() -> void:
+	for b in [_prev_btn, _next_btn]:
+		b.custom_minimum_size = Vector2(72, 72)
+	_page_label.custom_minimum_size.x = 110.0
 
 
 func _hide_legacy_back_button() -> void:
@@ -302,6 +300,7 @@ func _on_prev_page() -> void:
 		_current_page -= 1
 		_update_ui()
 		_update_page_controls()
+		_reset_scroll()
 
 
 func _on_next_page() -> void:
@@ -309,6 +308,12 @@ func _on_next_page() -> void:
 		_current_page += 1
 		_update_ui()
 		_update_page_controls()
+		_reset_scroll()
+
+
+func _reset_scroll() -> void:
+	if _scroll != null:
+		_scroll.scroll_vertical = 0
 
 
 func _update_page_controls() -> void:
@@ -316,8 +321,15 @@ func _update_page_controls() -> void:
 		_page_label.text = "%d / %d" % [_current_page + 1, _total_pages]
 	if _prev_btn != null:
 		_prev_btn.disabled = (_current_page == 0)
+		_prev_icon.tint = PUI.BONE_FAINT if _prev_btn.disabled else PUI.BONE_DIM
 	if _next_btn != null:
 		_next_btn.disabled = (_current_page >= _total_pages - 1)
+		_next_icon.tint = PUI.BONE_FAINT if _next_btn.disabled else PUI.BONE_DIM
+	# a pager arrow that just went dead must not strand the gamepad focus
+	if _prev_btn != null and _prev_btn.disabled and _prev_btn.has_focus() and not _next_btn.disabled:
+		_next_btn.grab_focus()
+	elif _next_btn != null and _next_btn.disabled and _next_btn.has_focus() and not _prev_btn.disabled:
+		_prev_btn.grab_focus()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -343,17 +355,17 @@ func _start_new_run() -> void:
 	if not SaveManager.current_profile.is_empty():
 		SaveManager.current_profile["run_count"] = \
 			int(SaveManager.current_profile.get("run_count", 0)) + 1
+		RunLifecycle.grant_starter_potion()
 		SaveManager.save_profile()
 
+	# Class/difficulty/name must come from the profile: GlobalRunData is only filled by
+	# character select, so a fresh launch -> Alchemist -> start ran as a default Barbarian.
+	RunLifecycle.sync_run_data_from_profile()
 	var run_data := get_node_or_null("/root/GlobalRunData")
 	if run_data != null:
 		run_data.seed_hash = 0
 
-	if has_node("/root/GameClock"):
-		GameClock.hide_hud()
-	if has_node("/root/BuffManager"):
-		BuffManager.reset()
-	PlayerWallet.hide_hud()
+	RunLifecycle.end_run_cleanup()
 
 	get_tree().change_scene_to_file(DUNGEON_SCENE)
 
@@ -368,12 +380,16 @@ func _update_ui() -> void:
 	if SaveManager.current_profile.is_empty():
 		if currency_label != null:
 			currency_label.text = "Select a Profile First"
+		if _count_label != null:
+			_count_label.text = ""
 		return
 
 	var profile      = SaveManager.current_profile
 	var potion_count = int(profile.get("meta_currency", 0))
 	if currency_label != null:
-		currency_label.text = "Potions Stashed: %d" % potion_count
+		currency_label.text = "Potions Stashed"
+	if _count_label != null:
+		_count_label.text = str(potion_count)
 
 	if grid == null:
 		return
@@ -387,77 +403,122 @@ func _update_ui() -> void:
 	var user_perks : Dictionary = profile.get("perks", {})
 	var run_count  : int        = int(profile.get("run_count", 0))
 
-	var page_start : int = _current_page * PERKS_PER_PAGE
-	var page_end   : int = mini(page_start + PERKS_PER_PAGE, perks_def.size())
+	var shown : Array = visible_perks()
+	var per_page : int = perks_per_page()
+	var page_start : int = _current_page * per_page
+	var page_end   : int = mini(page_start + per_page, shown.size())
 
 	for i in range(page_start, page_end):
-		var entry  : Dictionary = perks_def[i]
+		var entry  : Dictionary = shown[i]
 		var key    : String     = entry["key"]
 		var lv     : int        = int(user_perks.get(key, 0))
 		var locked : bool       = (key == "trap_sense" and run_count < 5)
 		_create_perk_card(key, entry, lv, locked)
 
+	# Empty cells keep the 3-column rhythm on the last page (a lone card must not stretch to fill the sheet).
+	for _i in range(page_end - page_start, per_page):
+		var gap := Control.new()
+		gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		gap.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		grid.add_child(gap)
 
+
+# One upgrade slip: title + level, effect, and the iron "Trade" button. States (never colour only):
+#   can afford -> ember edge, warm base, live PrimaryButton;
+#   cannot     -> greyer slip, dimmed ink, the button disabled and "Need N more potions" spelled out;
+#   locked     -> the same dim slip, "Locked" and the requirement.
 func _create_perk_card(key: String, data: Dictionary, lv: int, locked: bool) -> void:
-	var vbox := VBoxContainer.new()
-	vbox.custom_minimum_size = CARD_MIN_SIZE
-	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.size_flags_vertical   = Control.SIZE_EXPAND_FILL
+	var potions : int  = int(SaveManager.current_profile.get("meta_currency", 0))
+	var cost    : int  = _calculate_cost(lv)
+	var can_buy : bool = (not locked) and potions >= cost
+	var dim     : bool = not can_buy
 
-	# Card background — slightly darker parchment shade
-	var card_bg := StyleBoxFlat.new()
-	card_bg.bg_color     = Color(0.75, 0.63, 0.43, 0.85)
-	card_bg.border_color = Color(0.40, 0.26, 0.10, 0.7)
-	card_bg.border_width_left   = 1
-	card_bg.border_width_right  = 1
-	card_bg.border_width_top    = 1
-	card_bg.border_width_bottom = 1
-	card_bg.corner_radius_top_left     = 4
-	card_bg.corner_radius_top_right    = 4
-	card_bg.corner_radius_bottom_left  = 4
-	card_bg.corner_radius_bottom_right = 4
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", card_bg)
+	panel.name = "PerkCard_" + key
+	panel.custom_minimum_size = CARD_MIN_SIZE
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.size_flags_vertical   = Control.SIZE_EXPAND_FILL
+	panel.mouse_filter = Control.MOUSE_FILTER_PASS   # lets a finger drag the list scroll
+	var sb: StyleBoxTexture = PUI.paper_slip("dim" if dim else "active")
+	sb.content_margin_left = PUI.S4
+	sb.content_margin_right = PUI.S4
+	sb.content_margin_top = PUI.S3
+	sb.content_margin_bottom = PUI.S3
+	panel.add_theme_stylebox_override("panel", sb)
 
 	var inner := VBoxContainer.new()
-	inner.add_theme_constant_override("separation", 4)
+	inner.add_theme_constant_override("separation", PUI.S2)
+	panel.add_child(inner)
 
-	var title := Label.new()
-	title.text = data["name"] + (" 🔒" if locked else "")
-	title.add_theme_font_size_override("font_size", 16)
-	title.add_theme_color_override("font_color", INK_COLOR)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", PUI.S3)
+	inner.add_child(head)
 
-	var info := Label.new()
-	if locked:
-		info.text = "Requires 5 runs"
-		info.add_theme_color_override("font_color", Color(0.35, 0.22, 0.08, 0.7))
-	else:
-		info.text = "Lv. %d\n%s" % [lv, data["desc"]]
-		info.add_theme_color_override("font_color", Color(0.25, 0.15, 0.05, 1.0))
-	info.add_theme_font_size_override("font_size", 12)
-	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var title := PUI.label(str(data["name"]), "ParchmentCardTitle")
+	title.name = "Title"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	head.add_child(title)
+
+	var level := PUI.label("Locked" if locked else "Level %d" % lv, "ParchmentHeading")
+	level.name = "Level"
+	level.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(level)
+
+	var info := PUI.label("Requires 5 runs" if locked else _perk_desc(data), "ParchmentBody")
+	info.name = "Effect"
 	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	info.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	inner.add_child(info)
 
-	var cost : int = _calculate_cost(lv)
-	var btn  := Button.new()
+	if dim:
+		var muted: Color = PUI.ink_muted()
+		title.add_theme_color_override("font_color", muted)
+		info.add_theme_color_override("font_color", muted)
+		level.add_theme_color_override("font_color", PUI.INK_DIM)
+
+	if not locked and not can_buy:
+		var need: int = cost - potions
+		var short := PUI.label("Need %d more potion%s" % [need, "s" if need > 1 else ""], "ParchmentBody")
+		short.name = "Shortfall"
+		short.add_theme_color_override("font_color", PUI.INK_DIM)
+		short.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		inner.add_child(short)
+
+	var btn := PUI.button("", "primary")
 	btn.name = "UpgradeBtn_" + key
+	btn.custom_minimum_size.y = PUI.BUTTON_H
 	if locked:
 		btn.text     = "Locked"
 		btn.disabled = true
 	else:
-		btn.text = "Trade %d Potion%s" % [cost, "s" if cost > 1 else ""]
+		var cost_text := "Trade %d Potion%s" % [cost, "s" if cost > 1 else ""]
+		btn.text = cost_text
+		btn.disabled = not can_buy
 		btn.pressed.connect(_on_upgrade_pressed.bind(key, cost))
-	btn.add_theme_font_size_override("font_size", 12)
-
-	inner.add_child(title)
-	inner.add_child(info)
 	inner.add_child(btn)
-	panel.add_child(inner)
-	vbox.add_child(panel)
-	grid.add_child(vbox)
+	grid.add_child(panel)
+	if has_node("/root/AudioManager"):
+		AudioManager.wire_click_sounds(btn)
+
+
+# The perks offered to the active character: perks with no effect for the class (`hide_for`) are
+# not shown at all rather than sold as dead purchases.
+func visible_perks() -> Array:
+	var cls := str(SaveManager.get_character_class()) if SaveManager.current_profile_is_valid() else ""
+	var out : Array = []
+	for entry in perks_def:
+		if not (cls in entry.get("hide_for", [])):
+			out.append(entry)
+	return out
+
+
+# Perk text for the active character class when the perk works differently per class.
+func _perk_desc(data: Dictionary) -> String:
+	var cls := str(SaveManager.get_character_class()) if SaveManager.current_profile_is_valid() else ""
+	return str(data.get("desc_" + cls, data["desc"]))
 
 
 func _calculate_cost(lv: int) -> int:
@@ -467,13 +528,21 @@ func _calculate_cost(lv: int) -> int:
 	return base
 
 
+# Spends the potions and grants the perk level in one profile write, so a crash between two
+# writes can never take the potions without granting the perk.
+func _purchase_perk(key: String, cost: int) -> bool:
+	if not PlayerWallet.spend_potions(cost, false):
+		return false
+	var profile = SaveManager.current_profile
+	if not profile.has("perks"):
+		profile["perks"] = {}
+	profile["perks"][key] = int(profile["perks"].get(key, 0)) + 1
+	SaveManager.save_profile()
+	return true
+
+
 func _on_upgrade_pressed(key: String, cost: int) -> void:
-	if PlayerWallet.spend_potions(cost):
-		var profile = SaveManager.current_profile
-		if not profile.has("perks"):
-			profile["perks"] = {}
-		profile["perks"][key] = int(profile["perks"].get(key, 0)) + 1
-		SaveManager.save_profile()
+	if _purchase_perk(key, cost):
 		# Defer the grid rebuild so the gamepad button-release event is fully
 		# processed before any nodes are queue_freed. Destroying the focused
 		# button mid-press leaves the joypad input system in a stuck state.
@@ -489,7 +558,17 @@ func _rebuild_and_refocus(key: String) -> void:
 	_refocus_perk_btn(key)
 
 
+# Back to the card just bought. If it is now out of reach (disabled), fall to the next card that can
+# still be bought, else the main action, so the gamepad never loses its place.
 func _refocus_perk_btn(key: String) -> void:
 	var btn := find_child("UpgradeBtn_" + key, true, false) as Button
 	if btn != null and not btn.disabled:
 		btn.grab_focus()
+		return
+	if grid != null:
+		for b in grid.find_children("UpgradeBtn_*", "Button", true, false):
+			if not (b as Button).disabled:
+				(b as Button).grab_focus()
+				return
+	if _new_run_btn != null:
+		_new_run_btn.grab_focus()

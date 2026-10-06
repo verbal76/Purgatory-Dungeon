@@ -21,6 +21,9 @@ var char_name_input: LineEdit
 var char_name_label: Label
 var stats_label: Label 
 var custom_keyboard: Control
+var _stats_scroll: ScrollContainer
+var _name_heading: Label
+var _portrait: MenuKit.Sigil = null
 
 # Class selection
 var barbarian_btn: Button
@@ -36,6 +39,8 @@ var _hardcore_btn : Button = null
 # UI Helpers (Created in code)
 var _warning_label: Label = null
 var _slot_indicator: Label = null
+var _difficulty_hint: Label = null
+var _hardcore_hot: bool = false          # pointer / focus is on the Hardcore button
 
 # Debug panel nodes
 var _debug_panel        : PanelContainer = null
@@ -47,12 +52,24 @@ var _btn_buffs          : Button = null
 var _btn_traps          : Button = null
 
 func _ready() -> void:
+	# The dungeon captures the mouse; make sure menus are clickable after leaving it.
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	# Bind all UI nodes to variables
 	_bind_nodes()
+	_build_backdrop()
+	_build_portrait()
 	# Connect button presses and UI events
 	_connect_signals()
-	# Debug spawn/system toggles — must come before class picker so it lands above it
+	# Debug spawn/system toggles — a separate dev column beside the run options (desktop only)
 	_build_debug_panel()
+	if TouchControls.is_touch_platform():
+		# Phones: the dev toggles do not fit and are not for players; the on-screen keyboard below is
+		# this game's own (the OS keyboard would cover the form in landscape).
+		if _debug_panel:
+			_debug_panel.hide()
+		if char_name_input:
+			char_name_input.virtual_keyboard_enabled = false
+			char_name_input.placeholder_text = "Tap to enter a name"
 	# Create or find the class selection buttons
 	_build_class_picker()
 	# Create or find the difficulty selection buttons
@@ -103,17 +120,58 @@ func _bind_nodes() -> void:
 	char_name_label = find_child("CharName", true, false)
 	stats_label = find_child("CharImagePlaceholder", true, false)
 	custom_keyboard = find_child("VirtualKeyboard", true, false)
+	_stats_scroll = find_child("StatsScroll", true, false) as ScrollContainer
+	_name_heading = find_child("NameHeading", true, false) as Label
+
+
+# ══════════════════════════════════════════════════════════════
+#  LOOK  (PUI design system: veil over the dungeon, framed card, sigil instead of a placeholder glyph)
+# ══════════════════════════════════════════════════════════════
+
+func _build_backdrop() -> void:
+	var at: int = 0
+	var picture := get_node_or_null("BackgroundImage")
+	if picture != null:
+		at = picture.get_index() + 1
+	var veil := PUI.background("veil")
+	add_child(veil)
+	move_child(veil, at)
+
+
+# The empty-portrait emblem in the character card (the old big red "?" is gone). It shows the sigil of the class
+# being chosen, or the locked class of an existing character.
+func _build_portrait() -> void:
+	var card := find_child("SelectedCharPanel", true, false)
+	if card == null or card.get_child_count() == 0:
+		return
+	var box := card.get_child(0) as Control
+	_portrait = MenuKit.Sigil.new()
+	_portrait.name = "CharSigil"
+	_portrait.custom_minimum_size = Vector2(120, 120)
+	_portrait.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_portrait.size_flags_stretch_ratio = 0.8
+	box.add_child(_portrait)
+	if char_name_label != null:
+		box.move_child(_portrait, char_name_label.get_index() + 1)
+	_set_portrait_class(selected_class)
+
+
+func _set_portrait_class(cls: String) -> void:
+	if _portrait != null:
+		_portrait.kind = "burst" if cls == "mage" else "attack"
 
 func _setup_slot_indicator() -> void:
 	# Generates a label at the top of the screen to indicate the active save slot
-	_slot_indicator = Label.new()
+	_slot_indicator = PUI.label("", "MetaLabel")
 	_slot_indicator.name = "SlotIndicator"
-	_slot_indicator.add_theme_font_size_override("font_size", 18)
-	_slot_indicator.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 	_slot_indicator.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(_slot_indicator)
-	# Move to top of the scene
-	move_child(_slot_indicator, 0)
+	# Sits under the screen title.
+	var title_box := find_child("TitleBox", true, false)
+	if title_box != null:
+		title_box.add_child(_slot_indicator)
+	else:
+		add_child(_slot_indicator)
+		move_child(_slot_indicator, 0)
 
 	var slot_num: String = str(SaveManager.active_slot_index + 1)
 	if not SaveManager.current_profile_is_valid():
@@ -135,8 +193,13 @@ func _display_loaded_profile() -> void:
 	if char_name_input:
 		char_name_input.hide()
 
-	if stats_label:
-		stats_label.add_theme_font_size_override("font_size", 16)
+	# Stats block (scrolls when the perk list is long); the name entry is not needed for a locked identity.
+	if _stats_scroll:
+		_stats_scroll.show()
+	if _name_heading:
+		_name_heading.hide()
+	_set_portrait_class(SaveManager.get_character_class())
+	_build_locked_summary()
 
 	# Generate FRESH seed — never show the old one
 	_generate_random_seed()
@@ -151,11 +214,11 @@ func _display_loaded_profile() -> void:
 	# Friendly display names matching AlchemistStore perk definitions.
 	var perk_names : Dictionary = {
 		"magnitude":   "Magnitude",   "persistence": "Persistence",
-		"sanctuary":   "Sanctuary",   "vitality":    "Vitality",
-		"adrenaline":  "Adrenaline",  "ferocity":    "Ferocity",
-		"scavenge":    "Scavenge",    "greed":       "Greed",
-		"swiftness":   "Swiftness",   "elevation":   "Elevation",
-		"cyclone":     "Cyclone",     "trap_sense":  "Trap Sense"
+		"vitality":    "Vitality",    "adrenaline":  "Adrenaline",
+		"ferocity":    "Ferocity",    "scavenge":    "Scavenge",
+		"greed":       "Greed",       "swiftness":   "Swiftness",
+		"health_regen": "Regeneration", "cyclone":   "Cyclone",
+		"trap_sense":  "Trap Sense"
 	}
 
 	# ── Snapshot — what was shown last visit ──────────────────────────────────
@@ -259,18 +322,16 @@ func _set_stats_text(kills: int, runs: int, deaths: int, potions: int,
 		perk_levels: Dictionary, perk_names: Dictionary) -> void:
 	if stats_label == null:
 		return
-	var locked_class       : String = SaveManager.get_character_class().capitalize()
-	var locked_difficulty  : String = SaveManager.get_character_difficulty().capitalize()
 	var abandoned          : int    = maxi(runs - deaths, 0)
-	var text : String = "Class: %s  |  Difficulty: %s\nRuns: %d  |  Deaths: %d  |  Abandoned: %d\nKills: %d  |  Potions: %d" % [
-		locked_class, locked_difficulty, runs, deaths, abandoned, kills, potions
+	var text : String = "Runs %d   Deaths %d   Abandoned %d\nKills %d   Potions %d" % [
+		runs, deaths, abandoned, kills, potions
 	]
 	var has_perks : bool = false
 	for key in perk_names.keys():
 		var lv : int = int(perk_levels.get(key, 0))
 		if lv > 0:
 			if not has_perks:
-				text += "\n── Perks ──"
+				text += "\n\nPerks"
 				has_perks = true
 			text += "\n%s Level %d" % [perk_names[key], lv]
 	stats_label.text = text
@@ -321,11 +382,8 @@ func _connect_signals() -> void:
 func _show_name_warning() -> void:
 	# Displays a temporary warning if the user tries to start a new character without a name
 	if _warning_label == null:
-		_warning_label = Label.new()
+		_warning_label = PUI.label("Enter a name first!", "WarningLabel")
 		_warning_label.name = "NameWarningLabel"
-		_warning_label.text = "Enter a name first!"
-		_warning_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
-		_warning_label.add_theme_font_size_override("font_size", 18)
 		_warning_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		# Insert near the name input — find its parent and add after it
 		if char_name_input and char_name_input.get_parent():
@@ -388,18 +446,19 @@ func _generate_random_seed() -> void:
 # ══════════════════════════════════════════════════════════════
 
 func _build_debug_panel() -> void:
+	# A recessed iron plate in its own column to the right of the run options (desktop only; hidden on phones).
 	_debug_panel = PanelContainer.new()
 	_debug_panel.name = "DebugPanel"
+	_debug_panel.theme_type_variation = &"InsetPanel"
+	_debug_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 6)
+	vbox.add_theme_constant_override("separation", PUI.S2)
 
-	var header := Label.new()
-	header.text = "[ DEBUG ]"
-	header.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
-	header.add_theme_font_size_override("font_size", 14)
-	header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var header := PUI.label("Developer toggles", "SectionHeading")
 	vbox.add_child(header)
+	var note := PUI.label("A ticked box keeps the feature in the run.", "CaptionLabel")
+	vbox.add_child(note)
 
 	_btn_brutes       = _make_debug_toggle("Brutes",       GlobalRunData.debug_no_brutes)
 	_btn_mages        = _make_debug_toggle("Mages",        GlobalRunData.debug_no_mages)
@@ -442,34 +501,44 @@ func _build_debug_panel() -> void:
 		_refresh_debug_toggle(_btn_traps, "Traps", GlobalRunData.debug_no_traps)
 	)
 
-	if start_btn and start_btn.get_parent():
+	var columns := find_child("CenterContent", true, false)
+	if columns != null:
+		columns.add_child(_debug_panel)
+	elif start_btn and start_btn.get_parent():
 		var parent := start_btn.get_parent()
-		var idx    := start_btn.get_index()
 		parent.add_child(_debug_panel)
-		parent.move_child(_debug_panel, idx)
+		parent.move_child(_debug_panel, start_btn.get_index())
 	else:
 		add_child(_debug_panel)
 
 
+# Brand check box (iron square, ember tick). Ticked = the feature stays in the run; unticked = switched off.
 func _make_debug_toggle(label: String, currently_disabled: bool) -> Button:
-	var btn := Button.new()
-	btn.custom_minimum_size = Vector2(200, 36)
+	var btn := CheckBox.new()
+	btn.custom_minimum_size = Vector2(240, PUI.BUTTON_H)
+	btn.focus_mode = Control.FOCUS_ALL
 	_refresh_debug_toggle(btn, label, currently_disabled)
 	return btn
 
 
 func _refresh_debug_toggle(btn: Button, label: String, is_disabled: bool) -> void:
-	if is_disabled:
-		btn.text = label + "  ✕  OFF"
-		btn.modulate = Color(1.0, 0.35, 0.35)
-	else:
-		btn.text = label + "  ✓  ON"
-		btn.modulate = Color(0.35, 1.0, 0.45)
+	btn.text = label
+	btn.set_pressed_no_signal(not is_disabled)
 
 
 # ══════════════════════════════════════════════════════════════
 #  CLASS PICKER
 # ══════════════════════════════════════════════════════════════
+
+# Inserts a node into the run-options column just above the Start button.
+func _insert_above_start(node: Node) -> void:
+	if start_btn and start_btn.get_parent():
+		var parent := start_btn.get_parent()
+		parent.add_child(node)
+		parent.move_child(node, start_btn.get_index())
+	else:
+		add_child(node)
+
 
 func _build_class_picker() -> void:
 	# Look for existing buttons first (if you add them in the editor)
@@ -478,31 +547,29 @@ func _build_class_picker() -> void:
 
 	# If not placed in the editor, build them in code
 	if barbarian_btn == null or mage_btn == null:
+		var heading := PUI.label("Class", "SectionHeading")
+		heading.name = "ClassHeading"
+		_insert_above_start(heading)
+
 		var container := HBoxContainer.new()
 		container.name = "ClassPicker"
-		container.alignment = BoxContainer.ALIGNMENT_CENTER
-		container.add_theme_constant_override("separation", 20)
+		container.add_theme_constant_override("separation", PUI.S3)
 
-		barbarian_btn = Button.new()
+		barbarian_btn = PUI.button("Barbarian", "selector")
 		barbarian_btn.name = "BarbarianButton"
-		barbarian_btn.text = "BARBARIAN"
-		barbarian_btn.custom_minimum_size = Vector2(160, 50)
+		barbarian_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		container.add_child(barbarian_btn)
 
-		mage_btn = Button.new()
+		mage_btn = PUI.button("Mage", "selector")
 		mage_btn.name = "MageButton"
-		mage_btn.text = "MAGE"
-		mage_btn.custom_minimum_size = Vector2(160, 50)
+		mage_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		container.add_child(mage_btn)
 
-		# Insert above the start button
-		if start_btn and start_btn.get_parent():
-			var parent := start_btn.get_parent()
-			var idx := start_btn.get_index()
-			parent.add_child(container)
-			parent.move_child(container, idx)
-		else:
-			add_child(container)
+		var group := ButtonGroup.new()
+		barbarian_btn.button_group = group
+		mage_btn.button_group = group
+
+		_insert_above_start(container)
 
 	barbarian_btn.pressed.connect(func(): _select_class("barbarian"))
 	mage_btn.pressed.connect(func(): _select_class("mage"))
@@ -521,6 +588,9 @@ func _build_class_picker() -> void:
 		var picker_container = find_child("ClassPicker", true, false)
 		if picker_container:
 			picker_container.hide()
+		var class_heading := find_child("ClassHeading", true, false)
+		if class_heading:
+			class_heading.hide()
 		# Set selected_class from save file (not UI) for safety
 		selected_class = SaveManager.get_character_class()
 	else:
@@ -530,15 +600,12 @@ func _build_class_picker() -> void:
 func _select_class(class_name_str: String) -> void:
 	# Updates the visual state of the class selection buttons
 	selected_class = class_name_str
+	_set_portrait_class(class_name_str)
 
-	# Visual feedback
+	# Visual feedback: the SelectorButton theme draws the selected one (ember edge + tinted fill).
 	if barbarian_btn and mage_btn:
-		if class_name_str == "barbarian":
-			barbarian_btn.modulate = Color(1.0, 0.85, 0.4)
-			mage_btn.modulate = Color(0.5, 0.5, 0.5)
-		else:
-			barbarian_btn.modulate = Color(0.5, 0.5, 0.5)
-			mage_btn.modulate = Color(0.6, 0.4, 1.0)
+		barbarian_btn.set_pressed_no_signal(class_name_str == "barbarian")
+		mage_btn.set_pressed_no_signal(class_name_str == "mage")
 
 # ══════════════════════════════════════════════════════════════
 #  DIFFICULTY PICKER
@@ -552,41 +619,43 @@ func _build_difficulty_picker() -> void:
 
 	# Build in code if not in scene
 	if _easy_btn == null or _medium_btn == null or _hardcore_btn == null:
+		var heading := PUI.label("Difficulty", "SectionHeading")
+		heading.name = "DifficultyHeading"
+		_insert_above_start(heading)
+
 		var container := HBoxContainer.new()
 		container.name = "DifficultyPicker"
-		container.alignment = BoxContainer.ALIGNMENT_CENTER
-		container.add_theme_constant_override("separation", 16)
+		container.add_theme_constant_override("separation", PUI.S3)
 
-		_easy_btn = Button.new()
+		_easy_btn = PUI.button("Easy", "selector")
 		_easy_btn.name = "EasyButton"
-		_easy_btn.text = "EASY"
-		_easy_btn.custom_minimum_size = Vector2(120, 44)
-		container.add_child(_easy_btn)
-
-		_medium_btn = Button.new()
+		_medium_btn = PUI.button("Medium", "selector")
 		_medium_btn.name = "MediumButton"
-		_medium_btn.text = "MEDIUM"
-		_medium_btn.custom_minimum_size = Vector2(120, 44)
-		container.add_child(_medium_btn)
-
-		_hardcore_btn = Button.new()
+		_hardcore_btn = PUI.button("Hardcore", "selector")
 		_hardcore_btn.name = "HardcoreButton"
-		_hardcore_btn.text = "HARDCORE"
-		_hardcore_btn.custom_minimum_size = Vector2(120, 44)
-		container.add_child(_hardcore_btn)
+		var group := ButtonGroup.new()
+		for b in [_easy_btn, _medium_btn, _hardcore_btn]:
+			b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			b.button_group = group
+			container.add_child(b)
 
-		# Insert above the start button (below the class picker)
-		if start_btn and start_btn.get_parent():
-			var parent := start_btn.get_parent()
-			var idx    := start_btn.get_index()
-			parent.add_child(container)
-			parent.move_child(container, idx)
-		else:
-			add_child(container)
+		_insert_above_start(container)
+
+		# One restrained warning line for Hardcore (blood-coloured text, no extra box). Space is always reserved so
+		# the Start button does not jump when it appears.
+		_difficulty_hint = PUI.label("", "WarningLabel")
+		_difficulty_hint.name = "DifficultyHint"
+		_difficulty_hint.custom_minimum_size.y = 34
+		_difficulty_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_insert_above_start(_difficulty_hint)
 
 	_easy_btn.pressed.connect(func(): _select_difficulty("easy"))
 	_medium_btn.pressed.connect(func(): _select_difficulty("medium"))
 	_hardcore_btn.pressed.connect(func(): _select_difficulty("hardcore"))
+	_hardcore_btn.mouse_entered.connect(func(): _set_hardcore_hot(true))
+	_hardcore_btn.mouse_exited.connect(func(): _set_hardcore_hot(_hardcore_btn.has_focus()))
+	_hardcore_btn.focus_entered.connect(func(): _set_hardcore_hot(true))
+	_hardcore_btn.focus_exited.connect(func(): _set_hardcore_hot(false))
 
 	# Existing character — hide picker, read locked difficulty from save
 	if SaveManager.current_profile_is_valid():
@@ -596,6 +665,11 @@ func _build_difficulty_picker() -> void:
 		var picker_container := find_child("DifficultyPicker", true, false)
 		if picker_container:
 			picker_container.hide()
+		var diff_heading := find_child("DifficultyHeading", true, false)
+		if diff_heading:
+			diff_heading.hide()
+		if _difficulty_hint:
+			_difficulty_hint.hide()
 		selected_difficulty = SaveManager.get_character_difficulty()
 	else:
 		# New character — show picker, default to medium
@@ -608,10 +682,46 @@ func _select_difficulty(d: String) -> void:
 	if _easy_btn == null or _medium_btn == null or _hardcore_btn == null:
 		return
 
-	# Tint: Easy = green, Medium = white, Hardcore = red
-	_easy_btn.modulate     = Color(0.4, 1.0, 0.4)   if d == "easy"     else Color(0.5, 0.5, 0.5)
-	_medium_btn.modulate   = Color(1.0, 1.0, 1.0)   if d == "medium"   else Color(0.5, 0.5, 0.5)
-	_hardcore_btn.modulate = Color(1.0, 0.35, 0.35) if d == "hardcore" else Color(0.5, 0.5, 0.5)
+	# The SelectorButton theme draws the selected one (ember edge + tinted fill) - no per-button tint.
+	_easy_btn.set_pressed_no_signal(d == "easy")
+	_medium_btn.set_pressed_no_signal(d == "medium")
+	_hardcore_btn.set_pressed_no_signal(d == "hardcore")
+	_refresh_difficulty_hint()
+
+
+func _set_hardcore_hot(on: bool) -> void:
+	_hardcore_hot = on
+	_refresh_difficulty_hint()
+
+
+func _refresh_difficulty_hint() -> void:
+	if _difficulty_hint == null:
+		return
+	var warn: bool = selected_difficulty == "hardcore" or _hardcore_hot
+	_difficulty_hint.text = "Hardcore: the torches fail as the days pass." if warn else ""
+
+
+# Existing character: class and difficulty are locked - show them as plain values in the run column.
+func _build_locked_summary() -> void:
+	var box := VBoxContainer.new()
+	box.name = "LockedSummary"
+	box.add_theme_constant_override("separation", PUI.S1)
+	var cls := PUI.label("Class", "SectionHeading")
+	box.add_child(cls)
+	var cls_val := PUI.label(SaveManager.get_character_class().capitalize(), "CardTitle")
+	cls_val.name = "LockedClass"
+	box.add_child(cls_val)
+	var gap := Control.new()
+	gap.custom_minimum_size.y = PUI.S2
+	box.add_child(gap)
+	var diff := PUI.label("Difficulty", "SectionHeading")
+	box.add_child(diff)
+	var diff_val := PUI.label(SaveManager.get_character_difficulty().capitalize(), "CardTitle")
+	diff_val.name = "LockedDifficulty"
+	box.add_child(diff_val)
+	var note := PUI.label("Chosen when this character was created.", "CaptionLabel")
+	box.add_child(note)
+	_insert_above_start(box)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -652,7 +762,7 @@ func _on_start_run() -> void:
 		GlobalRunData.seed_hash       = final_seed.hash()
 
 		# Step 5: Grant starter potion AFTER identity is locked
-		SaveManager.current_profile["meta_currency"] = int(SaveManager.current_profile.get("meta_currency", 0)) + 1
+		RunLifecycle.grant_starter_potion()
 		SaveManager.save_profile()
 
 	else:
@@ -674,7 +784,7 @@ func _on_start_run() -> void:
 		GlobalRunData.seed_hash       = final_seed.hash()
 
 		# Step 4: Grant starter potion
-		SaveManager.current_profile["meta_currency"] = int(SaveManager.current_profile.get("meta_currency", 0)) + 1
+		RunLifecycle.grant_starter_potion()
 		SaveManager.save_profile()
 
 	# ── COMMON (both paths) ─────────────────────────────

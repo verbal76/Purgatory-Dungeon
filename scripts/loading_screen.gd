@@ -21,8 +21,10 @@
 
 extends CanvasLayer
 
-var bg: ColorRect
-var label: Label
+var bg: Control          # PUI void background (near-black + faint warm vignette)
+var label: Label         # "Loading the dungeon" (display face)
+var _dots: Label         # animated dots in their own fixed-width slot so the title never shifts
+var _content: Control    # title block, faded together with the background
 
 # Minimum seconds before we even check if spawning is done.
 const MIN_DISPLAY_TIME : float = 3.0
@@ -60,22 +62,41 @@ func _ready() -> void:
 
 
 func _build_ui_elements() -> void:
-	# Background — full screen solid dark rect.
-	bg       = ColorRect.new()
-	bg.color = Color(0.02, 0.02, 0.02, 1.0)
-	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Background - the design system's near-black "void" with a faint warm vignette.
+	# Controls under a CanvasLayer do not inherit the root window's theme, so hand it over explicitly.
+	bg = PUI.background("void")
+	bg.theme = PUI.theme()
+	bg.mouse_filter = Control.MOUSE_FILTER_STOP   # nothing behind a loading screen may be clicked
 	add_child(bg)
 
-	# Label — SURGICAL FIX: use PRESET_FULL_RECT + alignment flags so
-	# the text truly centers in the viewport instead of drifting off-center.
-	label = Label.new()
-	label.text                  = "LOADING DUNGEON"
-	label.horizontal_alignment  = HORIZONTAL_ALIGNMENT_CENTER
-	label.vertical_alignment    = VERTICAL_ALIGNMENT_CENTER
-	label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	label.add_theme_font_size_override("font_size", 32)
-	label.add_theme_color_override("font_color", Color.WHITE)
-	add_child(label)
+	# Title block, truly centred: a brass hairline under the display-face title. The dots sit in a reserved slot to the
+	# right (mirrored by an equal spacer on the left) so the changing dots never move the title.
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center.theme = PUI.theme()
+	add_child(center)
+	_content = center
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", PUI.S3)
+	center.add_child(column)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 0)
+	column.add_child(row)
+	var left_pad := Control.new()
+	left_pad.custom_minimum_size.x = 64.0
+	row.add_child(left_pad)
+	label = PUI.label("Loading the dungeon", "ScreenTitle")
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	row.add_child(label)
+	_dots = PUI.label("", "ScreenTitle")
+	_dots.custom_minimum_size.x = 64.0
+	row.add_child(_dots)
+
+	var rule := PUI.divider()
+	column.add_child(rule)
 
 
 func _process(delta: float) -> void:
@@ -89,10 +110,7 @@ func _process(delta: float) -> void:
 	if dot_timer > 0.5:
 		dot_timer  = 0.0
 		dot_count  = (dot_count + 1) % 4
-		var dots   := ""
-		for i in range(dot_count):
-			dots += " ."
-		label.text = "LOADING DUNGEON" + dots
+		_dots.text = ".".repeat(dot_count)
 
 	# Safety maximum — dismiss after 30 seconds regardless.
 	if _elapsed >= MAX_DISPLAY_TIME:
@@ -139,8 +157,8 @@ func _start_fade_in() -> void:
 	tween.set_parallel(true)
 
 	# Fade visuals out cleanly.
-	tween.tween_property(bg,    "modulate:a", 0.0, 1.5)
-	tween.tween_property(label, "modulate:a", 0.0, 1.0)
+	tween.tween_property(bg,       "modulate:a", 0.0, 1.5)
+	tween.tween_property(_content, "modulate:a", 0.0, 1.0)
 
 	# Interpolate audio back to standard volume.
 	tween.tween_method(_set_vol, -80.0, original_volume, 2.5)
@@ -151,3 +169,15 @@ func _start_fade_in() -> void:
 
 func _set_vol(vol: float) -> void:
 	AudioServer.set_bus_volume_db(bus_idx, vol)
+
+
+# If this screen is freed before its fade finishes (scene change, death, quit to menu)
+# the tween dies with it and Master would stay at -80 dB: the whole game silent until
+# a slider is touched. Always put the Master bus back where the settings say it belongs.
+func _exit_tree() -> void:
+	if bus_idx < 0:
+		return
+	var target : float = original_volume
+	if has_node("/root/AudioManager") and "master_volume_linear" in AudioManager:
+		target = AudioManager._linear_to_db(AudioManager.master_volume_linear)
+	AudioServer.set_bus_volume_db(bus_idx, target)

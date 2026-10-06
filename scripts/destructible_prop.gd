@@ -281,6 +281,10 @@ func _commit_freeze() -> void:
 # Called by brute_player._on_kick_hit and _check_slide_knockback.
 # direction is a unit Vector3; force is the impulse magnitude to apply.
 func apply_kick(direction: Vector3, force: float) -> void:
+	# A prop that already turned into a potion/curse this frame is gone; a second kick in the
+	# same physics tick (slide + shove) must not roll or spawn again.
+	if is_queued_for_deletion():
+		return
 	# Kicking a solid-steel anvil hurts your foot. Damage the player regardless
 	# of whether the potion roll replaces the anvil below.
 	if _is_anvil:

@@ -128,10 +128,12 @@ var _spawning_locked      : bool  = false
 
 # ── Timers — all updated in _physics_process ──────────────────────────────────
 var _cull_timer       : float = 0.0
+var _paused_since_msec : int  = 0     # wall-clock start of the current pause (0 = not paused)
 var _respawn_timer    : float = 0.0
 var _diff_timer       : float = 0.0
 var _pressure_timer   : float = 0.0   # Tracks seconds since player last took damage
 const DIFF_CHECK_INTERVAL    : float = 10.0
+const KILL_PLANE_Y            : float = -15.0  # Same floor the player uses (brute_player.gd)
 const PRESSURE_THRESHOLD     : float = 30.0  # Seconds of no damage before pressure spawn
 const PRESSURE_CHECK_INTERVAL: float = 5.0   # How often to check pressure condition
 const BASE_RESPAWN_INTERVAL  : float = 4.0   # Baseline interval — compressed by day in _check_difficulty_escalation
@@ -181,6 +183,11 @@ func boot_up(
 	print("Waypoints available: ", waypoints.size())
 	print("Player valid: ", player_node != null)
 	print("Brute scene: ", brute_scene != null, "  Mage scene: ", mage_scene != null)
+
+	# GLOBAL_PLAYER_LAST_DAMAGE_TIME is static and starts at 0 (or holds the last
+	# run's value), which made the "no damage for 30s" pressure spawn fire the
+	# moment a run began. Treat run start as the last "damage" moment.
+	CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME = Time.get_ticks_msec() * 0.001
 
 	_player            = player_node
 	_brute_scene       = brute_scene
@@ -595,8 +602,10 @@ func _snap_to_floor(pos: Vector3) -> Vector3:
 	var from  := pos + Vector3(0.0, 1.5, 0.0)   # 1.5 m up — stays below the 3.5 m ceiling
 	var to    := pos + Vector3(0.0, -6.0, 0.0)
 	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.collision_mask = 1   # Static geometry only — ignore enemy capsules
-	var result := space.intersect_ray(query)
+	query.collision_mask = 1
+	# mask 1 also contains props/enemies/chests; ray_world skips those so a prop at the
+	# spawn point cannot lift the enemy onto its top.
+	var result := PhysicsUtil.ray_world(space, query)
 	if not result.is_empty():
 		return result.position + Vector3(0.0, 0.15, 0.0)
 	return pos + Vector3(0.0, 0.1, 0.0)
@@ -617,9 +626,10 @@ func _player_can_see_spawn(pos: Vector3) -> bool:
 	var from  := _player.global_position + Vector3(0.0, 1.6, 0.0)  # Eye height
 	var to    := pos + Vector3(0.0, 1.0, 0.0)
 	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.collision_mask = 1   # Static geometry only
+	query.collision_mask = 1
 	query.exclude        = [_player.get_rid()]
-	var result := space.intersect_ray(query)
+	# Only level geometry hides a spawn point; an enemy or prop in the line must not.
+	var result := PhysicsUtil.ray_world(space, query)
 	return result.is_empty()   # Empty = nothing blocking = player can see it
 
 
@@ -700,6 +710,21 @@ func _physics_process(delta: float) -> void:
 	if not is_instance_valid(_player):
 		return
 
+	# This node is PROCESS_MODE_ALWAYS only so it can build enemies during the loading
+	# screen (that work is coroutine-driven, not timer-driven). Gameplay timers must
+	# freeze while the game is paused (pause menu, buff pick), otherwise enemies spawn
+	# behind the menu and the pressure-spawn timeout runs down while the player is away.
+	if get_tree().paused:
+		if _paused_since_msec == 0:
+			_paused_since_msec = Time.get_ticks_msec()
+		return
+	if _paused_since_msec != 0:
+		var paused_sec : float = (Time.get_ticks_msec() - _paused_since_msec) * 0.001
+		_paused_since_msec = 0
+		CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME = minf(
+			CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME + paused_sec,
+			Time.get_ticks_msec() * 0.001)
+
 	_cull_timer    += delta
 	_respawn_timer += delta
 	_diff_timer    += delta
@@ -736,6 +761,10 @@ func _physics_process(delta: float) -> void:
 # turtling by force-spawning a type-3 buffed enemy from the closest type-3
 # spawn point. This runs independently of the normal population cap.
 func _check_pressure_spawn() -> void:
+	# After Day 30 the dungeon must drain to zero (stop_spawning); a careful player who stays
+	# undamaged would otherwise be sent a fresh enemy every 5 s and could never clear the portal.
+	if _spawning_locked:
+		return
 	if _player == null or not is_instance_valid(_player):
 		return
 	# Only trigger if enough time has passed since the last damage event.
@@ -841,6 +870,39 @@ func _run_cull_sweep() -> void:
 			_live_count = maxi(_live_count - 1, 0)
 
 
+# Enemies that are alive right now. `_live_count` lags a kill by up to cull_check_interval and is
+# not refreshed while paused, so the Day-30 portal asks this instead.
+func count_live_enemies() -> int:
+	var n : int = 0
+	for e in _active_enemies:
+		if is_instance_valid(e) and e.get("_is_dead") != true:
+			n += 1
+	return n
+
+
+# World positions of every enemy that is alive right now (the last-stand minimap markers).
+func live_enemy_positions() -> Array:
+	var out : Array = []
+	for e in _active_enemies:
+		if is_instance_valid(e) and e.get("_is_dead") != true:
+			out.append((e as Node3D).global_position)
+	return out
+
+
+# Enemies have no kill plane (the player does): one that fell out of the world stays "alive"
+# forever and would keep the Day-30 portal shut. Kill any alive enemy below KILL_PLANE_Y.
+# Returns how many were rescued. take_damage(.., null) credits no kill to the player.
+func rescue_stranded_enemies() -> int:
+	var rescued : int = 0
+	for e in _active_enemies:
+		if not is_instance_valid(e) or e.get("_is_dead") == true:
+			continue
+		if (e as Node3D).global_position.y < KILL_PLANE_Y and e.has_method("take_damage"):
+			e.take_damage(1.0e6, null)
+			rescued += 1
+	return rescued
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  POPULATION TOP-UP
 # ══════════════════════════════════════════════════════════════════════════════
@@ -850,6 +912,11 @@ func _run_cull_sweep() -> void:
 # asynchronous spawn loop to safely bring the live count back up to the cap.
 func stop_spawning() -> void:
 	_spawning_locked = true
+
+
+# Legendary Mode: the run continues past Day 30, so reinforcements must come back.
+func resume_spawning() -> void:
+	_spawning_locked = false
 
 
 func _top_up_population() -> void:
@@ -885,6 +952,11 @@ func _staggered_spawn_wave(zone_copy: Array, limit: int) -> void:
 		if spawned >= limit:
 			break
 		
+		# A top-up wave that was mid-flight when the game paused (or the Day-30 lock engaged)
+		# must not keep spawning.
+		if get_tree().paused or _spawning_locked:
+			break
+
 		# Build the heavy enemy hierarchy
 		if _spawn_enemy_from_data(entry):
 			spawned += 1

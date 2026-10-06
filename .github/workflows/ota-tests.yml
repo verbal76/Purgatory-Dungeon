@@ -1,0 +1,89 @@
+name: OTA tests (reusable)
+
+# The release gate for an OTA (docs/OTA.md section 11): the FULL headless suite, tests/run_tests.sh, on one exact commit.
+# Called by ota-publish.yml with the pinned SHA; it is a workflow_call only, so nothing can start it on its own.
+# Read-only: it never publishes, tags or writes anything.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Full 40-hex commit SHA to test
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  suite:
+    name: Full test suite on the exact SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Exact commit
+        env:
+          WANT: ${{ inputs.ref }}
+        run: |
+          [[ "$WANT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::ref must be a full 40-hex commit SHA (got '$WANT')"; exit 1; }
+          test "$(git rev-parse HEAD)" = "$WANT" || { echo "::error::checked out $(git rev-parse HEAD), not $WANT"; exit 1; }
+
+      - name: Engine version of the runtime (ci.yml GODOT_RELEASE via ota/boundary.json)
+        id: engine
+        run: |
+          ver="$(python3 tools/ota_runtime.py --engine)"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "release=${ver}-stable" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Godot editor + export templates
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ steps.engine.outputs.release }}-windows-templates-v1
+
+      - name: Install Godot ${{ steps.engine.outputs.release }}
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        env:
+          GODOT_RELEASE: ${{ steps.engine.outputs.release }}
+          GODOT_VERSION: ${{ steps.engine.outputs.version }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}"
+          mkdir -p ~/godot-bin && cd ~/godot-bin
+          curl -fsSL -O "${base}/SHA512-SUMS.txt"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          grep -E "Godot_v${GODOT_RELEASE}_(linux.x86_64.zip|export_templates.tpz)$" SHA512-SUMS.txt | sha512sum -c -
+          unzip -q "Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          tpl="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$tpl"
+          unzip -q "Godot_v${GODOT_RELEASE}_export_templates.tpz" 'templates/windows_*' 'templates/version.txt' -d tmp
+          mv tmp/templates/* "$tpl"/
+          rm -rf tmp *.zip *.tpz
+
+      - name: Locate Godot
+        env:
+          GODOT_RELEASE: ${{ steps.engine.outputs.release }}
+        run: echo "GODOT=$HOME/godot-bin/Godot_v${GODOT_RELEASE}_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: Verify Godot version
+        env:
+          GODOT_VERSION: ${{ steps.engine.outputs.version }}
+        run: |
+          "$GODOT" --version
+          "$GODOT" --version | grep -q "^${GODOT_VERSION}.stable"
+
+      - name: Full suite (tests/run_tests.sh)
+        run: tests/run_tests.sh "$GODOT"
