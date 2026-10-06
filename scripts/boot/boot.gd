@@ -484,6 +484,8 @@ func diagnostics_text() -> String:
 	L.append("OTA")
 	L.append("  Client: %s" % ("on" if ota_enabled else "off"))
 	L.append("  Channel: %s" % (channel if ota_enabled else "none"))
+	if ota_enabled and updater != null:
+		L.append("  Channel pointer: %s" % updater.pointer_url)
 	L.append("  Status: %s" % ota_status())
 	if not ota_enabled:
 		L.append("  Reason: %s" % inert_reason)

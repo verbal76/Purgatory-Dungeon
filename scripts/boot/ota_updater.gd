@@ -98,6 +98,7 @@ func check(download: bool = true) -> String:
 	_available = []
 	checked_at = Time.get_datetime_string_from_system(true) + "Z"
 	_set_status("checking", "")
+	core.channel_dir = OtaCore.dir_of(pointer_url)
 	var p: Array = await _fetch(pointer_url + "?t=%d" % int(Time.get_unix_time_from_system()), "", MAX_POINTER_BYTES)
 	if not p[0]:
 		return _done("check", "channel unreachable (%s); keeping current package" % p[1], "offline")
@@ -110,6 +111,10 @@ func check(download: bool = true) -> String:
 		return _done("check", "invalid channel pointer; keeping current package", "failed")
 	if remote["channel"] != core.channel:
 		return _done("check", "pointer is for channel '%s', this install follows '%s'" % [str(remote["channel"]), core.channel], "failed")
+	# The pointer is unsigned: everything it points at must stay inside this channel's directory.
+	for k in ["manifest_url", "signature_url"]:
+		if not OtaCore.url_in_dir(remote[k], core.channel_dir):
+			return _done("check", "pointer %s is outside the channel directory %s; ignoring it" % [k, core.channel_dir], "rejected")
 	if core.is_bad(remote["ota_id"]):
 		return _done("check", "latest is %s, which was rejected or rolled back here; not re-downloading" % remote["ota_id"], "rejected")
 	if int(remote["seq"]) <= core.known_seq():

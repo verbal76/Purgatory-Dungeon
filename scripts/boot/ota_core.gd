@@ -58,6 +58,10 @@ var save_root := ""
 var device_save_schema := 0
 ## Save schema of the game that is running now. Boot reads it from the mounted game; recorded by mark_healthy().
 var running_save_schema := 0
+## ".../ota/<channel>/" the update client is talking to (set by OtaUpdater for every check). When non-empty, a
+## manifest's pck_url must live inside it. Empty (boot-time re-validation, unit tests of other rules) = not enforced:
+## stored manifests were anchored when they were staged and are signed.
+var channel_dir := ""
 ## Desktop-only local test hook (http://127.0.0.1 pointer). Never set on a device.
 var allow_local_http := false
 var state: Dictionary = {}
@@ -372,6 +376,8 @@ func validate_manifest(m: Dictionary) -> String:
 	if not (url is String) or not ((url as String).begins_with("https://") \
 			or (allow_local_http and (url as String).begins_with("http://127.0.0.1:"))):
 		return "invalid manifest: package URL must be HTTPS"
+	if channel_dir != "" and not url_in_dir(str(url), channel_dir):
+		return "invalid manifest: package URL is outside the channel directory %s" % channel_dir
 	if not _is_safe_id(m["ota_id"]):
 		return "invalid manifest: ota_id"
 	if not _is_whole(m["seq"]) or int(m["seq"]) < 1:
@@ -398,6 +404,26 @@ func validate_manifest(m: Dictionary) -> String:
 	if fwhy != "":
 		return fwhy
 	return save_compat(m)
+
+
+## The directory of a pointer URL: ".../ota/dev/latest.json?t=1" -> ".../ota/dev/".
+static func dir_of(pointer_url: String) -> String:
+	var u: String = pointer_url.get_slice("?", 0).get_slice("#", 0)
+	return u.substr(0, u.rfind("/") + 1)
+
+
+## True when `url` lies inside `dir` (which ends in "/"): same scheme, host and port by plain prefix, and the rest is a
+## plain relative path (no "..", "\\", "%", "@", "?" or "#"). "ota/dev-evil/" and "github.io.evil.com" do not match "ota/dev/".
+static func url_in_dir(url: String, dir: String) -> bool:
+	if dir == "" or not dir.ends_with("/") or not url.begins_with(dir):
+		return false
+	var rest: String = url.substr(dir.length())
+	if rest.is_empty():
+		return false
+	for bad in ["..", "\\", "%", "@", "?", "#"]:
+		if rest.contains(bad):
+			return false
+	return true
 
 
 ## files[] must be a list of {path, op} that never touches the native boundary.

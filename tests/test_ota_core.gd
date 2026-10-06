@@ -230,9 +230,13 @@ func _t_protected_and_config() -> void:
 	_check(not Protected.is_unsafe("godot/scripts/a b.gd"), "ordinary relative path is safe")
 	_check(Config.runtime_id("android") == "android-godot-%s-r%d" % [Config.engine_version(), Config.RUNTIME_REVISION], "runtime_id format")
 	_check(Config.runtime_id("android").begins_with("android-godot-4.6."), "runtime id names the engine (%s)" % Config.runtime_id("android"))
-	_check(Config.pointer_url("dev") == "https://github.com/%s/releases/download/ota-channel-dev/latest.json" % Config.REPO, "pointer url")
-	_check(Config.release_url("t", "a.pck").ends_with("/releases/download/t/a.pck"), "release url")
-	_check(Config.channel_tag("x") == "ota-channel-x", "channel tag")
+	_check(Config.BASE_URL == "https://verbal76.github.io/Purgatory-Dungeon/ota", "transport is the Pages site of the source repository")
+	_check(Config.channel_dir("dev") == Config.BASE_URL + "/dev", "channel dir")
+	_check(Config.pointer_url("dev") == "https://verbal76.github.io/Purgatory-Dungeon/ota/dev/latest.json", "pointer url")
+	_check(Config.asset_url("dev", "dev-000003", "purgatory-dev-000003.pck") == "https://verbal76.github.io/Purgatory-Dungeon/ota/dev/dev-000003/purgatory-dev-000003.pck", "asset url")
+	_check(Config.asset_url("dev", "dev-000003", "manifest.json.sig").ends_with("/ota/dev/dev-000003/manifest.json.sig"), "signature asset url")
+	_check(not Config.pointer_url("dev").contains("releases") and not (Config as Script).get_script_constant_map().has("REPO"), "no Releases / REPO transport left")
+	_check(OtaCore.dir_of(Config.pointer_url("dev") + "?t=5") == Config.channel_dir("dev") + "/", "dir_of strips file and query")
 	_check(Config.is_safe_channel("dev") and Config.is_safe_channel("stable-2") and not Config.is_safe_channel("a/b")
 			and not Config.is_safe_channel("") and not Config.is_safe_channel("A") and not Config.is_safe_channel("x".repeat(40)), "channel names are URL safe")
 	_check(Config.FEATURE == "ota" and Config.BOOTSTRAP_VERSION == 1 and Config.CHANNEL == "dev", "config constants")
@@ -330,6 +334,34 @@ func _t_manifest_matrix() -> void:
 	_check(c3.validate_manifest(_manifest(5, _payload(5), {"pck_url": "http://127.0.0.1:18500/a.pck"})) == "", "local http allowed only with the desktop test hook")
 	_has(c3.validate_manifest(_manifest(5, _payload(5), {"pck_url": "http://localhost:18500/a.pck"})), "HTTPS", "only 127.0.0.1 is allowed, not localhost")
 	_has(c3.validate_manifest(_manifest(5, _payload(5), {"pck_url": "http://127.0.0.1.evil.com/a.pck"})), "HTTPS", "http host must be exactly 127.0.0.1:port")
+	# URL anchoring: pck_url must live inside the channel directory once the updater has set it.
+	var ca: OtaCore = _core(_new_root())
+	ca.channel_dir = Config.channel_dir("dev") + "/"
+	var gdir: String = ca.channel_dir
+	var good_url: String = Config.asset_url("dev", "dev-000005", "purgatory-dev-000005.pck")
+	_check(ca.validate_manifest(_manifest(5, _payload(5), {"pck_url": good_url})) == "", "pck_url inside the channel directory is accepted")
+	for bad in [["another host", "https://evil.example/ota/dev/dev-000005/x.pck"],
+			["host prefix trick", "https://verbal76.github.io.evil.com/Purgatory-Dungeon/ota/dev/x.pck"],
+			["other channel directory", Config.channel_dir("stable") + "/dev-000005/x.pck"],
+			["path prefix trick", Config.BASE_URL + "/dev-evil/dev-000005/x.pck"],
+			["parent traversal", gdir + "../stable/x.pck"],
+			["encoded traversal", gdir + "%2e%2e/x.pck"],
+			["userinfo", gdir + "a@evil/x.pck"],
+			["query smuggling", gdir + "x.pck?https://evil"],
+			["plain http", "http://verbal76.github.io/Purgatory-Dungeon/ota/dev/x.pck"],
+			["the directory itself", gdir],
+			["site root", "https://verbal76.github.io/"]]:
+		var why_a: String = ca.validate_manifest(_manifest(5, _payload(5), {"pck_url": bad[1]}))
+		_check(why_a != "" and (why_a.contains("channel directory") or why_a.contains("HTTPS")), "pck_url rejected: %s (%s)" % [bad[0], why_a])
+	var local_a: OtaCore = _core(_new_root())
+	local_a.allow_local_http = true
+	local_a.channel_dir = OtaCore.dir_of("http://127.0.0.1:18500/ota/dev/latest.json")
+	_check(local_a.channel_dir == "http://127.0.0.1:18500/ota/dev/", "hook pointer gives the loopback channel directory")
+	_check(local_a.validate_manifest(_manifest(5, _payload(5), {"pck_url": "http://127.0.0.1:18500/ota/dev/dev-000005/p.pck"})) == "", "loopback asset inside the loopback channel directory is accepted")
+	_has(local_a.validate_manifest(_manifest(5, _payload(5), {"pck_url": "http://127.0.0.1:18501/ota/dev/dev-000005/p.pck"})), "channel directory", "another loopback port is refused")
+	_has(local_a.validate_manifest(_manifest(5, _payload(5), {"pck_url": "http://127.0.0.1:18500/ota/dev-evil/p.pck"})), "channel directory", "loopback path-prefix trick is refused")
+	var off: OtaCore = _core(_new_root())
+	_check(off.validate_manifest(_manifest(5, _payload(5), {"pck_url": "https://anywhere.example/a.pck"})) == "", "anchoring is only enforced once a channel directory is set (stored manifests are signed)")
 	# Device without an identity can never accept anything (baseline-only).
 	var bare: OtaCore = OtaCore.new(_new_root(), RUNTIME, "dev", _pem, 1)
 	_check(bare.validate_manifest(good) != "", "no native identity -> nothing validates")
@@ -1128,6 +1160,30 @@ func _t_updater() -> void:
 	_published(stub, 9, {"files": [{"path": "godot/scripts/boot/boot.gd", "op": "replace"}]})
 	await u.check(true)
 	_check(u.status == "rejected" and u.status_detail.contains("protected path") and stub.hit_count("/dev/dev-000009.pck") == 0, "payload touching the native boundary: rejected before any download (%s)" % u.status_detail)
+
+	# a stale (older) pointer never downgrades and never even fetches the old manifest
+	_published(stub, 1)
+	var old_manifest_hits: int = stub.hit_count("/dev/dev-000001.json")
+	await u.check(true)
+	_check(u.status == "up_to_date" and stub.hit_count("/dev/dev-000001.json") == old_manifest_hits and c.slot_id("pending") == "dev-000002", "a stale CDN pointer (older seq) is not an update and fetches nothing (%s)" % u.status_detail)
+
+	# URL anchoring: the unsigned pointer and the manifest must stay inside the channel directory
+	var m10: Dictionary = _published(stub, 10)
+	for case in [["manifest_url on another host", {"manifest_url": "https://evil.example/dev/dev-000010.json"}, "https://evil.example/dev/dev-000010.json"],
+			["signature_url in another directory", {"signature_url": stub.url("/other/dev-000010.json.sig")}, "/other/dev-000010.json.sig"],
+			["manifest_url path-prefix trick", {"manifest_url": stub.url("/dev-evil/dev-000010.json")}, "/dev-evil/dev-000010.json"],
+			["manifest_url with traversal", {"manifest_url": stub.url("/dev/../other/m.json")}, "/other/m.json"]]:
+		_publish(stub, m10, _payload(10), null, case[1])
+		await u.check(true)
+		_check(u.status == "rejected" and u.status_detail.contains("outside the channel directory"), "%s: rejected (%s)" % [case[0], u.status_detail])
+		_check(stub.hit_count(case[2]) == 0 and stub.hit_count("/dev/dev-000010.pck") == 0, "%s: nothing fetched from there" % case[0])
+	_published(stub, 10, {"pck_url": stub.url("/elsewhere/p.pck")})
+	await u.check(true)
+	_check(u.status == "rejected" and u.status_detail.contains("channel directory") and stub.hit_count("/elsewhere/p.pck") == 0, "manifest whose pck_url leaves the channel directory: rejected, never downloaded (%s)" % u.status_detail)
+	_published(stub, 10, {"pck_url": "https://evil.example/dev/p.pck"})
+	await u.check(true)
+	_check(u.status == "rejected" and u.status_detail.contains("channel directory"), "pck_url on another host: rejected (%s)" % u.status_detail)
+	_check(u.core.channel_dir == stub.url("/dev/"), "the updater anchors on the pointer's directory (%s)" % u.core.channel_dir)
 
 	# pointer problems
 	_published(stub, 10)
