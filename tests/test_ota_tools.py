@@ -1285,22 +1285,132 @@ class TestPublishGates(TmpCase):
             tags.append(gates.RELEASE_TAG.format(channel="dev", seq=n))
         self.assertEqual(seqs, [1, 2, 3, 4, 5])
 
-    def test_release_host_resolution(self):
-        h = gates.resolve_host("me/private-src")
-        self.assertEqual((h["repo"], h["same_repo"], h["ok"]), ("me/private-src", True, True), "the default host is this repository")
-        h = gates.resolve_host("Me/Private-Src", "me/private-src")
-        self.assertTrue(h["same_repo"] and h["ok"], "same repository, case-insensitively")
-        h = gates.resolve_host("me/private-src", "me/updates", token_present=False)
-        self.assertFalse(h["ok"], "a different host needs OTA_RELEASE_TOKEN")
-        self.assertIn("unconfigured host", h["reason"])
-        h = gates.resolve_host("me/private-src", "me/updates", token_present=True)
-        self.assertTrue(h["ok"] and not h["same_repo"])
-        with self.assertRaises(otalib.OtaError):
-            gates.resolve_host("me/src", "not a repo")
+    def test_source_repo_gate(self):
+        """The release host is always this repository; when the app's baked REPO is known it must be the same repository."""
+        self.assertEqual(gates.check_source_repo("verbal76/Purgatory-Dungeon"), "verbal76/Purgatory-Dungeon")
+        self.assertEqual(gates.check_source_repo("Me/Src", "me/src"), "Me/Src", "case-insensitive, like GitHub")
         with self.assertRaises(otalib.OtaError) as cm:
-            gates.resolve_host("me/src", "me/updates", True, baked_repo="me/elsewhere")
-        self.assertIn("devices would never see", str(cm.exception))
-        gates.resolve_host("me/src", "me/updates", True, baked_repo="ME/Updates")
+            gates.check_source_repo("me/src", "me/elsewhere")
+        self.assertIn("installed apps would look for updates in a repository this pipeline never publishes to", str(cm.exception))
+        self.assertIn("scripts/boot/ota_config.gd", str(cm.exception))
+        for bad in ("", "not a repo", "a/b/c", "noslash"):
+            with self.assertRaises(otalib.OtaError, msg=bad):
+                gates.check_source_repo(bad)
+        self.assertFalse(hasattr(gates, "resolve_host"), "there is no second host to resolve")
+
+    def test_public_repo_gate(self):
+        self.assertEqual(gates.NOT_PUBLIC_REASON, "the source repository is not public, so devices cannot download releases anonymously")
+        self.assertEqual(gates.public_verdict(200, {"private": False}), "")
+        for status, obj in ((200, {"private": True}), (200, {}), (200, None), (200, []), (404, None), (403, {"message": "rate limit"}), (0, None)):
+            why = gates.public_verdict(status, obj)
+            self.assertTrue(why.startswith(gates.NOT_PUBLIC_REASON), (status, obj, why))
+        self.assertIn("HTTP 404", gates.public_verdict(404, None))
+
+        state = {"mode": "public", "calls": 0}
+
+        def body(h):
+            state["calls"] += 1
+            if state["mode"] == "flaky" and state["calls"] == 1:
+                h.send_response(500)
+                h.send_header("Content-Length", "0")
+                h.end_headers()
+                return
+            if h.path != "/repos/me/src":
+                h.send_response(404)
+                h.send_header("Content-Length", "0")
+                h.end_headers()
+                return
+            if state["mode"] == "private":       # what GitHub answers an anonymous request for a private repository
+                h.send_response(404)
+                h.send_header("Content-Length", "0")
+                h.end_headers()
+                return
+            data = json.dumps({"full_name": "me/src", "private": state["mode"] == "claims-private"}).encode()
+            h.send_response(200)
+            h.send_header("Content-Length", str(len(data)))
+            h.end_headers()
+            h.wfile.write(data)
+
+        _, H, base = self.serve(body)
+        env = {"GH_TOKEN": "ghp_secret", "GITHUB_TOKEN": "ghp_secret2"}
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        self.addCleanup(lambda: [os.environ.pop(k) if v is None else os.environ.__setitem__(k, v) for k, v in old.items()])
+        nosleep = lambda s: None  # noqa: E731
+        state["mode"] = "public"
+        self.assertEqual(gates.check_public("me/src", base, retries=1, sleep=nosleep), "")
+        self.assertTrue(all(h["auth"] is None and h["cookie"] is None for h in H.seen), "the public check is anonymous: " + str(H.seen))
+        self.assertEqual(H.seen[0]["path"], "/repos/me/src")
+        state.update(mode="private", calls=0)
+        self.assertTrue(gates.check_public("me/src", base, retries=2, delay=0, sleep=nosleep).startswith(gates.NOT_PUBLIC_REASON))
+        state.update(mode="claims-private", calls=0)
+        self.assertTrue(gates.check_public("me/src", base, retries=1, sleep=nosleep).startswith(gates.NOT_PUBLIC_REASON))
+        state.update(mode="flaky", calls=0)
+        self.assertEqual(gates.check_public("me/src", base, retries=3, delay=0, sleep=nosleep), "", "a transient 5xx is retried")
+        self.assertEqual(gates.check_public("me/src", "http://127.0.0.1:9", retries=1, sleep=nosleep)[:len(gates.NOT_PUBLIC_REASON)], gates.NOT_PUBLIC_REASON,
+                         "an unreachable API is a refusal, never a pass")
+
+        # CLI: ok=1 / ok=0 + reason (exit 0 so the job can write its published:false receipt), exit 1 when REPO disagrees
+        cfg = write(self.p("ota_config.gd"), b'const REPO := "me/src"\n')
+        state.update(mode="public", calls=0)
+        r = tool("publish_gates.py", "repo-gate", "--repo", "me/src", "--config", cfg, "--api", base, "--retries", "1", env=env)
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertIn("ok=1", r.stdout.splitlines())
+        self.assertIn("repo=me/src", r.stdout.splitlines())
+        state.update(mode="private", calls=0)
+        r = tool("publish_gates.py", "repo-gate", "--repo", "me/src", "--config", cfg, "--api", base, "--retries", "1", "--delay", "0", env=env)
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertIn("ok=0", r.stdout.splitlines())
+        self.assertIn("reason=" + gates.NOT_PUBLIC_REASON, r.stdout)
+        other = write(self.p("other_config.gd"), b'const REPO := "me/Purgatory-Dungeon-Elsewhere"\n')
+        state.update(mode="public", calls=0)
+        r = tool("publish_gates.py", "repo-gate", "--repo", "me/src", "--config", other, "--api", base, "--retries", "1", env=env)
+        self.assertEqual(r.returncode, 1, out(r))
+        self.assertIn("installed apps would look", r.stderr)
+
+    def test_baked_repo_of_the_native_layer(self):
+        """The REPO compiled into the app is the one repository this pipeline publishes to (the native worker owns the file)."""
+        cfg = os.path.join(ROOT, "scripts", "boot", "ota_config.gd")
+        if not os.path.isfile(cfg):
+            self.skipTest("native layer not merged")
+        baked = str(gates.config_value(rt(cfg), "REPO"))
+        if baked != "verbal76/Purgatory-Dungeon":
+            notice(f"scripts/boot/ota_config.gd has REPO {baked!r}; the native worker must set it to the source repository verbal76/Purgatory-Dungeon (CI refuses otherwise)")
+            return
+        self.assertEqual(gates.check_source_repo("verbal76/Purgatory-Dungeon", baked), "verbal76/Purgatory-Dungeon")
+
+    def test_fetch_pointer_cli(self):
+        doc = gates.pointer_document("dev", "dev-000004", 4, "r", "https://h/m", "https://h/s", "2026-10-06T00:00:00Z", native_version=7, app_minor=3)
+        state = {"status": 200, "body": otalib.canonical_json(doc)}
+
+        def body(h):
+            data = state["body"]
+            h.send_response(state["status"])
+            h.send_header("Content-Length", str(len(data)))
+            h.end_headers()
+            h.wfile.write(data)
+
+        _, H, base = self.serve(body)
+        url = base + "/releases/download/ota-channel-dev/latest.json"
+        out_file = self.p("live.json")
+        r = tool("publish_gates.py", "fetch-pointer", "--url", url, "--out", out_file, "--retries", "1")
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertEqual(json.loads(rb(out_file))["seq"], 4)
+        self.assertIn("nocache=", H.seen[-1]["path"], "the live pointer is read past caches")
+        self.assertTrue(all(h["auth"] is None for h in H.seen), "anonymous, like a device")
+        os.remove(out_file)
+        state.update(status=404, body=b"nope")
+        r = tool("publish_gates.py", "fetch-pointer", "--url", url, "--out", out_file, "--retries", "1")
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertIn("no pointer yet", r.stdout)
+        self.assertFalse(os.path.exists(out_file), "no pointer, no file (next-minor then starts at 1)")
+        state.update(status=500, body=b"boom")
+        r = tool("publish_gates.py", "fetch-pointer", "--url", url, "--out", out_file, "--retries", "1")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("refusing to publish blind", r.stderr)
+        state.update(status=200, body=b"{not json")
+        self.assertEqual(tool("publish_gates.py", "fetch-pointer", "--url", url, "--out", out_file, "--retries", "1").returncode, 1)
+        self.assertFalse(os.path.exists(out_file))
 
     # --- pointer
     def test_pointer_is_forward_only(self):
@@ -2214,6 +2324,20 @@ class TestArtifactGates(TmpCase):
         r = tool("artifact_gates.py", "verify-anonymous", "--base-url", srv.base, "--retries", "1", *self.files)
         self.assertEqual(r.returncode, 1, "no key, no verification")
 
+    def test_download_command_is_anonymous_and_exact(self):
+        srv = self.serve()
+        out_file = self.p("dl.pck")
+        env = {"GH_TOKEN": "ghp_secret", "GITHUB_TOKEN": "ghp_secret2"}
+        r = tool("artifact_gates.py", "download", "--url", srv.base + "/purgatory-dev-000003.pck", "--out", out_file, "--retries", "1", env=env)
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertEqual(rb(out_file), rb(self.pck))
+        self.assertTrue(all(h["auth"] is None for h in srv.seen), "downloads carry no credential")
+        os.remove(out_file)
+        r = tool("artifact_gates.py", "download", "--url", srv.base + "/missing.pck", "--out", out_file, "--retries", "1", "--delay", "0", env=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not anonymously downloadable (HTTP 404)", r.stderr)
+        self.assertFalse(os.path.exists(out_file))
+
     def test_the_gates_know_no_transport(self):
         text = rt(os.path.join(OTA, "artifact_gates.py"))
         for needle in ("api.github.com", "GH_TOKEN", "gh release", "releases/download", "OTA_RELEASE_TOKEN", "verbal76"):
@@ -2293,7 +2417,7 @@ class TestPublishWorkflow(unittest.TestCase):
             self.assertNotIn("github.head_ref", m.group(1))
 
     def test_steps_run_in_the_documented_order(self):
-        order = ["name: 01 Pin the exact commit", "name: 02a Resolve the release host", "name: 02b Resolve identity", "name: 03 Native baseline",
+        order = ["name: 01 Pin the exact commit", "name: 02a Gate the host", "name: 02b Resolve identity", "name: 03 Native baseline",
                  "name: 04 Classify", "name: 05 Runtime gate", "uses: ./.github/workflows/ota-tests.yml", "name: 07 Build the payload", "name: 07b Assign app_minor",
                  "name: 08 Build the manifest", "name: 09 Signing key", "name: 10 The key's public half", "name: 11 Sign",
                  "name: 12 Inspect", "name: 13 Create the immutable release", "name: 14 Re-download", "name: 15 Verify the published objects are ANONYMOUSLY",
@@ -2371,13 +2495,14 @@ class TestPublishWorkflow(unittest.TestCase):
         self.assertIn("git/ref/tags/$TAG", step13, "an existing tag aborts, even without a release")
         self.assertIn("--latest=false", step13)
         self.assertIn('--target "$SHA"', step13)
-        self.assertIn("SAME_REPO", step13)
         step14 = self.y[verify:anon]
-        for needle in ("cmp ", "sha256sum", "ota_inspect_pack.gd", "gh release download"):
+        for needle in ("cmp ", "sha256sum", "ota_inspect_pack.gd", "artifact_gates.py download"):
             self.assertIn(needle, step14)
+        self.assertNotIn("gh release download", step14, "the re-download is anonymous: it is what a phone does")
+        self.assertNotIn("GH_TOKEN", step14)
         step15 = self.y[anon:ptr]
         self.assertIn("check-anonymous", step15)
-        self.assertIn("env -u GH_TOKEN", step15, "no credential reaches the anonymous check")
+        self.assertNotIn("GH_TOKEN", step15, "no credential reaches the anonymous check")
         self.assertIn("purgatory-$OTA_ID.pck", step15)
         step16 = self.y[ptr:self.pos("name: 17 Publication receipt")]
         self.assertLess(step16.index("pointer-decision"), step16.index("gh release upload"), "forward-only decision before the pointer moves")
@@ -2387,8 +2512,8 @@ class TestPublishWorkflow(unittest.TestCase):
         self.assertIn("env -u GH_TOKEN", step16)
         self.assertIn("ota-channel-$CHANNEL", step16)
         self.assertEqual(self.y.count("gh release upload"), 1, "the only upload is latest.json")
-        self.assertIn('"$OUT/latest.json" --repo "$HOST" --clobber', step16)
-        self.assertEqual(self.y.count("--clobber"), 2, "clobber: the pointer upload and the local re-download directory only")
+        self.assertIn('"$OUT/latest.json" --repo "$GITHUB_REPOSITORY" --clobber', step16)
+        self.assertEqual(self.y.count("--clobber"), 1, "clobber: the pointer upload only")
 
     def test_transport_neutral_gates_are_wired(self):
         step13 = self.y[self.pos("name: 13 Create the immutable release"):self.pos("name: 14 Re-download")]
@@ -2399,7 +2524,7 @@ class TestPublishWorkflow(unittest.TestCase):
         step15 = self.y[self.pos("name: 15 Verify the published objects"):self.pos("name: 16 Advance the channel pointer")]
         self.assertIn("artifact_gates.py verify-anonymous", step15)
         self.assertIn("--config scripts/boot/ota_config.gd", step15, "the signature is checked with the public key compiled into the app")
-        self.assertIn("env -u GH_TOKEN", step15)
+        self.assertNotIn("GH_TOKEN", step15)
         step16 = self.y[self.pos("name: 16 Advance the channel pointer"):self.pos("name: 17 Publication receipt")]
         self.assertLess(step16.index("artifact_gates.py scan-secrets"), step16.index("gh release upload"))
         self.assertLess(step16.index("pointer-confirm"), step16.index("OTA_ANON_POINTER=1"))
@@ -2477,14 +2602,31 @@ class TestPublishWorkflow(unittest.TestCase):
                 for step in job.get("steps", []):
                     if "uses" in step:
                         self.assertIn(step["uses"], allowed, f"{name}: only first-party, pinned-major actions")
-        # the host token is used for host calls only; the baseline is read with the workflow token
-        self.assertIn("secrets.OTA_RELEASE_TOKEN", self.y)
-        self.assertEqual(self.y.count("secrets.OTA_RELEASE_TOKEN"), 3)
-        prep = self.y[self.pos("name: 03 Native baseline"):self.pos("name: 04 Classify")]
-        self.assertIn("GH_TOKEN: ${{ github.token }}", prep)
-        self.assertNotIn("OTA_RELEASE_TOKEN", prep)
-        self.assertIn("OTA_RELEASE_REPO: ${{ vars.OTA_RELEASE_REPO }}", self.y)
-        self.assertNotIn("OTA_RELEASE_TOKEN }}\n      OTA_SIGNING", self.y)
+        # the automatic token only; no PAT, no other secret but the signing key
+        self.assertEqual(sorted(set(re.findall(r"secrets\.([A-Za-z0-9_]+)", self.y))), ["OTA_SIGNING_KEY_PEM_BASE64"])
+        for bad in FORBIDDEN_TRANSPORT:
+            self.lacks(bad)
+        self.assertEqual(self.y.count("persist-credentials: false"), 2, "no checkout leaves the token in .git/config")
+        self.assertEqual(self.y.count("uses: actions/checkout@v4"), 2)
+        if self.d:
+            holders = {}
+            for name, job in self.d["jobs"].items():
+                for step in job.get("steps", []):
+                    env = step.get("env", {}) or {}
+                    for k, v in env.items():
+                        if "github.token" in str(v):
+                            self.assertEqual(k, "GH_TOKEN", "the token is only ever exposed as GH_TOKEN")
+                            holders.setdefault(name, []).append(step["name"].split(" ")[0])
+                    self.assertFalse("env" in job and "github.token" in str(job["env"]), "never job-wide")
+            # write token: only the steps that create / upload / clobber a release, plus the signing-key reader; reads are anonymous
+            self.assertEqual(holders["publish"], ["09", "13", "16"])
+            # the prepare job is contents: read; its two token steps only read releases of this repository
+            self.assertEqual(holders["prepare"], ["02b", "03"])
+            self.assertNotIn("tests", holders)
+            self.assertEqual(set(self.d["env"]), {"OTA_NATIVE_BASE_TAG", "OTA_ACCEPT_GUARDED"}, "workflow-wide env holds plain variables only, never a token or secret")
+            self.assertNotIn("secrets", str(self.d["env"]) + str(self.d.get("defaults")))
+        self.assertIn("OTA_NATIVE_BASE_TAG: ${{ vars.OTA_NATIVE_BASE_TAG }}", self.y)
+        self.assertNotIn("OTA_RELEASE_REPO", self.y)
 
     def test_receipt(self):
         step = self.y[self.pos("name: 17 Publication receipt"):]
@@ -2498,12 +2640,60 @@ class TestPublishWorkflow(unittest.TestCase):
         self.assertIn("OTA_POINTER_MOVED=1", self.y)
         self.assertLess(self.y.index("pointer-confirm"), self.y.index("OTA_POINTER_MOVED=1"), "pointer_moved is claimed only after the live confirmation")
 
-    def test_host_variable_and_unconfigured_host(self):
-        self.assertIn("--var \"$OTA_RELEASE_REPO\"", self.y)
-        self.assertIn("--config scripts/boot/ota_config.gd", self.y, "the host must equal the REPO the installed app looks at")
-        self.assertIn("unconfigured release host: NOT PUBLISHING", self.y)
-        self.assertIn("proceed: ${{ steps.host.outputs.ok }}", self.y)
+    def test_the_host_is_always_this_public_repository(self):
+        """Same-repository releases with the automatic token: no second repository, no variable that can redirect the pipeline."""
+        gate = self.pos("name: 02a Gate the host")
+        self.assertLess(self.pos("name: 01 Pin"), gate)
+        self.assertLess(gate, self.pos("name: 02b Resolve identity"))
+        self.assertLess(gate, self.pos("uses: ./.github/workflows/ota-tests.yml"), "the host gate runs before the test suite and before any build")
+        step = self.y[gate:self.pos("name: 02b Resolve identity")]
+        self.assertIn('publish_gates.py repo-gate --repo "$GITHUB_REPOSITORY" --config scripts/boot/ota_config.gd', step)
+        self.assertNotIn("GH_TOKEN", step, "the visibility check is anonymous")
+        self.assertIn("id: repo", step)
+        self.assertIn("NOT PUBLISHING", step)
+        self.assertIn("proceed: ${{ steps.repo.outputs.ok }}", self.y)
         self.assertIn("Receipt (prepare stage", self.y)
+        self.assertIn("steps.repo.outputs.reason", self.y, "a private source / mismatching REPO ends in published=false with that reason")
+        self.assertIn("published", self.y[self.pos("name: Receipt (prepare stage"):self.pos("name: Receipt (prepare stage") + 700])
+        # every release operation targets $GITHUB_REPOSITORY and nothing else
+        repos = set(re.findall(r'--repo\s+("?[^\s"]+"?)', self.y))
+        self.assertEqual(repos, {'"$GITHUB_REPOSITORY"'}, repos)
+        for m in re.finditer(r"repos/([^\s\"?]+)", self.y):
+            self.assertTrue(m.group(1).startswith("$GITHUB_REPOSITORY/"), m.group(0))
+        self.assertIn("DL_BASE: https://github.com/${{ github.repository }}/releases/download", self.y)
+        hosts = set(re.findall(r"https://([A-Za-z0-9.-]+)", re.sub(r"(?m)^\s*#.*$", "", self.y)))
+        self.assertEqual(hosts, {"github.com"}, "no other host is ever contacted")
+        for m in re.finditer(r"https://github\.com/(.{0,40})", re.sub(r"(?m)^\s*#.*$", "", self.y)):
+            self.assertTrue(m.group(1).startswith(("${{ github.repository }}/", "godotengine/godot-builds/")), m.group(0))
+        self.assertEqual(re.findall(r"(?m)^\s+environment:", self.y), [], "no deployment environment")
+        self.assertNotIn("steps.host", self.y)
+        # gate message is the one the owner specified
+        self.assertEqual(gates.NOT_PUBLIC_REASON, "the source repository is not public, so devices cannot download releases anonymously")
+
+    def test_ota_releases_are_never_latest(self):
+        """Latest is always the native 'Purgatory Dungeon vN' release: the OTA workflow creates ota-* releases with --latest=false
+        and a pointer PRERELEASE, and never edits an existing release."""
+        step13 = self.y[self.pos("name: 13 Create the immutable release"):self.pos("name: 14 Re-download")]
+        creates = re.findall(r"gh release create [^\n]*", step13)
+        self.assertEqual(len(creates), 1)
+        self.assertIn('"$TAG"', creates[0])
+        self.assertIn("--latest=false", creates[0])
+        self.assertNotIn("--prerelease", creates[0], "the per-OTA release is a normal immutable release, only never Latest")
+        self.assertIn('--target "$SHA"', creates[0])
+        self.assertIn('--title "$title"', creates[0])
+        step16 = self.y[self.pos("name: 16 Advance the channel pointer"):self.pos("name: 17 Publication receipt")]
+        ptr = re.findall(r"gh release create [^\n]*", step16)
+        self.assertEqual(len(ptr), 1)
+        self.assertIn('"$PTAG"', ptr[0])
+        self.assertIn("--prerelease", ptr[0])
+        self.assertIn("--latest=false", ptr[0])
+        self.assertIn('PTAG="ota-channel-$CHANNEL"', step16)
+        self.assertIn("tag=ota-$id", self.y)
+        self.assertIn("name: 13 Create the immutable release ota-<channel>-<seq>", self.y)
+        for bad in ("--latest ", "--latest=true", "make_latest", "gh release edit", "gh release delete", "releases/latest"):
+            self.lacks(bad)
+        self.assertIn('title="Purgatory Dungeon ${OWNER_VERSION} (OTA #$(printf \'%06d\' "$SEQ"))"', step13)
+        self.assertEqual(len(re.findall(r"--title", self.y)), 2)
 
 
 class TestOtherWorkflows(unittest.TestCase):
@@ -2553,6 +2743,9 @@ class TestOtherWorkflows(unittest.TestCase):
 
 # ------------------------------------------------------------------------------------------------ hygiene
 
+FORBIDDEN_TRANSPORT = ("OTA_RELEASE_TOKEN", "OTA_RELEASE_REPO", "Purgatory-Dungeon-OTA", "github.io", "pages:", "id-token", "deploy-pages", "github-pages")
+
+
 class TestHygiene(unittest.TestCase):
     NAMES = [r"scripts/ota/", r"ota_trust\.pem", r"ota_channel\.json", r"make_bundle", r"verify_bundle", r"\bchannel\.py\b", r"ota_rules\.json",
              r"build_ota\.sh", r"\bchannel\.json\b", r"\bOtaBoot\b", r"OtaUpdater=\"\*res://scripts/ota"]
@@ -2586,6 +2779,25 @@ class TestHygiene(unittest.TestCase):
                 if rx.search(line):
                     hits.append(f"{f}:{i}: {line.strip()[:100]}")
         self.assertEqual(hits, [], "first-generation OTA names must not survive v7:\n" + "\n".join(hits[:25]))
+
+    def test_no_second_repository_pages_or_pat_transport(self):
+        """Transport is same-repository GitHub Releases with the automatic token: nothing in the owned files may name a second
+        repository, a PAT secret, Pages or an OIDC/deployment permission."""
+        hits = []
+        for f in self.tracked():
+            if not f.startswith(self.OWNED) or f in self.SELF or f.endswith((".png", ".pck", ".uid", ".import")) or f.startswith("tools/ota/fixtures/"):
+                continue
+            try:
+                text = rt(os.path.join(ROOT, f))
+            except (UnicodeDecodeError, OSError):
+                continue
+            for i, line in enumerate(text.splitlines(), 1):
+                for bad in FORBIDDEN_TRANSPORT:
+                    if bad in line:
+                        hits.append(f"{f}:{i}: {bad}")
+        self.assertEqual(hits, [], "same-repository Releases only:\n" + "\n".join(hits))
+        for gone in ("tools/ota/site_gates.py",):
+            self.assertFalse(os.path.exists(os.path.join(ROOT, gone)), gone)
 
     def test_no_old_version_scheme_in_the_tooling(self):
         """game_version is '<native>.<app_minor>' and releases are 'Purgatory Dungeon v7.K (OTA #...)': the three-part form derived

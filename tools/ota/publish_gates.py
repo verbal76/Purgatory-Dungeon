@@ -4,8 +4,10 @@ Every command fails closed: a non-zero exit stops the job before anything become
 
   publish_gates.py parse-branch REF_NAME SHA            ota/<channel>/<40-hex> whose head commit IS that sha -> channel
   publish_gates.py next-seq CHANNEL < tags              highest ota-<channel>-NNNNNN in the tag list + 1 (never reused)
-  publish_gates.py host --this-repo R [--var V] [--token-present 0|1] [--config ota_config.gd]
-                                                        the release host repository and whether it may be written
+  publish_gates.py repo-gate --repo OWNER/Repo [--config scripts/boot/ota_config.gd] [--api URL]
+                                                        the release host is always this repository: REPO in ota_config.gd must equal it,
+                                                        and an ANONYMOUS GET of the repository must say private:false (ok=0 + reason otherwise)
+  publish_gates.py fetch-pointer --url U --out F        the live latest.json, anonymously (404 = none yet: no file, exit 0)
   publish_gates.py key-match --key PRIVATE.pem --config scripts/boot/ota_config.gd
                                                         the signing key's public half == PUBLIC_KEY_PEM (fingerprints only)
   publish_gates.py make-pointer --channel C --ota-id ID --seq N --runtime-id R --manifest-url U --signature-url U
@@ -82,20 +84,43 @@ def next_seq(tags, channel: str) -> int:
     return best + 1
 
 
-def resolve_host(this_repo: str, var: str = "", token_present: bool = False, baked_repo: str = "") -> dict:
-    """The release host. Default: this repository. A different repository needs OTA_RELEASE_TOKEN. When the app's baked REPO is
-    known it must equal the host (the device builds its URLs from it). Returns {repo, same_repo, ok, reason}."""
-    repo = (var or "").strip() or this_repo
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
-        raise OtaError(f"OTA_RELEASE_REPO {repo!r} is not owner/name")
-    same = repo.lower() == this_repo.lower()
-    out = {"repo": repo, "same_repo": same, "ok": True, "reason": ""}
-    if not same and not token_present:
-        out.update(ok=False, reason=f"release host {repo} differs from this repository and the secret OTA_RELEASE_TOKEN is not set (unconfigured host)")
+NOT_PUBLIC_REASON = "the source repository is not public, so devices cannot download releases anonymously"
+
+
+def check_source_repo(repo: str, baked_repo: str = "") -> str:
+    """The release host is ALWAYS this repository (GITHUB_REPOSITORY). When the app's baked REPO (scripts/boot/ota_config.gd) is known it
+    must equal it: devices build their release URLs from it, so a different value means they would never find this update."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo or ""):
+        raise OtaError(f"repository {repo!r} is not owner/name")
     if baked_repo and baked_repo.lower() != repo.lower():
-        raise OtaError(f"the installed app looks for updates in {baked_repo} (REPO in scripts/boot/ota_config.gd) but the release host is "
-                       f"{repo}: devices would never see this update")
-    return out
+        raise OtaError(f"REPO in scripts/boot/ota_config.gd is {baked_repo!r} but the workflow runs in {repo!r}: installed apps would look for "
+                       "updates in a repository this pipeline never publishes to")
+    return repo
+
+
+def public_verdict(status, obj) -> str:
+    """'' when the anonymous GET /repos/<repo> shows a public repository, else the reason (never published to a private source)."""
+    if status == 200 and isinstance(obj, dict) and obj.get("private") is False:
+        return ""
+    why = "" if status == 200 else f" (anonymous API answered HTTP {status})"
+    return NOT_PUBLIC_REASON + why
+
+
+def check_public(repo: str, api: str = "https://api.github.com", retries: int = 4, delay: float = 5.0, sleep=time.sleep) -> str:
+    """Anonymous (no Authorization header) read of the repository: '' = public. Rate limits and 5xx are retried, then refused."""
+    status, body = 0, b""
+    for attempt in range(max(1, retries)):
+        status, body = fetch_anonymous(f"{api.rstrip('/')}/repos/{repo}")
+        if status in (200, 404) or attempt + 1 >= retries:
+            break
+        sleep(delay * (attempt + 1))
+    obj = None
+    if status == 200:
+        try:
+            obj = json.loads(body.decode("utf-8"))
+        except ValueError:
+            obj = None
+    return public_verdict(status, obj)
 
 
 def release_url(repo: str, tag: str, asset: str) -> str:
@@ -410,11 +435,17 @@ def main(argv=None) -> int:
     p.add_argument("sha")
     p = sub.add_parser("next-seq")
     p.add_argument("channel")
-    p = sub.add_parser("host")
-    p.add_argument("--this-repo", required=True)
-    p.add_argument("--var", default="")
-    p.add_argument("--token-present", default="0")
+    p = sub.add_parser("repo-gate")
+    p.add_argument("--repo", required=True)
     p.add_argument("--config", default="")
+    p.add_argument("--api", default="https://api.github.com")
+    p.add_argument("--retries", type=int, default=4)
+    p.add_argument("--delay", type=float, default=5.0)
+    p = sub.add_parser("fetch-pointer")
+    p.add_argument("--url", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--retries", type=int, default=3)
+    p.add_argument("--delay", type=float, default=3.0)
     p = sub.add_parser("key-match")
     p.add_argument("--key", required=True)
     p.add_argument("--config", required=True)
@@ -476,12 +507,27 @@ def main(argv=None) -> int:
             print(f"channel={channel}\nsha={sha}")
         elif a.cmd == "next-seq":
             print(next_seq(sys.stdin.read().split(), a.channel))
-        elif a.cmd == "host":
-            baked = ""
-            if a.config:
-                baked = str(config_value(otalib.read_bytes(a.config).decode("utf-8"), "REPO"))
-            h = resolve_host(a.this_repo, a.var, _flag(a.token_present), baked)
-            print(f"repo={h['repo']}\nsame_repo={'1' if h['same_repo'] else '0'}\nok={'1' if h['ok'] else '0'}\nreason={h['reason']}")
+        elif a.cmd == "repo-gate":
+            baked = str(config_value(otalib.read_bytes(a.config).decode("utf-8"), "REPO")) if a.config else ""
+            check_source_repo(a.repo, baked)
+            why = check_public(a.repo, a.api, a.retries, a.delay)
+            print(f"repo={a.repo}\nok={'0' if why else '1'}\nreason={why}")
+        elif a.cmd == "fetch-pointer":
+            status, body = 0, b""
+            for attempt in range(max(1, a.retries)):
+                sep = "&" if "?" in a.url else "?"
+                status, body = fetch_anonymous(f"{a.url}{sep}nocache={int(time.time() * 1000)}")
+                if status in (200, 404) or attempt + 1 >= a.retries:
+                    break
+                time.sleep(a.delay * (attempt + 1))
+            if status == 404:
+                print("no pointer yet")
+            elif status == 200:
+                parse_pointer(body)
+                otalib.write_atomic(a.out, body)
+                print(f"pointer fetched to {a.out}")
+            else:
+                raise OtaError(f"cannot read the live pointer {a.url} (anonymous HTTP {status}); refusing to publish blind")
         elif a.cmd == "key-match":
             fp = key_match(a.key, otalib.read_bytes(a.config).decode("utf-8"))
             print(f"signing key matches the public key embedded in the APK (SHA-256 {fp})")

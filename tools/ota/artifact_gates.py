@@ -13,6 +13,8 @@ reads are ANONYMOUS (no Authorization header, no cookies), because phones read a
   artifact_gates.py immutable --base-url U FILE...
         an already-published file may never change bytes: refuse when U/<name> serves different bytes than FILE (404 = new = fine,
         identical = a harmless re-run, anything else = indeterminate = refused)
+  artifact_gates.py download --url U --out F [--retries N]
+        anonymous download with retries (the re-download of a published artifact; 404 is retried for propagation, then refused)
   artifact_gates.py verify-anonymous --base-url U FILE... [--config scripts/boot/ota_config.gd | --pubkey PEM]
         read every file back from U without credentials and require the exact size and SHA-256, the manifest signature to verify
         with the public key compiled into the app, and the manifest's pck_size / pck_sha256 to describe the downloaded pack
@@ -196,6 +198,11 @@ def main(argv=None) -> int:
     p = sub.add_parser("immutable")
     p.add_argument("files", nargs="+")
     p.add_argument("--base-url", required=True)
+    p = sub.add_parser("download")
+    p.add_argument("--url", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--retries", type=int, default=5)
+    p.add_argument("--delay", type=float, default=5.0)
     p = sub.add_parser("verify-anonymous")
     p.add_argument("files", nargs="+")
     p.add_argument("--base-url", required=True)
@@ -216,6 +223,12 @@ def main(argv=None) -> int:
             if a.pck:
                 problems += scan_pack_names(a.pck) + scan_file(a.pck, token, big=True)
             ok = f"secret scan clean: {len(a.files)} file(s){' + the pack' if a.pck else ''}"
+        elif a.cmd == "download":
+            status, body = _fetch(a.url, a.retries, a.delay, time.sleep)
+            if status != 200:
+                raise OtaError(f"{a.url} is not anonymously downloadable (HTTP {status})")
+            otalib.write_atomic(a.out, body)
+            ok = f"downloaded {a.url} ({len(body)} bytes) anonymously"
         elif a.cmd == "immutable":
             problems = immutability_problems(a.base_url, _files(a.files))
             ok = "no already-published artifact changes"
