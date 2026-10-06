@@ -102,8 +102,17 @@ var stage_near_done : bool = true
 var stage_done : bool = true
 var _main : Node = null
 
+# Nothing is furnished within this horizontal distance of the player's spawn point: the table of a furniture
+# group lands at the room centre, which is where the player starts, and the player then dropped onto it (or onto
+# a 1.7 m crate) instead of the floor.
+@export var spawn_clear_radius : float = 2.2
+var _clear_origin : Vector3 = Vector3.ZERO
+var _has_clear_origin : bool = false
+
 
 func stage_begin(origin: Vector3, near_radius: float) -> void:
+	_clear_origin = origin
+	_has_clear_origin = true
 	stage_near_done = false
 	stage_done = false
 	call("_stage_run", origin, near_radius)   # dynamic call: runs as a background coroutine
@@ -235,6 +244,8 @@ func _spawn_furniture_group_staged(gen: Node, mod: Node3D) -> int:
 		centre.z + randf_range(-j, j)
 	)
 	var total : int = _place_prop(table_pos, TABLE_MODEL)
+	if total == 0:
+		return 0   # no table (kept clear of the spawn point): the stools would circle nothing
 	if _budget_spent():
 		await get_tree().process_frame
 	var stool_count : int = randi_range(2, 4)
@@ -254,12 +265,22 @@ func _spawn_furniture_group_staged(gen: Node, mod: Node3D) -> int:
 	return total
 
 
+func _near_spawn(pos: Vector3) -> bool:
+	if not _has_clear_origin:
+		return false
+	var dx : float = pos.x - _clear_origin.x
+	var dz : float = pos.z - _clear_origin.z
+	return dx * dx + dz * dz < spawn_clear_radius * spawn_clear_radius
+
+
 func _place_prop(pos: Vector3, model_path: String = "", y_rot: float = -1.0, as_topper: bool = false) -> int:
 	# Empty model_path → random prop from PROP_MODELS. Non-empty → caller's choice.
 	# y_rot < 0 → random yaw; otherwise use the caller's exact rotation.
 	# as_topper = true → the destructible_prop keeps small-decor models solid
 	# so they can scatter via shrapnel when the carrier below is kicked.
 	# Returns the number of props actually spawned (1 + any toppers placed on top).
+	if _near_spawn(pos):
+		return 0
 	var chosen : String = model_path if model_path != "" else PROP_MODELS[randi() % PROP_MODELS.size()]
 
 	# Set data vars before add_child() so _ready() inside the prop can use them.

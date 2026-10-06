@@ -39,6 +39,12 @@ func _ready() -> void:
 		await get_tree().physics_frame
 		waited += 1
 	await _frames(30)
+	# The player must start on the room floor: no prop (a 1.7 m crate, a table) may be furnished onto the spawn point.
+	var under := PhysicsRayQueryParameters3D.create(player.global_position, player.global_position + Vector3(0, -4, 0))
+	under.exclude = [player.get_rid()]
+	var under_hit: Dictionary = player.get_world_3d().direct_space_state.intersect_ray(under)
+	var under_body: Node = under_hit.get("collider") as Node
+	_check(under_body == null or not under_body.is_in_group("kickable_prop"), "the player does not start standing on a prop (%s)" % [str(under_body.name) if under_body != null else "nothing"])
 
 	# Launch a homing fireball from open space (a spot in a wall would free it on contact). The dungeon
 	# is random: a free ray does not guarantee a 0.3 m sphere clear of props at the spawn point, so try
