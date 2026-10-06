@@ -40,8 +40,9 @@ carry it (changing them changes the fingerprint: run `python3 tools/ota_runtime.
 An OTA cannot add a new global `class_name`, autoload or input action. Publication = push branch `ota/<channel>/<40-hex sha>`
 (`.github/workflows/ota-publish.yml`); recovery = automatic rollback, the diagnostics overlay and channel revocation. The
 signing key lives outside the repo (CI key store); only the public key is compiled in. Saves are never written by OTA.
-Publishing any OTA, and choosing the public release host (phones cannot read a private repo's releases), need the owner's
-authorization; the source repo stays private.
+OTA files are served from the separate PUBLIC transport repo `verbal76/Purgatory-Dungeon-OTA` (signed update files only, never source, keys or
+secrets; trust comes from the signature + runtime fingerprint, not the host; write access = Actions secret `OTA_RELEASE_TOKEN`); the source repo stays
+private. Publishing an actual OTA to players needs the owner's explicit authorization.
 
 ## Studio splash (Hot Attic Games standing requirement — do not remove)
 
