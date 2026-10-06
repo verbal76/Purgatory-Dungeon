@@ -68,6 +68,14 @@ func _ready() -> void:
 	await _frames(240)
 	var manager = main.get_node("EnemyManager")
 	var player: CharacterBody3D = main.get_node("Player")
+	# The frame count above is not real time: the entry loading screen holds the tree paused for a wall-clock floor, so a fast
+	# headless run could sample the player mid-drop (its height varied 0.9-2.6 m from run to run, and the start room's own
+	# lintel then sat on the attacker's line in about 1 run in 60). Wait until play has really started and the player stands.
+	var waited := 0
+	while (get_tree().paused or not player.is_on_floor()) and waited < 3000:
+		await get_tree().physics_frame
+		waited += 1
+	await _frames(30)
 	manager.set_physics_process(false)
 	for e in manager._active_enemies:
 		if is_instance_valid(e):

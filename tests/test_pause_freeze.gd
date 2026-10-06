@@ -31,6 +31,14 @@ func _ready() -> void:
 	var traps = main.get_node("TrapManager")
 	var player = main.get_node("Player")
 	var pause = main.get_node("pause_menu_function")
+	# 240 frames is not real time: the entry loading screen keeps the tree paused for a wall-clock floor, so a fast headless
+	# run can reach this point with the player still dropping into the start room (the fireball then spawned in a wall). Wait
+	# until play has really started and the player stands.
+	var waited := 0
+	while (get_tree().paused or not player.is_on_floor()) and waited < 3000:
+		await get_tree().physics_frame
+		waited += 1
+	await _frames(30)
 
 	# Launch a homing fireball from open space (a spot in a wall would free it on contact). The dungeon
 	# is random: a free ray does not guarantee a 0.3 m sphere clear of props at the spawn point, so try
