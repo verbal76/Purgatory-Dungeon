@@ -8,6 +8,31 @@ Reference architecture: the Hot Attic Games Godot OTA used by Mote (runtime lock
 channel pointer, staged activation, health-confirmed promotion, rollback). Purgatory Dungeon adopts its properties and
 vocabulary and differs only where this game's size and packaging force it (see "Intentional differences").
 
+## 0. Version identity (owner rule, authoritative)
+
+**A new whole-number version requires a real new APK. An OTA never consumes the next whole number.**
+
+| Version | Meaning |
+|---|---|
+| v6 | the published native APK (cannot receive this OTA format) |
+| **v7** | the next REAL native APK, containing this OTA-capable runtime. `Purgatory-Dungeon-v7.apk` must exist for v7 to exist |
+| v7.1, v7.2, ... | OTAs running on the v7 APK: owner-facing application-layer versions. No new APK, nothing to install |
+| v8 | reserved for the next actual native APK (`Purgatory-Dungeon-v8.apk`); an OTA is never called v8 |
+
+Three identities are kept apart everywhere (UI, diagnostics, manifests, release notes, reports):
+
+1. **Native APK version** = `build_info.json` `public_version` (7), fixed by the installed APK.
+2. **Owner-facing running version** = `7` on the bare baseline, `7.K` while OTA number K of this native generation is active.
+3. **OTA update id** = `ota_id` (`dev-000001`), shown as `#000001`: an internal, channel-wide, forward-only sequence (`seq`).
+   It is independent of K: K restarts at 1 for every new native generation, `seq` never does.
+Plus the native **runtime id + fingerprint** (section 3). Every handoff states all four separately: NATIVE APK VERSION,
+OWNER-FACING RUNNING VERSION, OTA UPDATE ID, NATIVE RUNTIME/FINGERPRINT.
+
+The manifest carries `app_minor` (= K) and `game_version = "<native_version>.<app_minor>"`. The publisher assigns K from the live
+pointer: previous pointer's `app_minor + 1` when the pointer's `native_version` equals this baseline's, otherwise `1`.
+Nothing in this pipeline may create a release named `Purgatory Dungeon vN`, mark anything Latest or produce an APK: those belong
+to the native release procedure (docs/RELEASES.md).
+
 ## 1. Layers
 
 | Layer | Contents | Changes by |
@@ -81,7 +106,7 @@ independent PCK parser and again by the client before mounting). A change set th
   "source_sha": "<40-hex commit that produced the patch>",
   "runtime_id": "android-godot-4.6.0-r1", "runtime_fingerprint": "<64-hex>",
   "minimum_bootstrap_version": 1,
-  "game_version": "7.3.0", "save_schema": 1, "min_save_schema": 1,
+  "game_version": "7.1", "app_minor": 1, "save_schema": 1, "min_save_schema": 1,
   "pck_url": "https://github.com/<host>/releases/download/ota-dev-000003/purgatory-dev-000003.pck",
   "pck_sha256": "<64-hex>", "pck_size": 123456, "created_at": "<UTC>",
   "build_run": {"id": "", "number": "", "attempt": "", "url": ""},
@@ -89,7 +114,9 @@ independent PCK parser and again by the client before mounting). A change set th
   "native_version": 7, "files": [{"path": "godot/...", "op": "add|replace|remove"}]
 }
 ```
-`game_version` = `<native_version>.<seq>.0`. Public name: "Purgatory Dungeon v7 · update 3". `ota_id` = `<channel>-<seq:06d>`.
+`app_minor` (whole number >= 1) is K of section 0; `game_version` = `<native_version>.<app_minor>` (two numeric parts); owner-facing name
+"Purgatory Dungeon v7.1". `ota_id` = `<channel>-<seq:06d>` is the internal update id (`seq` is independent of `app_minor`). The client rejects a
+manifest whose `game_version` is not exactly `<native_version>.<app_minor>`.
 The signature is RSA-3072 PKCS#1 v1.5 over SHA-256 of the exact manifest bytes (`openssl dgst -sha256 -sign`), base64 on one
 line in `manifest.json.sig`. The APK embeds only the public key (`scripts/boot/ota_config.gd`); the private key lives outside
 the repository (CI key store: the private draft release "OTA signing key (do not delete)", or the Actions secret
@@ -97,10 +124,11 @@ the repository (CI key store: the private draft release "OTA signing key (do not
 
 ## 6. Distribution and channel
 
-- Each OTA is an **immutable GitHub Release** `ota-<channel>-<seq:06d>` holding `purgatory-<ota_id>.pck`, `manifest.json`,
+- Each OTA is an **immutable GitHub Release** `ota-<channel>-<seq:06d>` titled "Purgatory Dungeon v7.K (OTA #<seq:06d>)" (never Latest), holding `purgatory-<ota_id>.pck`, `manifest.json`,
   `manifest.json.sig`. It is never edited after publication; a tag that already exists aborts the job.
 - The **channel pointer** is the mutable release `ota-channel-<channel>` whose asset `latest.json` is
-  `{channel, ota_id, seq, runtime_id, manifest_url, signature_url, published_at}`. It only moves forward. Moving it is the
+  `{channel, ota_id, seq, runtime_id, native_version, app_minor, manifest_url, signature_url, published_at}` (`native_version`/`app_minor`
+  feed the next OTA's `app_minor`; clients tolerate extra keys). It only moves forward. Moving it is the
   moment an OTA becomes visible to devices.
 - The installed app follows the channel baked into `ota_config.gd` (`dev` for owner testing; a later `stable` is a second
   pointer, not a second code path).
@@ -147,11 +175,20 @@ schema recorded on the device (this protects rollbacks past a deliberate migrati
 
 ## 10. Diagnostics
 
-Native overlay (five quick taps in the top-left corner, or F9) and `Boot.diagnostics()` text: native version, runtime ID +
-fingerprint, channel, embedded vs OTA, active OTA (id, seq, source SHA, package SHA-256), pending/ready/previous, status
+Native overlay (five quick taps in the top-left corner, or F9) and `Boot.diagnostics()` text. The first lines make the layers obvious:
+
+```
+Purgatory Dungeon v7.1
+Native APK: v7
+Application layer: v7.1            (v7 on the bare baseline)
+OTA: #000001 (dev-000001)          (OTA: none (embedded baseline))
+Runtime: android-godot-4.6.0-r1  fingerprint <64 hex>
+```
+followed by channel, embedded vs OTA, active OTA (id, seq, source SHA, package SHA-256), pending/ready/previous, status
 (up to date / update available / downloaded / offline / incompatible / rejected), last check, last result, rollback count,
 recent events. Buttons: Check, Download, Activate on restart, Roll back, Boot baseline / Re-enable OTA, Copy diagnostics, Close.
-The main menu footer shows `Purgatory Dungeon v7` and `· update N`. No secrets are ever shown.
+The main menu footer shows the owner-facing running version: `Purgatory Dungeon v7` on the baseline, `Purgatory Dungeon v7.1` while OTA
+7.1 runs (never "v7 · update K"); a staged OTA waiting for a restart is added as `· v7.2 ready, restart to apply`. No secrets are ever shown.
 
 ## 11. Publishing (`.github/workflows/ota-publish.yml`)
 
@@ -162,7 +199,7 @@ suite on that SHA; build the baseline pack and compare it with the shipped nativ
 sign (after the key-match check); inspect with the client's own verification code; create the immutable release; re-download the
 published artifacts and verify them again; verify they are anonymously reachable; **only then** advance the pointer (forward only)
 and confirm the live pointer serves the intended OTA; write a receipt (source SHA, runtime, OTA id, hashes, URLs, `published`,
-`pointer_moved`). Any failure before the pointer moves leaves nothing new live. A missing signing key or unconfigured host ends in
+`pointer_moved`; native version, `app_minor`, owner-facing version). Any failure before the pointer moves leaves nothing new live. A missing signing key or unconfigured host ends in
 a receipt with `published: false`.
 
 ## 12. Intentional differences from Mote
@@ -177,8 +214,8 @@ a receipt with `published: false`.
 
 ## 13. v6 -> v7 and recovery of the shipped baseline
 
-v6 (`release/v6`, `a9168e1`), v5 and the validated checkpoint are never modified. v7 is a new APK built from this branch (VERSION 7
-at its release commit). Rolling back the *app* means installing the v6 APK over v7 only if the version code is allowed to go down,
+v6 (`release/v6`, `a9168e1`), v5 and the validated checkpoint are never modified. v7 is a new, real APK built from this branch (VERSION 7
+at its release commit); v7.1 is the first OTA after it. Rolling back the *app* means installing the v6 APK over v7 only if the version code is allowed to go down,
 which Android refuses; the supported rollback of an OTA is the in-app rollback to PREVIOUS / embedded baseline.
 
 ## 14. Open owner decision

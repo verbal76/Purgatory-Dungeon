@@ -25,6 +25,11 @@ so Windows is unchanged. Details, controls table and build pipeline: **docs/ANDR
 
 ## OTA updates (same product, same version number)
 
+**Versioning rule (owner, authoritative): whole numbers = real APKs; decimals = OTAs on that APK generation.** v6 = published APK;
+v7 = the next REAL OTA-capable APK (`Purgatory-Dungeon-v7.apk` must exist); v7.1, v7.2... = OTAs running on the v7 APK (never a new
+APK, never a GitHub Release named `Purgatory Dungeon vN`); v8 only with another real APK. Keep native APK version, owner-facing running
+version (`7` / `7.K`), OTA update id (`#000001`) and native runtime/fingerprint separate; every handoff states all four.
+
 Android-only, from the first v7-generation APK (v1-v6 cannot receive it). One authoritative mechanism, specified in
 **docs/OTA.md**: the native layer `scripts/boot/` (autoload `Boot`, first) mounts a signed, cumulative patch pack for exactly
 one native baseline; a runtime lock (`ota/runtime_lock.json`, `tools/ota_runtime.py`) gives every native build a

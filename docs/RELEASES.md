@@ -90,9 +90,11 @@ The first CI build of 8eb36c3 was superseded within minutes and never delivered,
 - No Android build exists yet, so there is no `versionCode`/package ID to record. When Android
   arrives it joins the same `vN` release; `versionCode` is recorded in the release's technical
   details only.
-- Over-the-air updates (Android only, from the first v7-generation APK; see `docs/OTA.md`): an OTA is a signed patch for one
-  installed native baseline and is shown as "Purgatory Dungeon vN · update K". It is **never** a new `vN`, never creates
-  a GitHub Release titled `Purgatory Dungeon v...` and never changes Latest. Anything that cannot ship OTA
-  (`tools/ota/classify.py`, `ota/boundary.json`) still ships as the next numbered APK/zip exactly as described above.
-  v1-v6 have no OTA client that can receive the v7 format.
+- Over-the-air updates (Android only, from the first v7-generation APK; see `docs/OTA.md` section 0). **A new whole-number
+  version requires a real new APK**: v6 = the published APK, v7 = the next real OTA-capable APK (`Purgatory-Dungeon-v7.apk` must
+  exist), v7.1 / v7.2 / ... = OTAs on the v7 APK (no new APK to install; shown as "Purgatory Dungeon v7.K"), v8 = the next
+  actual APK. An OTA is **never** a new `vN`, never creates a GitHub Release titled `Purgatory Dungeon vN` and never changes
+  Latest. Anything that cannot ship OTA (`tools/ota/classify.py`, `ota/boundary.json`) ships as the next numbered APK/zip exactly as
+  described above. v1-v6 have no OTA client that can receive the v7 format. Handoffs state NATIVE APK VERSION, OWNER-FACING
+  RUNNING VERSION, OTA UPDATE ID and NATIVE RUNTIME/FINGERPRINT separately.
 - The game has no About screen; the version is on the main menu and in the startup log.

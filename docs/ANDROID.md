@@ -175,8 +175,7 @@ The APK contains the OTA client (`scripts/boot/`) and declares the INTERNET perm
 index and package (nothing else uses the network). Saves live in `user://PurgetoryDungeon`;
 OTA state lives in `user://ota`, so updates never write the save folder, and the save folder is backed up before an update is
 first activated. The APK bakes `runtime_id` / `runtime_fingerprint` into `build_info.json`; `tools/verify_apk.py` requires them.
-How updates are made, published, applied and rolled back: `docs/OTA.md`. The main menu footer shows `Purgatory Dungeon vN` and
-`· update K` when an update is running; tapping the top-left corner 5 times opens the diagnostics overlay.
+How updates are made, published, applied and rolled back: `docs/OTA.md`. The main menu footer shows the running version: `Purgatory Dungeon v7` on the APK as installed and `v7.K` while an OTA runs; tapping the top-left corner 5 times opens the diagnostics overlay.
 
 ## Lifecycle and saves
 - Saves live in the app's private `user://` (folder `PurgetoryDungeon`, spelling kept for
