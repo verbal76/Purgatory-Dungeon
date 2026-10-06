@@ -341,16 +341,23 @@ func update_player_exploration() -> void:
 	if player == null: return
 	var player_pos: Vector3 = player.global_position
 
-	for module_root in placed_modules:
-		if module_root == null or not is_instance_valid(module_root): continue
-		if module_root.has_meta("explored") and bool(module_root.get_meta("explored")): continue
+	# Only the modules whose footprint can reach the player (padding included) are tested: this runs every
+	# EXPLORE_INTERVAL for the whole run and used to walk all ~330 placed modules each time.
+	var pad : float = exploration_padding
+	for ix in 2:
+		for iz in 2:
+			var probe := Vector3(player_pos.x + (pad if ix == 1 else -pad), player_pos.y,
+					player_pos.z + (pad if iz == 1 else -pad))
+			for module_root in _modules_near_point(probe):
+				if module_root == null or not is_instance_valid(module_root): continue
+				if module_root.has_meta("explored") and bool(module_root.get_meta("explored")): continue
 
-		var module_aabb: AABB = _get_module_cached_aabb(module_root)
-		if module_aabb.size == Vector3.ZERO: continue
-		module_aabb = _expanded_aabb(module_aabb, exploration_padding)
+				var module_aabb: AABB = _get_module_cached_aabb(module_root)
+				if module_aabb.size == Vector3.ZERO: continue
+				module_aabb = _expanded_aabb(module_aabb, pad)
 
-		if module_aabb.has_point(player_pos):
-			module_root.set_meta("explored", true)
+				if module_aabb.has_point(player_pos):
+					module_root.set_meta("explored", true)
 
 
 func get_map_bounds_xz() -> Rect2:

@@ -117,6 +117,13 @@ func _report() -> void:
 		var xf: Transform3D = mm.global_transform
 		lay += "%s|%.2f,%.2f,%.2f|%.2f,%.2f;" % [mm.scene_file_path.get_file(), xf.origin.x, xf.origin.y, xf.origin.z, xf.basis.x.x, xf.basis.x.z]
 	print("ENTRY layout_hash=%d modules=%d" % [lay.hash(), gen.placed_modules.size()])
+	# Cost of one exploration update with nothing explored yet (the worst case, run every 0.5 s).
+	for mm in gen.placed_modules:
+		mm.set_meta("explored", false)
+	var tx := Time.get_ticks_usec()
+	for i in 20:
+		gen.update_player_exploration()
+	print("ENTRY exploration update: %.3f ms per call" % [float(Time.get_ticks_usec() - tx) / 20000.0])
 	var total_frames := _count
 	var h := maxi(_handover_frame, 0)
 	var over33 := 0

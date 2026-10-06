@@ -255,9 +255,10 @@ func _boot_population(active_player: Node3D, spawn_origin: Vector3) -> void:
 	GameClock.run_ended.connect(_on_run_ended)
 	_mark("clock_started")
 	await get_tree().process_frame
-	_boot_health_orb_manager(spawn_origin)
 	GlobeManager.spawn_globes(dungeon_generation_function)
 	_mark("globes_spawned")
+	await get_tree().process_frame
+	_boot_health_orb_manager(spawn_origin)
 	await get_tree().process_frame
 	_boot_trap_manager(spawn_origin)
 	# SURGICAL ADD: Show the wallet overlay only in the dungeon.
