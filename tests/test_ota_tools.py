@@ -1839,7 +1839,7 @@ class TestE2eDriver(unittest.TestCase):
         r = run([sys.executable, os.path.join(TESTS, "ota_e2e.py"), "--list"])
         self.assertEqual(r.returncode, 0, out(r))
         for name in ("no_network_start", "check_stage_apply_promote", "crash_loop", "supersede_and_rollback", "baseline_fallbacks", "fault_transport",
-                     "fault_pointer", "fault_manifest"):
+                     "fault_pointer", "fault_manifest", "pointer_lag", "cdn_redirect", "asset_origin"):
             self.assertIn(name, r.stdout)
         r = run([sys.executable, os.path.join(TESTS, "ota_e2e.py")])
         self.assertNotEqual(r.returncode, 0)
@@ -1848,9 +1848,13 @@ class TestE2eDriver(unittest.TestCase):
         src = rt(os.path.join(TESTS, "ota_e2e.py"))
         for fault in ("truncated-body", "wrong-bytes", "hang-pointer", "hang-manifest", "hang-package", "404-pointer", "404-manifest", "404-package",
                       "pointer-other-channel", "malformed-manifest", "bad-signature", "wrong-runtime", "wrong-fingerprint", "wrong-channel",
-                      "wrong-base-sha", "stale", "crash"):
+                      "wrong-base-sha", "stale", "crash", "pck-url-other-host", "pck-url-other-repo-path", "pointer-url-other-host",
+                      "pointer-url-other-repo-path", "cdn-wrong-bytes", "cdn-truncated"):
             self.assertIn(fault, src, fault)
         self.assertIn("--ota-pointer=", src)
+        self.assertIn("/releases/download/ota-channel-", src, "the server mirrors the same-repository Releases layout")
+        self.assertIn("/objects/", src, "and the 302 hop to the signed objects URL")
+        self.assertIn("lag_pointer", src)
         self.assertNotIn("github.com", src.replace("https://github.com/o/r", ""), "the driver never talks to GitHub")
 
     def test_probe_matches_the_contract(self):
