@@ -20,6 +20,8 @@ Every command fails closed: a non-zero exit stops the job before anything become
                                                         exactly the published bytes (a private host fails here)
   publish_gates.py receipt --out F [--published 0|1] [--pointer-moved 0|1] [--reason TEXT] [fact options]
                                                         the publication receipt (shape checked by validate_receipt)
+  publish_gates.py summary receipt.json                 the receipt as separate lines (native APK, running version, OTA id, runtime, base URL ...)
+  (artifact_gates.py: transport-neutral name allowlist, secret scan, immutability and anonymous read-back gates)
   publish_gates.py baseline BUILD_INFO.json [--channel C]
                                                         validate the shipped baseline's build_info.json and print its identity
   publish_gates.py same-runtime --baseline BUILD_INFO.json --current RUNTIME.json
@@ -177,7 +179,7 @@ def anonymous_verdict(results) -> list:
 RECEIPT_KEYS = ("schema", "published", "pointer_moved", "release_created", "reason", "channel", "ota_id", "seq", "native_version",
                 "app_minor", "owner_version", "source_sha",
                 "base_source_sha", "native_base_tag", "runtime_id", "runtime_fingerprint", "pck_sha256", "pck_size",
-                "manifest_sha256", "signature_sha256", "urls", "release_host", "run", "created_at")
+                "manifest_sha256", "signature_sha256", "urls", "release_host", "base_url", "anonymous_read_verified", "run", "created_at")
 
 
 def make_receipt(published: bool, pointer_moved: bool, release_created: bool, reason: str = "", **facts) -> dict:
@@ -202,6 +204,24 @@ def make_receipt(published: bool, pointer_moved: bool, release_created: bool, re
     return r
 
 
+def summary_lines(r: dict) -> list:
+    """The receipt as separate human lines (job summary): the three identities are never merged into one string."""
+    def yn(v):
+        return "yes" if v else "no"
+    nv = r.get("native_version")
+    seq = r.get("seq")
+    return [
+        f"Native APK: {'v%d' % nv if nv else 'unknown'}",
+        f"Owner-facing running version: {r.get('owner_version') or 'unknown'}",
+        f"OTA update id: {('#%06d' % seq) if seq else 'unknown'}" + (f" ({r['ota_id']})" if r.get("ota_id") else ""),
+        f"Runtime: {r.get('runtime_id') or 'unknown'} / {r.get('runtime_fingerprint') or 'unknown'}",
+        f"Base URL: {r.get('base_url') or 'unknown'}",
+        f"Anonymous read verified: {yn(r.get('anonymous_read_verified'))}",
+        f"Pointer moved: {yn(r.get('pointer_moved'))}",
+        f"Published: {yn(r.get('published'))}" + ("" if r.get("published") else f" (reason: {r.get('reason')})"),
+    ]
+
+
 def validate_receipt(r: dict) -> str:
     """'' when the receipt has the documented shape and is internally consistent."""
     if set(r) != set(RECEIPT_KEYS):
@@ -215,6 +235,10 @@ def validate_receipt(r: dict) -> str:
         return "the pointer cannot move without a created release"
     if not r["published"] and not r["reason"]:
         return "an unpublished receipt must say why (reason)"
+    if r["anonymous_read_verified"] is not None and not isinstance(r["anonymous_read_verified"], bool):
+        return "anonymous_read_verified must be a boolean"
+    if r["published"] and r["anonymous_read_verified"] is not True:
+        return "a published receipt needs anonymous_read_verified (every artifact and the pointer were read back without credentials)"
     if r["published"]:
         for k in ("channel", "ota_id", "seq", "native_version", "app_minor", "owner_version", "source_sha", "runtime_id", "runtime_fingerprint", "pck_sha256", "pck_size",
                   "manifest_sha256", "signature_sha256"):
@@ -428,10 +452,14 @@ def main(argv=None) -> int:
               "pck-sha256", "manifest-sha256", "signature-sha256", "release-host", "run-id", "run-url", "pck-url",
               "manifest-url", "signature-url", "pointer-url"):
         p.add_argument("--" + k, default="")
+    p.add_argument("--anonymous-read-verified", default="")
+    p.add_argument("--base-url", default="")
     p.add_argument("--seq", type=int, default=0)
     p.add_argument("--native-version", type=int, default=0)
     p.add_argument("--app-minor", type=int, default=0)
     p.add_argument("--pck-size", type=int, default=0)
+    p = sub.add_parser("summary")
+    p.add_argument("receipt")
     p = sub.add_parser("baseline")
     p.add_argument("build_info")
     p.add_argument("--channel", default="")
@@ -486,6 +514,8 @@ def main(argv=None) -> int:
             print(f"{len(a.expect)} published object(s) are anonymously reachable with the exact published bytes")
         elif a.cmd == "receipt":
             facts = {"channel": a.channel or None, "ota_id": a.ota_id or None, "seq": a.seq or None, "native_version": a.native_version or None,
+                     "base_url": a.base_url or None,
+                     "anonymous_read_verified": None if a.anonymous_read_verified == "" else _flag(a.anonymous_read_verified),
                      "app_minor": a.app_minor or None, "source_sha": a.source_sha or None,
                      "base_source_sha": a.base_source_sha or None, "native_base_tag": a.native_base_tag or None,
                      "runtime_id": a.runtime_id or None, "runtime_fingerprint": a.runtime_fingerprint or None,
@@ -497,6 +527,8 @@ def main(argv=None) -> int:
             r = make_receipt(_flag(a.published), _flag(a.pointer_moved), _flag(a.release_created), a.reason, **facts)
             otalib.write_atomic(a.out, otalib.canonical_json(r))
             print(json.dumps(r, indent=2, sort_keys=True))
+        elif a.cmd == "summary":
+            print("\n".join(summary_lines(otalib.load_json_bytes(otalib.read_bytes(a.receipt), a.receipt))))
         elif a.cmd == "baseline":
             b = baseline_identity(otalib.load_json_bytes(otalib.read_bytes(a.build_info), a.build_info), a.channel)
             for k in ("base_sha", "runtime_id", "runtime_fingerprint", "ota_channel", "native_version"):

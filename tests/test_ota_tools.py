@@ -49,6 +49,7 @@ import classify as classify_mod  # noqa: E402
 import ota_runtime  # noqa: E402
 import ota_e2e  # noqa: E402
 import verify_package as vp  # noqa: E402
+import artifact_gates  # noqa: E402
 
 BASE40 = "1" * 40
 SRC40 = "2" * 40
@@ -1568,7 +1569,8 @@ class TestPublishGates(TmpCase):
     def full_receipt(self, **over):
         facts = dict(channel="dev", ota_id="dev-000003", seq=3, native_version=7, app_minor=2, source_sha=SRC40, base_source_sha=BASE40, native_base_tag="v7",
                      runtime_id="android-godot-4.6.0-r1", runtime_fingerprint=FP64, pck_sha256="1" * 64, pck_size=123,
-                     manifest_sha256="2" * 64, signature_sha256="3" * 64, release_host="o/r",
+                     manifest_sha256="2" * 64, signature_sha256="3" * 64, release_host="o/r", base_url="https://h/releases/download/ota-dev-000003",
+                     anonymous_read_verified=True,
                      urls={"pck": "https://h/p", "manifest": "https://h/m", "signature": "https://h/s", "pointer": "https://h/l"},
                      run={"id": "9", "url": "https://h/run/9"})
         facts.update(over)
@@ -1595,6 +1597,10 @@ class TestPublishGates(TmpCase):
         with self.assertRaises(otalib.OtaError):
             gates.make_receipt(False, False, False, "")
         # inconsistent claims are refused
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(True, True, True, "", **self.full_receipt(anonymous_read_verified=None))
+        with self.assertRaises(otalib.OtaError):
+            gates.make_receipt(True, True, True, "", **self.full_receipt(anonymous_read_verified=False))
         with self.assertRaises(otalib.OtaError):
             gates.make_receipt(True, False, True, "", **self.full_receipt())
         with self.assertRaises(otalib.OtaError):
@@ -1626,7 +1632,7 @@ class TestPublishGates(TmpCase):
                  "--source-sha", SRC40, "--runtime-id", "android-godot-4.6.0-r1",
                  "--runtime-fingerprint", FP64, "--pck-sha256", "1" * 64, "--pck-size", "9", "--manifest-sha256", "2" * 64,
                  "--signature-sha256", "3" * 64, "--pck-url", "https://h/p", "--manifest-url", "https://h/m", "--signature-url", "https://h/s",
-                 "--pointer-url", "https://h/l")
+                 "--pointer-url", "https://h/l", "--base-url", "https://h/b", "--anonymous-read-verified", "1")
         self.assertEqual(r.returncode, 0, out(r))
         self.assertTrue(jload(self.p("r3.json"))["published"])
         self.assertEqual((jload(self.p("r3.json"))["owner_version"], jload(self.p("r3.json"))["app_minor"]), ("v7.2", 2))
@@ -2022,6 +2028,222 @@ class TestKeysGitHubFlow(TmpCase):
 
 
 
+
+# ------------------------------------------------------------------------------------------------ transport-neutral artifact gates
+
+class FileServer:
+    """Serves {path: bytes} anonymously from 127.0.0.1 and records the headers it was asked with."""
+
+    def __init__(self, files):
+        self.files, self.seen = dict(files), []
+        me = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                me.seen.append({"path": self.path, "auth": self.headers.get("Authorization"), "cookie": self.headers.get("Cookie")})
+                body = me.files.get(self.path)
+                self.send_response(200 if body is not None else 404)
+                data = body if body is not None else b"missing"
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.srv.server_address[1]}"
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+class TestArtifactGates(TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.key = self.p("k.pem")
+        self.pub = genkey(self.key)
+        self.pck = pck_of(self.p("purgatory-dev-000003.pck"), {"scripts/a.gdc": b"A" * 300})
+        self.m = {"pck_size": os.path.getsize(self.pck), "pck_sha256": otalib.sha256_file(self.pck), "seq": 3}
+        write(self.p("manifest.json"), otalib.canonical_json(self.m))
+        otalib.sign_to_file(self.key, self.p("manifest.json"), self.p("manifest.json.sig"))
+        self.files = [self.pck, self.p("manifest.json"), self.p("manifest.json.sig")]
+        self.pem = rb(self.pub)
+
+    def serve(self, **over):
+        files = {"/" + os.path.basename(f): rb(f) for f in self.files}
+        files.update(over)
+        srv = FileServer(files)
+        self.addCleanup(srv.close)
+        return srv
+
+    def verify(self, srv, files=None, pem=None):
+        return artifact_gates.verify_anonymous(srv.base, {os.path.basename(f): f for f in (files or self.files)}, pem or self.pem,
+                                               retries=1, delay=0, sleep=lambda s: None)
+
+    # -- names
+    def test_name_allowlist(self):
+        self.assertEqual(artifact_gates.name_violations(["purgatory-dev-000003.pck", "manifest.json", "manifest.json.sig", "latest.json"]), [])
+        self.assertEqual(artifact_gates.name_violations(["purgatory-dev-000003.pck"], "dev", 3), [])
+        for bad in ("source.zip", "Purgatory-Dungeon-v7.apk", "ota-signing.pem", "purgatory-dev-3.pck", "purgatory-Dev-000003.pck", "manifest.json.bak",
+                    "payload.pck", "README.md", "../manifest.json", "purgatory-dev-000003.pck.sig"):
+            self.assertTrue(artifact_gates.name_violations([bad]), bad)
+        self.assertTrue(artifact_gates.name_violations(["purgatory-dev-000004.pck"], "dev", 3), "another publication's pack")
+        self.assertTrue(artifact_gates.name_violations(["purgatory-stable-000003.pck"], "dev", 3))
+        self.assertEqual(tool("artifact_gates.py", "check-names", *self.files, "--channel", "dev", "--seq", "3").returncode, 0)
+        r = tool("artifact_gates.py", "check-names", self.pck, write(self.p("extra.zip"), b"x"))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("extra.zip", r.stderr)
+
+    # -- secrets
+    def test_secret_scan(self):
+        clean = write(self.p("clean.json"), '{"a": 1}')
+        key = write(self.p("sig.txt"), "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----")
+        word = write(self.p("note.md"), "prose about a PRIVATE KEY")
+        tok = write(self.p("pointer.json"), '{"x": "ghp_SuperSecretTokenValue123"}')
+        self.assertEqual(artifact_gates.scan_file(clean), [])
+        self.assertTrue(artifact_gates.scan_file(key))
+        self.assertTrue(artifact_gates.scan_file(word), "small public files use the plain marker")
+        self.assertEqual(artifact_gates.scan_file(tok), [])
+        hits = artifact_gates.scan_file(tok, token="ghp_SuperSecretTokenValue123")
+        self.assertEqual(len(hits), 1)
+        self.assertNotIn("ghp_Super", hits[0], "the value is never echoed")
+        pem = b"-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n"
+        packs = {"clean": self.pck,
+                 "bytes": pck_of(self.p("b.pck"), {"data/notes.txt": b"x" * 100 + pem}),
+                 "name": pck_of(self.p("n.pck"), {"data/ota-signing.key": b"x"}),
+                 "pemname": pck_of(self.p("p.pck"), {"certs/server.pem": b"public"})}
+        self.assertEqual(artifact_gates.scan_pack_names(packs["clean"]) + artifact_gates.scan_file(packs["clean"], big=True), [])
+        self.assertTrue(artifact_gates.scan_file(packs["bytes"], big=True))
+        self.assertTrue(artifact_gates.scan_pack_names(packs["name"]))
+        self.assertTrue(artifact_gates.scan_pack_names(packs["pemname"]))
+        self.assertTrue(artifact_gates.scan_file(write(self.p("big.bin"), b"y" * ((8 << 20) - 20) + pem), big=True), "a marker split across read chunks is found")
+        self.assertEqual(tool("artifact_gates.py", "scan-secrets", *self.files, "--pck", self.pck).returncode, 0)
+        r = tool("artifact_gates.py", "scan-secrets", key)
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("AAAA", out(r))
+        r = tool("artifact_gates.py", "scan-secrets", tok, "--token-env", "T", env={"T": "ghp_SuperSecretTokenValue123"})
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("ghp_Super", out(r))
+        self.assertEqual(tool("artifact_gates.py", "scan-secrets", tok, "--token-env", "T", env={"T": ""}).returncode, 0)
+        self.assertEqual(tool("artifact_gates.py", "scan-secrets", "--pck", packs["bytes"]).returncode, 1)
+        self.assertEqual(tool("artifact_gates.py", "scan-secrets", self.p("missing")).returncode, 1)
+
+    # -- immutability
+    def test_published_artifacts_never_change_bytes(self):
+        fresh = FileServer({})
+        self.addCleanup(fresh.close)
+        files = {os.path.basename(f): f for f in self.files}
+        self.assertEqual(artifact_gates.immutability_problems(fresh.base, files), [], "nothing published yet: fine")
+        same = self.serve()
+        self.assertEqual(artifact_gates.immutability_problems(same.base, files), [], "identical bytes: a harmless re-run")
+        other = self.serve(**{"/manifest.json": b"{\"seq\": 99}"})
+        probs = artifact_gates.immutability_problems(other.base, files)
+        self.assertEqual(len(probs), 1)
+        self.assertIn("DIFFERENT bytes", probs[0])
+        self.assertIn("immutable", probs[0])
+        pck_changed = self.serve(**{"/purgatory-dev-000003.pck": b"tampered"})
+        self.assertTrue(artifact_gates.immutability_problems(pck_changed.base, files))
+        self.assertEqual(artifact_gates.immutability_problems(other.base, {"latest.json": write(self.p("latest.json"), b"{}")}), [],
+                         "the pointer is the one mutable object")
+        self.assertTrue(artifact_gates.immutability_problems("http://127.0.0.1:9", files), "an unreachable answer is not a pass")
+        r = tool("artifact_gates.py", "immutable", "--base-url", other.base, *self.files)
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(tool("artifact_gates.py", "immutable", "--base-url", fresh.base, *self.files).returncode, 0)
+
+    # -- anonymous read-back
+    def test_anonymous_read_back_with_signature(self):
+        srv = self.serve()
+        self.assertEqual(self.verify(srv), [])
+        self.assertTrue(all(s["auth"] is None and s["cookie"] is None for s in srv.seen), "no credential is ever sent")
+        # missing file (what a private host looks like to an anonymous client)
+        gone = FileServer({})
+        self.addCleanup(gone.close)
+        probs = self.verify(gone)
+        unreadable = [p for p in probs if "not anonymously readable" in p]
+        self.assertEqual(len(unreadable), 3)
+        self.assertTrue(all("HTTP 404" in p for p in unreadable))
+        # wrong bytes, same size
+        raw = bytearray(rb(self.pck))
+        raw[200] ^= 0xFF
+        probs = self.verify(self.serve(**{"/purgatory-dev-000003.pck": bytes(raw)}))
+        self.assertTrue(any("different SHA-256" in p for p in probs))
+        self.assertTrue(any("SHA-256 differs from the signed manifest" in p for p in probs))
+        # wrong size
+        probs = self.verify(self.serve(**{"/purgatory-dev-000003.pck": rb(self.pck) + b"x"}))
+        self.assertTrue(any("bytes, published" in p for p in probs))
+        # a signature that does not verify with the app's key (another key, flipped byte, garbage)
+        other = self.p("other.pem")
+        genkey(other)
+        probs = self.verify(srv, pem=rb(other + ".pub"))
+        self.assertTrue(any("does not verify with the public key compiled into the app" in p for p in probs))
+        sig = bytearray(base64.b64decode(rb(self.p("manifest.json.sig"))))
+        sig[5] ^= 0xFF
+        write(self.p("flipped.sig"), base64.b64encode(bytes(sig)))
+        flipped = [self.pck, self.p("manifest.json"), self.p("flipped.sig")]
+        shutil.copyfile(self.p("flipped.sig"), self.p("m2.sig"))
+        srv2 = FileServer({"/purgatory-dev-000003.pck": rb(self.pck), "/manifest.json": rb(self.p("manifest.json")), "/manifest.json.sig": rb(self.p("flipped.sig"))})
+        self.addCleanup(srv2.close)
+        probs = artifact_gates.verify_anonymous(srv2.base, {"purgatory-dev-000003.pck": self.pck, "manifest.json": self.p("manifest.json"),
+                                                          "manifest.json.sig": self.p("flipped.sig")}, self.pem, retries=1, sleep=lambda s: None)
+        self.assertTrue(any("signature" in p for p in probs), probs)
+        # the manifest must describe the downloaded pack (signed lies are caught too)
+        bad = dict(self.m, pck_size=self.m["pck_size"] + 1)
+        write(self.p("manifest.json"), otalib.canonical_json(bad))
+        otalib.sign_to_file(self.key, self.p("manifest.json"), self.p("manifest.json.sig"))
+        probs = self.verify(self.serve())
+        self.assertTrue(any("differs from the signed manifest" in p for p in probs))
+        # the manifest and its signature are verified together
+        probs = artifact_gates.verify_anonymous(srv.base, {"manifest.json": self.p("manifest.json")}, self.pem, retries=1, sleep=lambda s: None)
+        self.assertTrue(any("together" in p for p in probs))
+
+    def test_anonymous_read_back_cli_uses_the_key_of_the_config(self):
+        srv = self.serve()
+        cfg = write(self.p("ota_config.gd"), 'extends RefCounted\nconst PUBLIC_KEY_PEM := """\n' + rt(self.pub) + '"""\n')
+        r = tool("artifact_gates.py", "verify-anonymous", "--base-url", srv.base, "--config", cfg, "--retries", "1", *self.files)
+        self.assertEqual(r.returncode, 0, out(r))
+        self.assertIn("signature verified with the app's public key", r.stdout)
+        other = self.p("other.pem")
+        genkey(other)
+        write(cfg, 'extends RefCounted\nconst PUBLIC_KEY_PEM := """\n' + rt(other + ".pub") + '"""\n')
+        r = tool("artifact_gates.py", "verify-anonymous", "--base-url", srv.base, "--config", cfg, "--retries", "1", *self.files)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("REFUSED", r.stderr)
+        r = tool("artifact_gates.py", "verify-anonymous", "--base-url", srv.base, "--retries", "1", *self.files)
+        self.assertEqual(r.returncode, 1, "no key, no verification")
+
+    def test_the_gates_know_no_transport(self):
+        text = rt(os.path.join(OTA, "artifact_gates.py"))
+        for needle in ("api.github.com", "GH_TOKEN", "gh release", "releases/download", "OTA_RELEASE_TOKEN", "verbal76"):
+            self.assertNotIn(needle, text.replace("GitHub Releases `.../releases/download/<tag>`", ""), needle)
+
+    # -- receipt
+    def test_receipt_and_summary_lines(self):
+        facts = TestPublishGates.full_receipt(self)
+        r = gates.make_receipt(True, True, True, "", **facts)
+        self.assertTrue(r["anonymous_read_verified"])
+        self.assertEqual(r["base_url"], "https://h/releases/download/ota-dev-000003")
+        u = gates.make_receipt(False, False, False, "no signing key", channel="dev", source_sha=SRC40, native_version=7, app_minor=2)
+        self.assertIsNone(u["anonymous_read_verified"])
+        lines = gates.summary_lines(r)
+        self.assertEqual(lines[0], "Native APK: v7")
+        self.assertEqual(lines[1], "Owner-facing running version: v7.2")
+        self.assertEqual(lines[2], "OTA update id: #000003 (dev-000003)")
+        self.assertTrue(lines[3].startswith("Runtime: android-godot-4.6.0-r1 / "))
+        self.assertIn("Base URL: https://h/releases/download/ota-dev-000003", lines)
+        self.assertIn("Anonymous read verified: yes", lines)
+        self.assertIn("Published: yes", lines)
+        ul = gates.summary_lines(u)
+        self.assertIn("Anonymous read verified: no", ul)
+        self.assertIn("Published: no (reason: no signing key)", ul)
+        write(self.p("r.json"), otalib.canonical_json(r))
+        cli = tool("publish_gates.py", "summary", self.p("r.json"))
+        self.assertEqual(cli.stdout.strip().splitlines(), lines)
+        self.assertNotRegex(" ".join(lines), r"ghp_|github_pat_|PRIVATE")
+
+
 # ------------------------------------------------------------------------------------------------ workflows (static)
 
 def wf(name):
@@ -2167,6 +2389,24 @@ class TestPublishWorkflow(unittest.TestCase):
         self.assertEqual(self.y.count("gh release upload"), 1, "the only upload is latest.json")
         self.assertIn('"$OUT/latest.json" --repo "$HOST" --clobber', step16)
         self.assertEqual(self.y.count("--clobber"), 2, "clobber: the pointer upload and the local re-download directory only")
+
+    def test_transport_neutral_gates_are_wired(self):
+        step13 = self.y[self.pos("name: 13 Create the immutable release"):self.pos("name: 14 Re-download")]
+        for needle in ("artifact_gates.py check-names", "artifact_gates.py scan-secrets", "--pck", "artifact_gates.py immutable"):
+            self.assertIn(needle, step13, needle)
+        self.assertLess(step13.index("artifact_gates.py immutable"), step13.index("gh release create"), "all gates run before anything is created")
+        self.assertLess(step13.index("artifact_gates.py scan-secrets"), step13.index("gh release create"))
+        step15 = self.y[self.pos("name: 15 Verify the published objects"):self.pos("name: 16 Advance the channel pointer")]
+        self.assertIn("artifact_gates.py verify-anonymous", step15)
+        self.assertIn("--config scripts/boot/ota_config.gd", step15, "the signature is checked with the public key compiled into the app")
+        self.assertIn("env -u GH_TOKEN", step15)
+        step16 = self.y[self.pos("name: 16 Advance the channel pointer"):self.pos("name: 17 Publication receipt")]
+        self.assertLess(step16.index("artifact_gates.py scan-secrets"), step16.index("gh release upload"))
+        self.assertLess(step16.index("pointer-confirm"), step16.index("OTA_ANON_POINTER=1"))
+        rec = self.y[self.pos("name: 17 Publication receipt"):]
+        for needle in ("--anonymous-read-verified", "--base-url", "publish_gates.py summary", 'OTA_ANON_ARTIFACTS', 'OTA_ANON_POINTER'):
+            self.assertIn(needle, rec, needle)
+        self.assertNotIn("artifact_gates.py", rec)
 
     def test_no_release_or_tag_outside_the_ota_flow(self):
         for m in re.finditer(r"gh release (create|upload|edit|delete)\b[^\n]*", self.y):
