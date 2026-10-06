@@ -31,6 +31,11 @@ extends Node
 ##   PERF_SOAK=0            N > 0: after the viewpoints, walk the player through the level for N seconds with
 ##                          the game running (use with PERF_ENEMIES=1, best headless) and report the frame-time
 ##                          distribution plus what the slowest frames contained (node creation, allocation, script / physics time)
+##   PERF_CULL=1            0 disables the ModuleVisibility distance culling for the whole run
+##   PERF_SHOT=0            1 captures every viewpoint culled vs unculled and reports the pixel difference
+##                          (PERF_SHOT_DIR=path also saves culled / full / diff x16 PNGs); needs a renderer
+##   PERF_AMBIENT=          "bright" applies the ambient of the visibility worker (0.62,0.54,0.48 x 0.12)
+##   PERF_VIEWS accepts sight1,sight2,sight3: the three longest straight sight lines in the level
 ##   PERF_OUT=path          also write the JSON summary to this file
 ## The last output line starts with PERFJSON and holds everything as JSON.
 
@@ -43,6 +48,7 @@ var _gen: Node = null
 var _cam: Camera3D = null
 var _player: Node3D = null
 var _headless: bool = false
+var _mv: Node = null   # ModuleVisibility (distance culling), when the game has one
 var _reseed: int = -1   # >= 0 while the probe re-seeds the global RNG every frame (see _process)
 
 
@@ -103,6 +109,17 @@ func _ready() -> void:
 		_player.set_process_input(false)
 		_player.set_process_unhandled_input(false)
 	_hide_enemies_if_needed()
+	_mv = _main.get_node_or_null("ModuleVisibility")
+	if _env_i("PERF_CULL", 1) == 0 and _mv != null:
+		_mv.set_enabled(false)
+	if _env_s("PERF_AMBIENT", "") == "bright":
+		# the visibility worker's ambient: colour (0.62, 0.54, 0.48), energy 0.12
+		var lm0 := _main.get_node_or_null("LightingManager")
+		var we0 := lm0.get_node_or_null("WorldEnvironment") as WorldEnvironment if lm0 != null else null
+		if we0 != null:
+			we0.environment.ambient_light_color = Color(0.62, 0.54, 0.48)
+			we0.environment.ambient_light_energy = 0.12
+			_results["ambient"] = "bright (0.62,0.54,0.48 x 0.12)"
 	_results["generation"] = _generation_facts()
 	_results["census"] = _census()
 
@@ -347,6 +364,36 @@ func _pick_viewpoints() -> Dictionary:
 	halls.sort_custom(func(a, b): return maxf(a.aabb.size.x, a.aabb.size.z) > maxf(b.aabb.size.x, b.aabb.size.z))
 	if not halls.is_empty():
 		out["corridor"] = halls[0]
+	# "sight1..3": the modules with the longest straight sight lines in the level (worst case for distance culling)
+	var sights: Array = []
+	for d in mods:
+		if d.name.contains("closer") or d.name.contains("end") or d.name.contains("connector") or d.name.contains("tee") or d.name.contains("rectangle"):   # tee / rectangle have partial wall colliders (see the torch seat misses)
+			continue
+		var eye := _eye_position(d, true)
+		if eye == Vector3.INF:
+			continue
+		var sc := _sight_scan(eye)
+		if int(sc[2]) > 0 or float(sc[0]) < 0.0:
+			continue
+		sights.append({"d": d, "len": sc[0], "dir": sc[1]})
+	if OS.get_environment("PERF_DEBUG_SIGHT") != "":
+		print("DBG sight candidates: ", sights.size(), " of ", mods.size())
+	sights.sort_custom(func(a, b): return a["len"] > b["len"])
+	var picked: Array = []
+	for sg in sights:
+		var far_enough := true
+		for pk in picked:
+			if (sg["d"].aabb.get_center() as Vector3).distance_to(pk["d"].aabb.get_center()) < 60.0:
+				far_enough = false
+		if far_enough:
+			picked.append(sg)
+		if picked.size() >= 3:
+			break
+	for i in picked.size():
+		var dd: Dictionary = picked[i]["d"].duplicate()
+		dd["force_dir"] = picked[i]["dir"]
+		dd["sight_len"] = picked[i]["len"]
+		out["sight%d" % (i + 1)] = dd
 	# "busiest": the module centre with the most torches within light fade distance
 	var torches: Array = _gen.registered_torches if "registered_torches" in _gen else []
 	var best: Dictionary = {}
@@ -365,7 +412,7 @@ func _pick_viewpoints() -> Dictionary:
 	return out
 
 
-func _eye_position(d: Dictionary) -> Vector3:
+func _eye_position(d: Dictionary, strict: bool = false) -> Vector3:
 	var a: AABB = d.aabb
 	var c: Vector3 = a.get_center()
 	var floor_y: float = (d.mod as Node3D).global_position.y
@@ -376,7 +423,15 @@ func _eye_position(d: Dictionary) -> Vector3:
 			var ang := float(k) * TAU / 8.0
 			var p := Vector3(c.x + cos(ang) * ring, floor_y + 0.9, c.z + sin(ang) * ring)
 			if _gen.is_position_clear(p, 0.4):
+				if strict:
+					# a real interior spot: floor within 2 m below (the modules have no ceiling collider)
+					var dq := PhysicsRayQueryParameters3D.create(p, p + Vector3.DOWN * 2.0)
+					dq.collision_mask = 1
+					if PhysicsUtil.ray_world(space, dq).is_empty():
+						continue
 				return Vector3(p.x, floor_y + 1.6, p.z)
+	if strict:
+		return Vector3.INF
 	return Vector3(c.x, floor_y + 1.6, c.z)
 
 
@@ -397,9 +452,33 @@ func _longest_dir(eye: Vector3) -> Vector3:
 	return best_dir
 
 
+## Longest unobstructed horizontal sight line from `eye` (32 directions, up to 250 m): [length, dir].
+func _sight_scan(eye: Vector3) -> Array:
+	var space: PhysicsDirectSpaceState3D = get_viewport().find_world_3d().direct_space_state
+	var best_len := -1.0
+	var best_dir := Vector3.FORWARD
+	var free_dirs := 0
+	for k in 32:
+		var ang := float(k) * TAU / 32.0
+		var dir := Vector3(cos(ang), 0.0, sin(ang))
+		var q := PhysicsRayQueryParameters3D.create(eye, eye + dir * 250.0)
+		q.collision_mask = 1
+		var hit := PhysicsUtil.ray_world(space, q)
+		var l := 250.0 if hit.is_empty() else eye.distance_to(hit["position"])
+		if l >= 250.0:
+			free_dirs += 1   # the collision has a gap there: the eye is at the rim of the level, not a real sight line
+			continue
+		if l > best_len + 0.01:
+			best_len = l
+			best_dir = dir
+	return [best_len, best_dir, free_dirs]
+
+
 func _move_to(d: Dictionary) -> void:
-	var eye := _eye_position(d)
+	var eye := _eye_position(d, d.has("force_dir"))
 	var dir := _longest_dir(eye)
+	if d.has("force_dir"):
+		dir = d["force_dir"]
 	if _player != null:
 		_player.global_position = eye - Vector3(0, 1.6, 0) + Vector3(0, 0.05, 0)
 		if "velocity" in _player:
@@ -415,6 +494,10 @@ func _move_to(d: Dictionary) -> void:
 		await _render_frame()
 		first_frames.append(snappedf(float(Time.get_ticks_usec() - tf) / 1000.0, 0.1))
 	d["first_frames_ms"] = first_frames
+	if _mv != null and _mv.enabled:
+		_mv.refresh(true)   # converge the culling at once (it hides at most 40 items per 0.25 s otherwise)
+		await _render_frame()
+		await _render_frame()
 	# Systems that follow the camera in real time (light budget fades) need about 0.8 s to settle.
 	while Time.get_ticks_msec() - t_move < 800:
 		await _render_frame()
@@ -442,6 +525,101 @@ func _frustum_outside(planes: Array, a: AABB) -> bool:
 		if pl.distance_to(v) > 0.0:
 			return true
 	return false
+
+
+func _capture() -> Image:
+	await RenderingServer.frame_post_draw
+	return get_viewport().get_texture().get_image()
+
+
+## Culled vs unculled picture at the current viewpoint: pixel difference statistics (0..255 per channel).
+func _pixel_diff(name: String) -> Dictionary:
+	var res: Dictionary = {}
+	if _mv == null or _headless:
+		return res
+	if _player != null:
+		_player.visible = false   # the animated first-person weapon would differ between any two frames
+	_mv.refresh(true)
+	await _render_frame()
+	await _render_frame()
+	var a: Image = await _capture()
+	var hidden_count: int = _mv.hidden_count()
+	var info_a := _info()
+	_mv.set_enabled(false)
+	await _render_frame()
+	await _render_frame()
+	var b: Image = await _capture()
+	var info_b := _info()
+	# control: the same unculled scene again two frames later. Animated lights (the pulsing health orb
+	# glow, flames) differ between any two frames; pixels that differ here are not culling differences.
+	await _render_frame()
+	await _render_frame()
+	var b2: Image = await _capture()
+	_mv.set_enabled(true)
+	_mv.refresh(true)
+	if _player != null:
+		_player.visible = true
+	a.convert(Image.FORMAT_RGB8)
+	b.convert(Image.FORMAT_RGB8)
+	b2.convert(Image.FORMAT_RGB8)
+	var da := a.get_data()
+	var db := b.get_data()
+	var dc := b2.get_data()
+	var noise_px := 0
+	var real_px := 0
+	var real_over8 := 0
+	var real_max := 0
+	var n := mini(da.size(), db.size()) / 3
+	var diff_px := 0
+	var over2 := 0
+	var over8 := 0
+	var max_d := 0
+	var sum_d := 0
+	var out := Image.create(a.get_width(), a.get_height(), false, Image.FORMAT_RGB8)
+	var od := PackedByteArray()
+	od.resize(n * 3)
+	for i in n:
+		var m := 0
+		for c in 3:
+			var dv := absi(int(da[i * 3 + c]) - int(db[i * 3 + c]))
+			if dv > m:
+				m = dv
+		var noisy := false
+		for c in 3:
+			if int(db[i * 3 + c]) != int(dc[i * 3 + c]):
+				noisy = true
+		if noisy:
+			noise_px += 1
+		elif m > 0:
+			real_px += 1
+			real_max = maxi(real_max, m)
+			if m > 8:
+				real_over8 += 1
+		if m > 0:
+			diff_px += 1
+			sum_d += m
+		if m > 2:
+			over2 += 1
+		if m > 8:
+			over8 += 1
+		if m > max_d:
+			max_d = m
+		var amp := mini(m * 16, 255)
+		od[i * 3] = amp
+		od[i * 3 + 1] = amp
+		od[i * 3 + 2] = amp
+	res = {"pixels": n, "differing_outside_animation_noise": real_px, "real_over_8_of_255": real_over8, "real_max_diff": real_max,
+		"animation_noise_pixels_in_control": noise_px, "differing": diff_px, "over_2_of_255": over2, "over_8_of_255": over8, "max_diff": max_d,
+		"mean_diff_over_differing": snappedf(float(sum_d) / maxf(diff_px, 1), 0.01),
+		"hidden_items_in_culled_frame": hidden_count, "draws_culled": info_a[0], "draws_unculled": info_b[0],
+		"prims_culled": info_a[2], "prims_unculled": info_b[2]}
+	var dir := _env_s("PERF_SHOT_DIR", "")
+	if dir != "":
+		DirAccess.make_dir_recursive_absolute(dir)
+		a.save_png("%s/%s_culled.png" % [dir, name])
+		b.save_png("%s/%s_full.png" % [dir, name])
+		Image.create_from_data(a.get_width(), a.get_height(), false, Image.FORMAT_RGB8, od).save_png("%s/%s_diffx16.png" % [dir, name])
+	return res
 
 
 func _dist(ft: Array) -> Dictionary:
@@ -502,6 +680,10 @@ func _measure_view(name: String, d: Dictionary) -> Dictionary:
 		res["frame_dist_ms"] = _dist(samples)
 	if d.has("first_frames_ms"):
 		res["first_frames_ms_after_move"] = d["first_frames_ms"]
+	if d.has("sight_len"):
+		res["sight_line_m"] = snappedf(d["sight_len"], 1.0)
+	if _env_i("PERF_SHOT", 0) == 1:
+		res["pixel_diff_culled_vs_full"] = await _pixel_diff(name)
 	return res
 
 
@@ -1048,6 +1230,9 @@ func _print_summary() -> void:
 			for k in ab:
 				print("PERF %s %-30s best-frame=%.1f ms draws=%d objs=%d prims=%d (changed %d)" % [
 					rk, k, ab[k]["frame_ms"], ab[k]["draw_calls"], ab[k]["objects"], ab[k]["primitives"], ab[k]["changed_nodes"]])
+	for k in views:
+		if views[k].has("pixel_diff_culled_vs_full"):
+			print("PERF pixeldiff view %-9s sight=%s %s" % [k, views[k].get("sight_line_m", "-"), views[k]["pixel_diff_culled_vs_full"]])
 	for k in views:
 		if views[k].has("frame_dist_ms"):
 			print("PERF dist view %-9s frame ms %s  first frames after move %s" % [k, views[k]["frame_dist_ms"], views[k].get("first_frames_ms_after_move", [])])

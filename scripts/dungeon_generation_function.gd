@@ -115,6 +115,7 @@ const _FLAME_CELL     : float = 48.0   # metres per batch cell
 const FLAME_BATCH_PREFIX : String = "TorchFlames"
 var torch_flame_batches : Array[MultiMeshInstance3D] = []   # the batches (see _build_flame_batches)
 var torch_flame_count   : int = 0                           # flame instances over all batches
+var torch_flame_bounds  : Array[AABB] = []                  # world bounds of each batch (parallel to torch_flame_batches)
 var torch_flame_positions : PackedVector3Array = PackedVector3Array()   # world position of every flame instance
 var _flame_mesh : SphereMesh = null
 var _flame_material : StandardMaterial3D = null
@@ -983,6 +984,10 @@ func _build_flame_batches() -> void:
 		mmi.top_level = true   # instance transforms are world positions
 		add_child(mmi)
 		mmi.global_transform = Transform3D.IDENTITY
+		var bounds := AABB(points[0], Vector3.ZERO)
+		for pt in points:
+			bounds = bounds.expand(pt)
+		torch_flame_bounds.append(bounds)
 		torch_flame_batches.append(mmi)
 		torch_flame_count += points.size()
 
@@ -994,6 +999,7 @@ func _free_flame_batches() -> void:
 				b.get_parent().remove_child(b)
 			b.queue_free()
 	torch_flame_batches.clear()
+	torch_flame_bounds.clear()
 	torch_flame_positions.clear()
 	torch_flame_count = 0
 

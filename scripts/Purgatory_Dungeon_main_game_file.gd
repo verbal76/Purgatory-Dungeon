@@ -440,6 +440,15 @@ func _boot_torch_light_budget() -> void:
 		if dungeon_generation_function != null else []
 	if mgr.has_method("boot"):
 		mgr.boot(torches)
+	# rooms far from the camera are hidden (render nodes only), see scripts/module_visibility.gd
+	var vis_script = load("res://scripts/module_visibility.gd")
+	if vis_script != null and dungeon_generation_function != null:
+		var vis := Node.new()
+		vis.name = "ModuleVisibility"
+		vis.set_script(vis_script)
+		add_child(vis)
+		vis.boot(dungeon_generation_function.placed_modules, dungeon_generation_function.torch_flame_batches,
+				dungeon_generation_function.torch_flame_bounds)
 
 
 func _boot_torch_dimming_manager() -> void:
