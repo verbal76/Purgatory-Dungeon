@@ -70,6 +70,7 @@ var registered_torches: Array[Node3D] = []
 # module fits on an open connection. Guarantees the player can never see
 # outside the dungeon. Does NOT count toward the room goal and does NOT
 # register its spawn markers (purely geometry).
+const FloorMeshRepair = preload("res://scripts/floor_mesh_repair.gd")   # load-time mesh repairs (see that file)
 const _WALL_PLUG_PATH : String = "res://dungeon modules/new_collision_room_closer_flush.tscn"
 var _wall_plug_module : PackedScene = null
 
@@ -854,7 +855,9 @@ func _aabb_overlaps_placed(world_aabb: AABB, target_conn: Node3D) -> bool:
 
 func _instantiate_module(scene: PackedScene) -> Node3D:
 	gen_stats["instantiated"] = int(gen_stats.get("instantiated", 0)) + 1
-	return scene.instantiate() as Node3D
+	var inst := scene.instantiate() as Node3D
+	FloorMeshRepair.apply(inst, scene.resource_path)
+	return inst
 
 
 func _get_other_connection(conns: Array[Node3D], used: Node3D) -> Node3D:
