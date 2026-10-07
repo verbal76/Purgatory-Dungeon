@@ -26,7 +26,7 @@ role → family map and the theme variations; `tests/test_typography.gd` asserts
 | `label` | `ShortLabel` (`ParchmentLabel`) | Cinzel SemiBold | 22 / 19 | **new**: a setting's name, a stat line (Master Volume, Screen Shake) |
 | `stat` | `StatLabel` (`ParchmentStat`) | Cinzel SemiBold, dim | 20 / 17 | **new**: quiet short lines (Runs 2, Barbarian · Slot 3, 1 / 2, rarity tag, Day 3) |
 | `hud_value` | `HudValue` | Cinzel Bold | 24 / 21 | **changed**: HUD numbers and short names (lining figures read well; outlined) |
-| `hud_label` | `HudLabel` | Cinzel SemiBold, dim | 20 / 17 | **changed**: wallet rows, ability caption, buff names |
+| `hud_label` | `HudLabel` | Cinzel SemiBold, dim | 20 / 17 | **changed**: wallet rows, buff names |
 | `body` | default `Label`, `RichTextLabel` | Source Sans Regular | 22 / 19 | reading text |
 | `body_secondary` | `SecondaryLabel` | Source Sans Regular | 20 / 17 | explanations, prompts that are sentences |
 | `metadata` | `MetaLabel` | Source Sans Regular | 18 / 15 | notes, column captions |
@@ -112,7 +112,6 @@ Cinzel's digit "1" resembles a capital I, so code-like strings with digits (key 
 | Element | Before | Decided | Why |
 |---|---|---|---|
 | HUD health "77 / 150", kills, day "Day 1 / 30", wallet counts | Source Sans bold | **Cinzel Bold** | numbers; box widths measured (`HudVitals`, `COMPASS_W`) |
-| HUD ability caption (Charging…, Rapid attack 3.2s, Cooldown 5s) | Source Sans | **Cinzel dim** | ≤ 4 tokens; width verified |
 | HUD wallet names (Potions, Bronze key…) | Source Sans | **Cinzel dim** | short labels |
 | Heading plate (N, NE, …) | Source Sans | **Cinzel Bold**; plate 56 → 72 px | widest heading + margins measured |
 | Minimap cardinals N E S W | Cinzel | unchanged | intercardinals (NE…) stay metadata Source Sans |
@@ -167,7 +166,7 @@ Nothing shipped used a forbidden glyph. Functional symbols are therefore never r
   `MobileUi` and still hold.
 * `test_typography` lays out the real screens at 1920×1080 and at the phone canvas (1602×720) and asserts: no label is
   trimmed, no button is narrower than its text + margins, nothing leaves the screen (scroll areas: horizontally), the five
-  Options tabs fit one row, the health read-out box fits "1000 / 1000", the ability caption fits beside its bar and the
+  Options tabs fit one row, the health read-out box fits "1000 / 1000" and the
   heading plate fits the widest heading ("NW").
 * Adjusted: `COMPASS_W` 56 → 72; the health read-out box is measured from the font instead of a fixed 120 px; world-space
   prompts/alerts (chest, globe) are set one step larger than the role size.

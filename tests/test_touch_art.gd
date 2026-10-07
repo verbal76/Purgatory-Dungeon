@@ -97,7 +97,6 @@ func _ready() -> void:
 			b2.pressed_visual = st == "pressed"
 			b2.cooldown = 0.5 if st == "cooldown" else 0.0
 			b2.unavailable = st == "disabled"
-			b2.charge = 0.4
 			b2.queue_redraw()
 	await get_tree().process_frame
 	await get_tree().process_frame

@@ -82,12 +82,6 @@ extends BruteCharacter
 const DOME_COOLDOWN_TIME    : float = 2.5
 @export var dome_bolt_count : int   = 12   # Bolts fired radially; +2 per Magnitude perk level
 
-# ── Lightning Rapid Attack ────────────────────────────────────────────
-@export var rapid_attack_charge_time     : float = 1.5   # Seconds to fill the charge bar
-@export var rapid_attack_duration        : float = 4.0   # Seconds the rapid attack lasts
-@export var rapid_attack_cooldown        : float = 30.0  # Seconds before rapid attack can recharge
-@export var rapid_attack_attack_rate     : float = 0.12  # Seconds between bolts — ~8 Hz single-bolt machine gun
-
 # ── Hand spawn points (formerly from MageCharacter / mage_base.gd) ────────────
 # Assign Marker3D nodes in the Inspector — projectiles spawn from these.
 @export var right_hand_marker : Marker3D
@@ -109,15 +103,6 @@ var _slide_duration        : float   = 0.0
 var _slide_direction       : Vector3 = Vector3.ZERO
 var _slide_cam_lift        : float   = 0.0
 var _slide_knocked_enemies : Array   = []
-
-# ── Rapid Attack / storm state ──────────────────────────────────────
-var _attack_held             : bool    = false
-var _rapid_attack_charge          : float   = 0.0
-var _rapid_attack_active          : bool    = false
-var _rapid_attack_timer           : float   = 0.0
-var _rapid_attack_cooldown_remain : float   = 0.0
-var _rapid_attack_attack_timer    : float   = 0.0
-var _rapid_attack_bar_label       : Label     = null   # caption beside the ability bar (owned by _vitals)
 
 # ── Dome state ─────────────────────────────────────────────────
 var _dome_cooldown : float = 0.0
@@ -180,7 +165,7 @@ var _staff_tip             : Node3D     = null   # Marker3D on the staff end
 var _crosshair_layer       : CanvasLayer = null
 
 # ── Health bar HUD ─────────────────────────────────────────────
-var _vitals       : HudVitals = null   # health bar + value, ability bar + caption (scripts/ui/hud_vitals.gd)
+var _vitals       : HudVitals = null   # health bar + value (scripts/ui/hud_vitals.gd)
 var _health_label : Label     = null
 
 # ── Damage vignette ────────────────────────────────────────────
@@ -268,12 +253,11 @@ func _on_ready() -> void:
 	_crosshair_layer.name  = "CrosshairLayer"
 	add_child(_crosshair_layer)
 
-	# ── Health bar + rapid-attack (storm) bar ───────────────────────────────────
-	# One shared component with the Barbarian: PUIBar + value text, ember ability bar + caption.
+	# ── Health bar ──────────────────────────────────────────────────────────────
+	# One shared component with the Barbarian: PUIBar + value text.
 	_vitals = HudVitals.new()
 	_crosshair_layer.add_child(_vitals)
 	_health_label           = _vitals.health_label
-	_rapid_attack_bar_label = _vitals.ability_label
 	_refresh_health_bar(max_health, max_health)
 
 	# ── Active trap effects panel (bottom-centre, hidden until an effect is active) ──
@@ -290,8 +274,6 @@ func _on_ready() -> void:
 	_damage_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_damage_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_crosshair_layer.add_child(_damage_vignette)
-
-	_refresh_rapid_attack_bar()
 
 	# SURGICAL ADD: Apply hub-purchased perks from the save profile before the run starts.
 	_apply_hub_perks()
@@ -470,8 +452,6 @@ func take_damage(amount: float, source_node: Node3D = null) -> void:
 		return
 	if _is_sliding:
 		return  # Invincible during the evasive slide.
-	if _rapid_attack_active:
-		return  # Invincible during rapid attack frenzy.
 
 	if source_node != null:
 		var space : PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
@@ -589,18 +569,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		if not _is_dead:
 			_apply_yaw_now()
 
-	if event.is_action_pressed("attack") and not _is_attacking and not _is_blocking and not _is_sliding and not _is_dead and not _rapid_attack_active:
-		_attack_held = true
+	if event.is_action_pressed("attack") and not _is_attacking and not _is_blocking and not _is_sliding and not _is_dead:
 		_do_spell_attack()
-
-	if event.is_action_released("attack"):
-		_attack_held = false
-		if _rapid_attack_charge >= 1.0 and _rapid_attack_cooldown_remain <= 0.0 and not _rapid_attack_active:
-			_rapid_attack_charge = 0.0
-			_start_mage_rapid_attack()
-		else:
-			_rapid_attack_charge = 0.0
-			_refresh_rapid_attack_bar()
 
 	# AOE: lightning dome — fires bolts in all directions, costs 1 potion.
 	if event.is_action_pressed("AOE") and _dome_cooldown <= 0.0 and not _is_dead:
@@ -636,16 +606,6 @@ func _physics_tick(delta: float) -> void:
 		velocity.z = 0.0
 		_stop_footsteps()
 		return
-
-	# INPUT-STATE FAIL-SAFE: the hold flag may never outlive the attack action. The release arrives as an event, and an
-	# event that comes while the tree is paused (pause menu, buff pick, app in the background) is never delivered to
-	# this node: the flag then stayed true, the Rapid Attack charge kept filling, and the next plain tap's release
-	# started the 4 s machine gun with no finger on the screen. Reconcile with the engine's own action state each tick;
-	# a missed release only cancels the charge, it never starts the Rapid Attack.
-	if _attack_held and not Input.is_action_pressed("attack"):
-		_attack_held = false
-		_rapid_attack_charge = 0.0
-		_refresh_rapid_attack_bar()
 
 	# Blocking check moved before view input so the rotation tween
 	# in _do_block() owns rotation.y cleanly.
@@ -691,38 +651,6 @@ func _physics_tick(delta: float) -> void:
 	# ── Dome cooldown ──────────────────────────────────────────────────────────
 	if _dome_cooldown > 0.0:
 		_dome_cooldown = maxf(_dome_cooldown - delta, 0.0)
-
-	# ── Rapid Attack: charge builds while attack is held ────────────────────────────
-	if _attack_held and not _rapid_attack_active:
-		_rapid_attack_charge = minf(_rapid_attack_charge + delta / rapid_attack_charge_time, 1.0)
-		_refresh_rapid_attack_bar()
-
-	if _rapid_attack_cooldown_remain > 0.0:
-		_rapid_attack_cooldown_remain = maxf(_rapid_attack_cooldown_remain - delta, 0.0)
-		_refresh_rapid_attack_bar()
-
-	# ── Rapid attack (bolt machine gun) active tick ───────────────────────────
-	if _rapid_attack_active:
-		# Normal first-person view + movement — player keeps full control.
-		# Damage immunity is gated in take_damage via _rapid_attack_active.
-		_handle_view_input(delta)
-		_apply_view_rotation()
-		_handle_movement(delta)
-		_update_footsteps(delta)
-		_apply_head_bob(delta)
-
-		_rapid_attack_timer        -= delta
-		_rapid_attack_attack_timer -= delta
-
-		if _rapid_attack_attack_timer <= 0.0:
-			_rapid_attack_attack_timer = rapid_attack_attack_rate
-			_fire_rapid_attack_bolts()
-
-		_refresh_rapid_attack_bar()
-
-		if _rapid_attack_timer <= 0.0 or _is_dead:
-			_end_mage_rapid_attack()
-		return
 
 	_handle_view_input(delta)
 	_apply_view_rotation()
@@ -1061,7 +989,7 @@ func _on_fireball_hit(body: Node3D, fb_name: String, damage_val: float, travel_d
 	if body == self:
 		return
 
-	# Wall-penetrating bolts (rapid_attack): skip destruction when hitting geometry
+	# Wall-penetrating bolts: skip destruction when hitting geometry
 	# that has no take_damage method (i.e. walls/floor/ceiling).
 	if penetrate_walls:
 		var t : Node3D = body
@@ -1471,30 +1399,6 @@ func _do_lightning_dome() -> void:
 		_launch_fireball(origin, dir)
 
 
-# ══════════════════════════════════════════════════════════════
-#  LIGHTNING RAPID ATTACK
-# ══════════════════════════════════════════════════════════════
-
-func _start_mage_rapid_attack() -> void:
-	if _is_dead:
-		return
-
-	_rapid_attack_active       = true
-	_rapid_attack_timer        = rapid_attack_duration
-	_rapid_attack_attack_timer = 0.0
-	_is_attacking              = true
-	anim_player.speed_scale    = attack_speed_scale * attack_speed * 1.5
-	_refresh_rapid_attack_bar()
-
-
-func _end_mage_rapid_attack() -> void:
-	_rapid_attack_active          = false
-	_is_attacking                 = false
-	_rapid_attack_cooldown_remain = rapid_attack_cooldown
-	anim_player.speed_scale       = 1.0
-	_refresh_rapid_attack_bar()
-
-
 # The crosshair position in the coordinates Camera3D.project_ray_*() expects: the centre of the VISIBLE
 # rectangle. This is NOT get_viewport().size / 2: with the Android stretch (canvas_items, expand) the
 # window is larger than the visible canvas (e.g. 2992x1344 vs 1602x720 on a Pixel), and halving the
@@ -1509,39 +1413,6 @@ func _get_camera_aim_dir() -> Vector3:
 	if camera_3d != null:
 		return camera_3d.project_ray_normal(_aim_screen_center()).normalized()
 	return Vector3(-sin(_yaw), 0.0, -cos(_yaw))
-
-
-# Fires a single lightning bolt parallel to the crosshair line-of-sight.
-# Origin stays on the staff tip so the bolt visually leaves the weapon,
-# but the flight direction comes from the camera — decoupled from whatever
-# the arm animation is doing at the moment of fire.
-func _fire_rapid_attack_bolts() -> void:
-	var origin : Vector3
-	if _staff_tip != null:
-		origin = _staff_tip.global_position
-	else:
-		origin = global_position + Vector3(0.0, 1.4, 0.0)
-
-	var aim : Vector3 = _get_camera_aim_dir()
-	# Tiny perpendicular cone jitter so repeat bolts aren't a perfect line.
-	aim = (aim + Vector3(randf_range(-0.03, 0.03), randf_range(-0.03, 0.03), 0.0)).normalized()
-	_launch_fireball(origin, aim, true, 8.0)
-
-
-func _refresh_rapid_attack_bar() -> void:
-	if _vitals == null:
-		return
-	if _rapid_attack_active:
-		_vitals.set_ability(clampf(_rapid_attack_timer / rapid_attack_duration, 0.0, 1.0),
-				HudVitals.Ability.ACTIVE, _rapid_attack_timer)
-	elif _rapid_attack_cooldown_remain > 0.0:
-		_vitals.set_ability(1.0 - clampf(_rapid_attack_cooldown_remain / rapid_attack_cooldown, 0.0, 1.0),
-				HudVitals.Ability.COOLDOWN, _rapid_attack_cooldown_remain)
-	elif _attack_held:
-		_vitals.set_ability(_rapid_attack_charge,
-				HudVitals.Ability.RELEASE if _rapid_attack_charge >= 1.0 else HudVitals.Ability.CHARGING)
-	else:
-		_vitals.set_ability(1.0, HudVitals.Ability.READY)
 
 
 # Plays the 2H shove animation and deals melee damage + knockback

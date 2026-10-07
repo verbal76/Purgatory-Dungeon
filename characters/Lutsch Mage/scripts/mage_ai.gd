@@ -33,7 +33,6 @@
 #    massive console spam and resulting lag.
 #  - SURGICAL FIX: Increased strafe_switch_interval to 4.0 and added missing _update_strafe_timer() call to _physics_tick.
 #  - SURGICAL FIX: Enforced mesh_root.look_at() unconditionally at the end of _physics_tick so mage always faces player while moving/strafing.
-#  - SURGICAL ADD: Added Rapid Attack check to _physics_tick. Mages will now stop casting and walk blindly toward the player if _rapid_attack_active is true.
 #  - SURGICAL FIX: Added _smooth_turn() override (no-op pass). CharacterBase runs
 #    _smooth_turn AFTER _physics_tick, which was rotating mesh_root toward the
 #    strafe/velocity direction and overwriting the look_at. Disabling it here so
@@ -891,19 +890,15 @@ func _physics_tick(delta: float) -> void:
 		_change_state(_get_idle_state())
 		return
 
-	var player_is_rapid_attack : bool = false
-	if is_instance_valid(player) and player.get("_rapid_attack_active") != null:
-		player_is_rapid_attack = player.get("_rapid_attack_active") == true
-
 	# Shove: higher priority than ranged attack — interrupts when player is very close.
 	# Random chance gate prevents shove from triggering every available tick.
 	if not _is_attacking and not _is_shoving and _shove_cooldown_timer <= 0.0 \
-			and distance <= enemy_shove_range and not player_is_rapid_attack \
+			and distance <= enemy_shove_range \
 			and randf() < enemy_shove_chance:
 		_do_ai_shove(player)
 		return
 
-	if distance <= attack_range and _attack_cooldown_timer <= 0.0 and not player_is_rapid_attack:
+	if distance <= attack_range and _attack_cooldown_timer <= 0.0:
 		_do_spell_attack(player)
 		return
 
@@ -922,9 +917,7 @@ func _physics_tick(delta: float) -> void:
 	var chase_mult        : float = 1.5 if distance > 22.0 else 1.0
 	var speed_multiplier  : float = player_mod * _cached_speed_mult * chase_mult
 
-	if player_is_rapid_attack:
-		_move_mode = MoveMode.APPROACH
-	elif distance < min_range: 
+	if distance < min_range: 
 		_move_mode = MoveMode.RETREAT
 	elif distance > run_range: 
 		_move_mode = MoveMode.APPROACH

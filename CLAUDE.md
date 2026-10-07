@@ -141,7 +141,7 @@ Exploration tracking is throttled to 0.5 s intervals (not every frame).
 ### Character System
 
 - `characters/brute/scripts/character_base.gd` — Abstract base for all characters. Handles health, buffs, animation blending with LOD, stun, physics. Caches animation map once (not per frame). Maintains a **static player LOD cache** shared across all enemy instances to avoid per-enemy tree scans.
-- `characters/brute/scripts/brute_player.gd` — Barbarian: 1st-person with head-bob, swing/rapid_attack/kick/AOE/block
+- `characters/brute/scripts/brute_player.gd` — Barbarian: 1st-person with head-bob, swing/kick/AOE/block
 - `characters/Lutsch Mage/scripts/mage_player.gd` — Mage: projectile firing, area spells
 - `*_ai.gd` variants implement enemy AI with **LOD tick intervals** (nominally 60/30/10 Hz; physics runs at 30 ticks/s so effective rates are 30/15/5 Hz): <12 m, 12–25 m, >25 m
 
@@ -151,7 +151,7 @@ Exploration tracking is throttled to 0.5 s intervals (not every frame).
 
 ### Data Files
 
-- `data/buffs.json` — 54 buffs with `effect_type`, `stat`, `tradeoff` fields; extensible. Percent-style stats (`BuffManager.PERCENT_OF_BASE_STATS`) are fractions of the player's base value; the pick pool only offers buffs whose stats exist on the current player (`tests/test_buffs.gd` enforces both)
+- `data/buffs.json` — 49 buffs with `effect_type`, `stat`, `tradeoff` fields; extensible. Percent-style stats (`BuffManager.PERCENT_OF_BASE_STATS`) are fractions of the player's base value; the pick pool only offers buffs whose stats exist on the current player (`tests/test_buffs.gd` enforces both)
 - `data/globe_effects.json` — Mystery sphere pickup effects
 - `data/codex_lore.txt` — Bestiary/lore entries
 

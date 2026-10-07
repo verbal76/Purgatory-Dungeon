@@ -18,7 +18,7 @@
 #                  same finger is the look control: a finger that starts on ATTACK and drags aims (a continuous turn
 #                  RATE, deflection = speed, measured from the touch-down point, fed to the players as mouse-look
 #                  motion once per rendered frame). A drag NEVER attacks; a tap or a short rest attacks once; holding
-#                  never repeats or charges (touch has no hold-to-charge in this scheme).
+#                  never repeats or charges.
 #     arc around   slide, kick, block (hold), burst (cooldown ring + potion count): subordinate buttons on a
 #     ATTACK       semicircle on its upper/left side, plus the contextual USE one ring further out
 #     top right    pause, map (toggle)
@@ -26,7 +26,7 @@
 #   CLASSIC (exactly the original behaviour and layout):
 #     left thumb   floating move stick (as above)
 #     right side   swipe anywhere free to look  -> yaw, as mouse-look motion (the game has no pitch)
-#     lower right  ABXY-style cluster           -> attack (press/hold/release, hold = charge: unchanged), kick, slide, block (hold)
+#     lower right  ABXY-style cluster           -> attack (press/hold/release: one press = one attack, holding never charges or repeats), kick, slide, block (hold)
 #                  burst (potion blast, with cooldown + potion count), contextual USE
 #     top right    pause, map (toggle)
 #
@@ -111,8 +111,7 @@ const FALLBACK_SCREEN_H := 1344.0 # Pixel 10 Pro XL panel height, used only when
 #   LOOK   moved farther than the slop radius from the touch-down point (or the aim drag engaged)
 #                                                                                -> ZERO attacks, for the rest of the touch
 # LOOK is latched until the finger lifts: coming back over the button does not attack; the next attack needs a new
-# touch. A hold does not repeat, auto-fire or charge (the Rapid Attack's hold-to-charge is not reachable by touch in
-# this scheme): the attack is a fixed ATTACK_PULSE_MS press followed by a release that the layer itself guarantees.
+# touch. A hold does not repeat, auto-fire or charge (nothing in the game charges): the attack is a fixed ATTACK_PULSE_MS press followed by a release that the layer itself guarantees.
 # Numbers (reasoned for real Android touch, not for the mouse):
 #   ATTACK_SLOP_MM        1.5 mm = ~9.5 dp: Android's own touch slop is 8 dp (ViewConfiguration), a resting thumb rolls and
 #                         tremors a few mm-tenths, a deliberate look drag covers it in a few ms. In virtual px via the
@@ -123,7 +122,7 @@ const FALLBACK_SCREEN_H := 1344.0 # Pixel 10 Pro XL panel height, used only when
 #                         thumb that goes down to look starts moving within ~100 ms; 150 ms separates "put the thumb down
 #                         and drag" from "put the thumb down and stay" without making a held attack feel late.
 #   ATTACK_PULSE_MS       80: spans at least two 30 Hz physics ticks, so polling gameplay (brute_player) and event gameplay
-#                         (mage_player) both see the press; far below the 1.5 s Rapid Attack charge time.
+#                         (mage_player) both see the press.
 #   ATTACK_PULSE_MAX_MS   250: hard cap of any scheduled release (fail-safe, see _enforce_inputs).
 const ATTACK_INTENT_MS     := 150
 const ATTACK_SLOP_MM       := 1.5
@@ -607,7 +606,6 @@ func _refresh_button_status() -> void:
 	if b == null:
 		return
 	var player := get_tree().get_first_node_in_group("player")
-	_refresh_charge(player)
 	var cd: float = 0.0
 	if player != null:
 		var remain: float = 0.0
@@ -627,19 +625,6 @@ func _refresh_button_status() -> void:
 		b.badge = badge
 		b.unavailable = out_of_potions
 		b.queue_redraw()
-
-
-# Hold-to-charge progress of the Rapid Attack (both classes expose it) as an ember ring on ATTACK.
-func _refresh_charge(player: Node) -> void:
-	var atk: TouchButton = buttons.get("attack")
-	if atk == null:
-		return
-	var ch: float = 0.0
-	if player != null and "_rapid_attack_charge" in player:
-		ch = clampf(float(player.get("_rapid_attack_charge")), 0.0, 1.0)
-	if not is_equal_approx(atk.charge, ch):
-		atk.charge = ch
-		atk.queue_redraw()
 
 
 # ── Contextual USE button ─────────────────────────────────────────────────────

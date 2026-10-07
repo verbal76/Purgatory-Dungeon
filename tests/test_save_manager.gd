@@ -111,6 +111,19 @@ func _ready() -> void:
 	_check(SaveManager.current_profile.has("keys") and SaveManager.current_profile.has("perks"), "missing keys backfilled")
 	_check(int(SaveManager.current_profile["run_count"]) == 4, "existing values preserved on backfill")
 
+	# --- removed content: an old save that still carries the removed "cyclone" perk (Rapid Attack) loads and is ignored ---
+	_write_raw(9, JSON.stringify({"character_name": "Old", "character_class": "barbarian", "initialized": true, "run_count": 7,
+			"perks": {"vitality": 2, "cyclone": 3}, "active_buffs": ["rapid_attack_master"]}))
+	_check(SaveManager.get_slot_state(9) == "valid", "a save with the removed cyclone perk is still valid")
+	SaveManager.load_slot(9)
+	_check(int(SaveManager.current_profile["perks"].get("vitality", 0)) == 2 and int(SaveManager.current_profile["run_count"]) == 7, "the rest of that save loads untouched")
+	var old_store: Node = (load("res://scripts/AlchemistStore.gd") as GDScript).new()
+	var old_keys: Array = []
+	for p in old_store.visible_perks():
+		old_keys.append(p["key"])
+	_check(not ("cyclone" in old_keys) and "vitality" in old_keys, "the store no longer offers the removed cyclone perk")
+	old_store.free()
+
 	# --- delete ----------------------------------------------------------------
 	SaveManager.load_slot(3)
 	SaveManager.delete_slot(3)

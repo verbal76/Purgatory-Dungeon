@@ -63,7 +63,7 @@ sensitivity apply to both.
 |---|---|
 | Left thumb: floating stick | move (analog) |
 | Right side: swipe/drag (no stick) | look (yaw, one motion event per drag event) |
-| Big sword button (press / hold = charge / release: unchanged, Classic keeps the Rapid Attack's hold-to-charge), boot, chevrons, shield (hold), flask, USE, Pause, Map | attack, kick, jump, block, AOE, equip, ui_menu, minimap |
+| Big sword button (press / hold / release: one press = one attack, holding never charges or repeats), boot, chevrons, shield (hold), flask, USE, Pause, Map | attack, kick, jump, block, AOE, equip, ui_menu, minimap |
 
 ### Twin-stick design notes
 - **Why**: Classic needs repeated swipes to turn while moving. In twin-stick the Attack button is the aim control, as
@@ -90,8 +90,8 @@ sensitivity apply to both.
   | is cancelled by the engine, lost, replaced by another finger, or the app is paused / backgrounded / loses focus / the layer is hidden or freed | nothing; no attack on the way out |
   Every gesture is at most one attack. The attack itself is a **pulse**: the layer presses `attack` and releases it
   itself `ATTACK_PULSE_MS` (80 ms, at least two 30 Hz physics ticks so polling and event gameplay both see it) later, so
-  a finger never "holds" attack and the Rapid Attack's 1.5 s hold-to-charge cannot be reached by touch in this scheme
-  (it is still there on keyboard / controller and in the Classic scheme). Camera cost: none. Classification only adds a
+  a finger never "holds" attack. There is no hold-to-charge or auto-repeat on any control scheme (the Rapid Attack
+  ability was removed everywhere). Camera cost: none. Classification only adds a
   flag; the aim path is the unchanged per-rendered-frame integration, and the slop circle is smaller than the aim's
   engage distance, so the camera cannot start turning under an undecided gesture (the gesture is also forced to look the
   moment the aim engages).
@@ -131,13 +131,10 @@ sensitivity apply to both.
   finger or a scheduled release (never older than `ATTACK_PULSE_MAX_MS`); a move axis needs the stick finger; and for a
   second after we release attack the engine's own attack state must agree. Anything else is released and counted in
   `attack_failsafe_releases` (0 on every normal path; `tests/test_attack_gesture.gd` injects the stuck states).
-  The players back this up: `mage_player.gd` / `brute_player.gd` drop their `_attack_held` flag (and the Rapid Attack
-  charge) as soon as the engine says attack is no longer pressed. **Field defect this fixed** (Mage firing a machine
-  gun after the finger left): the Rapid Attack (hold attack 1.5 s, release = 4 s of automatic fire) was reachable by
-  simply resting the look thumb on ATTACK for 1.5 s, and a release that arrived while the tree was paused (pause menu,
-  buff pick, app in the background) was never delivered to the player, leaving `_attack_held` true with a full charge so
-  the next plain tap's release started the machine gun. Touch attack is now a pulse (no charge from touch in twin-stick),
-  and a release lost to a pause can no longer start it.
+  **Field defect this fixed** (Mage firing a machine gun after the finger left): the Rapid Attack (hold attack 1.5 s,
+  release = 4 s of automatic fire) was reachable by resting the look thumb on ATTACK, and by a release lost to a pause.
+  The Rapid Attack ability has since been removed from the game entirely (owner decision), so the players no longer
+  have any hold/charge state: one press = one attack on every control scheme.
 - **Visuals**: the move stick has a faint idle marker at rest (`STICK_IDLE_ALPHA`) and an ember rim when held; a
   faint ember drag ring (drawn above the buttons) shows while dragging from ATTACK. No other marker exists on the right.
   No shaders, nothing redrawn per frame.
