@@ -92,6 +92,10 @@ func _ready() -> void:
 	player.clear_timed_statuses()
 	_check(not player._status_reversed_view and not player._status_drunk and not player._status_reversed_controls and not player._status_acid, "clear_timed_statuses ends every timed trap status")
 	player.apply_status("reversed_view", 0)
+	await _frames(3)
+	_check(is_equal_approx(_arm_x(player), PI), "the camera is upside-down again before the death check")
+	# Dying while blocking: the blocking branch of the physics tick skips the view update, so death must reset the arm itself.
+	player._is_blocking = true
 	player.take_damage(1.0e9)
 	await _frames(10)
 	_check(player._is_dead, "the player died from lethal damage")

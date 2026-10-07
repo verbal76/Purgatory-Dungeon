@@ -676,6 +676,7 @@ func _physics_tick(delta: float) -> void:
 		_status_reversed_view_timer -= delta
 		if _status_reversed_view_timer <= 0.0:
 			_status_reversed_view = false
+			_reset_view_arm()
 			_refresh_status_label()
 	if _status_reversed_controls and _status_controls_timer > 0.0:
 		_status_controls_timer -= delta
@@ -1749,11 +1750,19 @@ func _refresh_status_label() -> void:
 		_status_panel.visible = true
 
 
+# Puts the camera arm back upright right now. _apply_view_rotation() normally does it every tick, but the blocking branch of
+# the physics tick returns before reaching it, so ending Reversed View (expiry or death) must not rely on that.
+func _reset_view_arm() -> void:
+	var arm : SpringArm3D = get_node_or_null("SpringArm3D") as SpringArm3D
+	if arm != null:
+		arm.rotation.x = 0.0
+
 # Ends every timed trap status at once (death: the screen must not stay upside-down / swaying behind the death overlay,
 # and nothing may carry into whatever comes next). Day-based Heavy Gravity is restored here too.
 func clear_timed_statuses() -> void:
 	_status_reversed_view       = false
 	_status_reversed_view_timer = 0.0
+	_reset_view_arm()
 	_status_drunk               = false
 	_status_drunk_timer         = 0.0
 	_status_reversed_controls   = false
