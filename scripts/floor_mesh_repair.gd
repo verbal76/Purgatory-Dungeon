@@ -59,7 +59,12 @@ static func _repair(mesh: ArrayMesh, per_surface: Dictionary) -> bool:
 	var mats: Array[Material] = []
 	var names: Array[String] = []
 	for s in n:
-		arrays_all.append(mesh.surface_get_arrays(s))
+		var got: Array = mesh.surface_get_arrays(s)
+		# A mesh whose vertex data cannot be read back (no renderer data yet / the headless dummy renderer's mesh storage failing
+		# while meshes are still being loaded on worker threads) is left exactly as it is: nothing has been changed at this point.
+		if got.size() <= Mesh.ARRAY_VERTEX or got[Mesh.ARRAY_VERTEX] == null:
+			return false
+		arrays_all.append(got)
 		prims.append(mesh.surface_get_primitive_type(s))
 		mats.append(mesh.surface_get_material(s))
 		names.append(mesh.surface_get_name(s))

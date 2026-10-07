@@ -21,7 +21,7 @@ const REPULSE_EDGE_FORCE := 0.6
 const REPULSE_STUN := 2.0
 const REPULSE_DURATION := 0.45
 const REPULSE_COOLDOWN := 3.0
-const REPULSE_SOUND := preload("res://Music & background images/Sound Effects/Burned A.wav")
+const REPULSE_SOUND_PATH := "res://Music & background images/Sound Effects/Burned A.wav"   # loaded when used: a parse-time preload here slowed the base class load enough to race the threaded scene load
 
 
 ## Pushes every living enemy within `radius` straight away from this character (all directions, including behind) with the
@@ -58,7 +58,9 @@ func _repulse_burst(force_scale: float = 1.0) -> int:
 		prop.apply_kick(pd.normalized() if pd.length_squared() > 0.0001 else global_transform.basis.z, REPULSE_FORCE * force_scale * 10.0)
 	_spawn_repulse_ring()
 	if has_node("/root/AudioManager"):
-		AudioManager.play_one_shot(REPULSE_SOUND, 2.0, 0.7)
+		var snd : AudioStream = load(REPULSE_SOUND_PATH) as AudioStream
+		if snd != null:
+			AudioManager.play_one_shot(snd, 2.0, 0.7)
 	return pushed
 
 
