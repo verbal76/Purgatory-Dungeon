@@ -91,14 +91,16 @@ func _ready() -> void:
 				why = "animation still playing (%s)" % e.name
 	_check(all_parked, "every pooled enemy is parked (hidden, dead, collision-less, no groups, idle, below the level) " + why)
 
+	# The pressure spawn ignores the cap and always wants a mage: one must be parked, whatever the opening wave left over.
+	_check(manager._mage_pool.size() >= 1, "at least one mage is parked (pressure spawn always picks a mage)")
 	# 2. reuse adds no nodes ---------------------------------------------------------------------------------------
 	manager.mage_spawn_chance = 0.0   # type 2 spawn points give brutes: deterministic type
 	for want_mage in [false, true]:
 		var label := "mage" if want_mage else "brute"
 		manager.mage_spawn_chance = 1.0 if want_mage else 0.0
 		var pool: Array = manager._mage_pool if want_mage else manager._brute_pool
+		_check(not pool.is_empty(), label + ": the pre-warm parked at least one " + label)
 		if pool.is_empty():
-			print("test_enemy_prewarm: no parked %s in this seed's pre-warm, reuse check skipped" % label)
 			continue
 		var pool_before: int = pool.size()
 		var nodes_before: int = get_tree().get_node_count()
@@ -133,5 +135,17 @@ func _ready() -> void:
 		_check(again == e, label + ": the very same enemy is reborn from the pool")
 		if again != null:
 			_check(again.visible and not bool(again.get("_is_dead")) and again.is_in_group("enemies"), label + ": reborn alive and in the groups")
+			again.set_physics_process(false)
+			again._retire_stuck()   # back into the pool for the pressure-spawn check below
+	# pressure spawn last (it takes a parked mage out of the pool)
+	manager.resume_spawning()
+	var nodes_p: int = get_tree().get_node_count()
+	var live_p: int = manager._live_count
+	CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME = 0.0   # 'no damage for 30 s'
+	manager._check_pressure_spawn()
+	manager.stop_spawning()
+	_check(get_tree().get_node_count() == nodes_p, "a pressure spawn instantiates nothing (%d -> %d nodes)" % [nodes_p, get_tree().get_node_count()])
+	_check(manager._live_count in [live_p, live_p + 1], "the pressure spawn either deployed one parked enemy or aborted (live %d -> %d)" % [live_p, manager._live_count])
+
 	print("test_enemy_prewarm: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)
