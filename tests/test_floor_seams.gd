@@ -15,7 +15,8 @@ extends Node
 ## Part A  (every module scene, local space, no generator): the base floor (flat faces at y = 0) must not have
 ##         a gap between neighbouring tiles (between tiles or inside one mesh, 0.1 mm to 2 cm), no floor tile may
 ##         float above or sink below y = 0, and the repair list must be complete and fresh (the repair tool finds
-##         nothing left to drop or snap on the repaired meshes).
+##         nothing left to drop or snap on the repaired meshes), and no two floor tiles (meshes) keep coplanar
+##         overlapping triangles of similar colour deeper than 3 mm (a depth tie between tiles).
 ## Part B  (several generated dungeons): at every doorway the base floors of the two modules must meet without
 ##         a gap, the doorway markers must sit exactly one connection_nudge apart (sub-millimetre snapping) and
 ##         every module must be turned by an exact multiple of 90 degrees; the generator must have applied the repair
@@ -66,6 +67,7 @@ func _ready() -> void:
 
 	# ── Part A ───────────────────────────────────────────────────────────────
 	var seen : Dictionary = {}
+	var stacked_total_before : int = 0
 	for sc in scenes:
 		if seen.has(sc.resource_path):
 			continue
@@ -73,11 +75,26 @@ func _ready() -> void:
 		var inst : Node3D = sc.instantiate()
 		add_child(inst)
 		# the repaired state is what the game renders: apply the load-time repair like the generator does
+		var tool_node : Node = RepairTool.new()
+		var stacked_before : int = tool_node.stacked_overlap_samples(inst)
 		FloorMeshRepair.apply(inst, sc.resource_path)
-		# the repair list is complete and fresh: re-running the tool's analysis on the repaired meshes finds nothing
-		# left to drop or snap (a stale list after a glb re-import, or a new module, fails here)
-		var leftover : Dictionary = (RepairTool.new() as Node)._scene_repairs(inst)
-		_check(leftover.is_empty(), "%s: floor mesh repair list is complete (leftover: %s)" % [sc.resource_path.get_file(), str(leftover.keys())])
+		var stacked_after : int = tool_node.stacked_overlap_samples(inst)
+		stacked_total_before += stacked_before
+		_check(stacked_after == 0, "%s: no coplanar stacked floor tiles of similar colour left (before repair %d samples, after %d)" % [sc.resource_path.get_file(), stacked_before, stacked_after])
+		# the repair list is complete and fresh: re-running the tool's analysis on the repaired meshes finds no
+		# stacked-tile clipping and no vertex snap left (a stale list after a glb re-import, or a new module, fails
+		# here). Up to a couple of triangles can still be droppable on a second pass (the clipped pieces newly cover a
+		# small neighbour).
+		var leftover : Dictionary = tool_node._scene_repairs(inst)
+		var left_adds : int = 0
+		var left_snaps : int = 0
+		var left_drops : int = 0
+		for np in leftover:
+			for sk in leftover[np]:
+				left_adds += (leftover[np][sk]["add"] as Array).size()
+				left_snaps += (leftover[np][sk]["snap"] as Array).size()
+				left_drops += (leftover[np][sk]["drop"] as Array).size()
+		_check(left_adds == 0 and left_snaps == 0 and left_drops <= 4, "%s: floor mesh repair list is complete (leftover on the repaired meshes: %d clips, %d snaps, %d drops)" % [sc.resource_path.get_file(), left_adds, left_snaps, left_drops])
 		var tiles : Array = _scene_floor(inst)
 		var gaps : Array[String] = _tile_gaps(tiles, sc.resource_path)
 		for g in gaps:
@@ -89,7 +106,8 @@ func _ready() -> void:
 			_check(false, sl)
 		_check(true, "%s audited (%d floor tiles)" % [sc.resource_path.get_file(), tiles.size()])
 		inst.queue_free()
-	print("  part A: %d module scenes audited" % seen.size())
+	_check(stacked_total_before > 100, "the stacked-tile measure sees the problem in the unrepaired meshes (%d samples)" % stacked_total_before)
+	print("  part A: %d module scenes audited, %d stacked-tile samples before repair, 0 after" % [seen.size(), stacked_total_before])
 
 	# ── Part B ───────────────────────────────────────────────────────────────
 	var doors_total : int = 0

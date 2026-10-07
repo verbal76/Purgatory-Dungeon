@@ -4,6 +4,8 @@ extends RefCounted
 ## surface, which floor triangles to leave out and which floor vertices to move by a millimetre:
 ##   drop  the downward-wound back layer of the double-sided floor that lies in the very same plane as the visible
 ##         floor and carries the grey underside texture (z-fighting with the floor, different on every GPU);
+##   add   pieces of floor triangles that another tile partly overlaps in the same plane (the triangle is dropped,
+##         the part outside the winning tile is added): removes the depth tie between stacked floor tiles;
 ##   snap  floor vertices 1 mm off their neighbours (a 1 mm slit through the middle of the square rooms).
 ## Applied once per mesh resource (the meshes are shared by every instance of a module), in place, so it costs a few
 ## milliseconds the first time a module type is instantiated and nothing afterwards. No nodes, materials or draw
@@ -76,7 +78,47 @@ static func _repair(mesh: ArrayMesh, per_surface: Dictionary) -> bool:
 		var drop: Dictionary = {}
 		for t in (rep.get("drop", []) as Array):
 			drop[int(t)] = true
-		if not drop.is_empty():
+		# pieces of partly overlapped floor triangles: new vertices interpolated from the source triangle
+		var added := PackedInt32Array()
+		var adds: Array = rep.get("add", [])
+		if not adds.is_empty():
+			var idx0: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+			var nrm: Variant = arrays[Mesh.ARRAY_NORMAL]
+			var tang: Variant = arrays[Mesh.ARRAY_TANGENT]
+			var uvs: Variant = arrays[Mesh.ARRAY_TEX_UV]
+			for ad in adds:
+				var src: int = int(ad[0])
+				var i0: int = idx0[src * 3]
+				var i1: int = idx0[src * 3 + 1]
+				var i2: int = idx0[src * 3 + 2]
+				for q in 3:
+					var u: float = float(ad[1 + q * 2])
+					var v: float = float(ad[2 + q * 2])
+					var wa: float = 1.0 - u - v
+					vs.append(vs[i0] * wa + vs[i1] * u + vs[i2] * v)
+					if nrm != null:
+						var nn: PackedVector3Array = nrm
+						nn.append((nn[i0] * wa + nn[i1] * u + nn[i2] * v).normalized())
+						nrm = nn
+					if tang != null:
+						var tt: PackedFloat32Array = tang
+						for c in 3:
+							tt.append(tt[i0 * 4 + c] * wa + tt[i1 * 4 + c] * u + tt[i2 * 4 + c] * v)
+						tt.append(tt[i0 * 4 + 3])
+						tang = tt
+					if uvs != null:
+						var uu: PackedVector2Array = uvs
+						uu.append(uu[i0] * wa + uu[i1] * u + uu[i2] * v)
+						uvs = uu
+					added.append(vs.size() - 1)
+			arrays[Mesh.ARRAY_VERTEX] = vs
+			if nrm != null:
+				arrays[Mesh.ARRAY_NORMAL] = nrm
+			if tang != null:
+				arrays[Mesh.ARRAY_TANGENT] = tang
+			if uvs != null:
+				arrays[Mesh.ARRAY_TEX_UV] = uvs
+		if not drop.is_empty() or not added.is_empty():
 			var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
 			var out := PackedInt32Array()
 			out.resize(idx.size())
@@ -89,6 +131,7 @@ static func _repair(mesh: ArrayMesh, per_surface: Dictionary) -> bool:
 				out[o + 2] = idx[t * 3 + 2]
 				o += 3
 			out.resize(o)
+			out.append_array(added)
 			arrays[Mesh.ARRAY_INDEX] = out
 		arrays_all[s] = arrays
 	mesh.clear_surfaces()
