@@ -21,5 +21,6 @@ Checks: `python3 tests/test_android_icons.py` (part of `tests/run_tests.sh`): pr
 monochrome, opaque background, legacy tile, keyhole/frame contrast, and that the committed legacy PNG equals the generator output.
 
 Only PNG contents change, so `export_presets.cfg`/`project.godot` (the native fingerprint) are untouched. The launcher icon is
-baked into the APK: it cannot be delivered by an OTA; players see it from the next real APK. The desktop/window icon
-(`config/icon`, Windows/macOS native icons) is a separate, unchanged set.
+baked into the APK: it cannot be delivered by an OTA; players see it from the next real APK. The desktop/window icon (`config/icon`, the Windows `.ico` and the macOS `.icns`, all in `app_icon/`) is the same artwork on the rounded tile:
+`python3 tools/make_desktop_icon.py` regenerates it (standard library only). Pointing `project.godot` at it is a native-input change (it was
+done in the v8 generation; the old VPP files are unreferenced).

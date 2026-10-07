@@ -11,16 +11,16 @@ config_version=5
 [application]
 
 config/name="Purgatory Dungeon"
-config/version="7"
+config/version="8"
 run/main_scene="res://scenes/StudioSplash.tscn"
 boot_splash/bg_color=Color(0.035, 0.03, 0.03, 1)
 boot_splash/show_image=false
 config/use_hidden_project_data_directory=false
 config/quit_on_go_back=false
 config/features=PackedStringArray("4.6", "Forward Plus")
-config/icon="uid://btre00ciwixrj"
-config/macos_native_icon="res://Music & background images/VPP_logo_from_source_256.icns"
-config/windows_native_icon="res://Music & background images/VPP_logo_from_source_256.ico"
+config/icon="res://app_icon/PurgatoryDungeon.png"
+config/macos_native_icon="res://app_icon/PurgatoryDungeon.icns"
+config/windows_native_icon="res://app_icon/PurgatoryDungeon.ico"
 
 [autoload]
 

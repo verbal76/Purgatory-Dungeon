@@ -186,5 +186,51 @@ class Reproducible(unittest.TestCase):
         self.assertNotIn("logo", body.lower())
 
 
+class TestDesktopIcon(unittest.TestCase):
+    """The window/desktop icon set (app_icon/) is the same artwork, wired from project.godot, and reproducible."""
+
+    def test_project_points_at_the_new_icons(self):
+        text = open(os.path.join(ROOT, "project.godot"), encoding="utf-8").read()
+        for key, path in (("config/icon", "res://app_icon/PurgatoryDungeon.png"),
+                          ("config/windows_native_icon", "res://app_icon/PurgatoryDungeon.ico"),
+                          ("config/macos_native_icon", "res://app_icon/PurgatoryDungeon.icns")):
+            self.assertIn('%s="%s"' % (key, path), text)
+            self.assertTrue(os.path.isfile(os.path.join(ROOT, path[len("res://"):])), path)
+        self.assertNotIn("VPP_logo_from_source_256", text, "the old placeholder icon must not be referenced any more")
+
+    def test_png_ico_icns_are_valid(self):
+        import struct
+        d = os.path.join(ROOT, "app_icon")
+        png = open(os.path.join(d, "PurgatoryDungeon.png"), "rb").read()
+        self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+        w, h, depth, ctype = struct.unpack(">IIBB", png[16:26])
+        self.assertEqual((w, h, depth, ctype), (256, 256, 8, 6))
+        ico = open(os.path.join(d, "PurgatoryDungeon.ico"), "rb").read()
+        reserved, kind, count = struct.unpack("<HHH", ico[:6])
+        self.assertEqual((reserved, kind), (0, 1))
+        self.assertEqual(count, 6)
+        sizes = []
+        for i in range(count):
+            ww, hh, _c, _r, _pl, bpp, nbytes, off = struct.unpack("<BBBBHHII", ico[6 + 16 * i:22 + 16 * i])
+            sizes.append(ww or 256)
+            self.assertEqual(ico[off:off + 8], b"\x89PNG\r\n\x1a\n", "PNG-compressed entry")
+            self.assertEqual(bpp, 32)
+            self.assertLessEqual(off + nbytes, len(ico))
+        self.assertEqual(sorted(sizes), [16, 32, 48, 64, 128, 256])
+        icns = open(os.path.join(d, "PurgatoryDungeon.icns"), "rb").read()
+        self.assertEqual(icns[:4], b"icns")
+        self.assertEqual(struct.unpack(">I", icns[4:8])[0], len(icns))
+        for tag in (b"ic07", b"ic08", b"ic09"):
+            self.assertIn(tag, icns)
+
+    def test_generator_reproduces_the_committed_png(self):
+        import tempfile
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import make_desktop_icon as M
+        base = M.A.render(M.tile_fn(M.BASE), M.BASE, M.A.LEGACY_SCALE * M.BASE / M.A.LEGACY)
+        fresh = M.png_bytes(256, 256, M.down(base, 256))
+        self.assertEqual(fresh, open(os.path.join(ROOT, "app_icon", "PurgatoryDungeon.png"), "rb").read())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2 if "-v" in sys.argv else 1, argv=[a for a in sys.argv if a != "-v"])
