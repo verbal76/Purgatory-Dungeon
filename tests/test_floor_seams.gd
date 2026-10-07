@@ -7,14 +7,25 @@ extends Node
 ## lower floor ended under it and a hairline of void showed through). They show as a one pixel line at a
 ## distance, which is why they came and went with the camera.
 ##
+## Second cause (same family): the module meshes carry a coplanar back layer under the floor (downward-wound
+## duplicate triangles) and a 1 mm slit in the square rooms; scripts/floor_mesh_repair.gd (list in
+## data/floor_mesh_repairs.json, made by tools/floor_mesh_repair_tool.gd) removes the covered duplicates and closes
+## the slit at load time. This test checks the REPAIRED state.
+##
 ## Part A  (every module scene, local space, no generator): the base floor (flat faces at y = 0) must not have
-##         a gap between neighbouring tiles, and no floor tile may float above or sink below y = 0.
+##         a gap between neighbouring tiles (between tiles or inside one mesh, 0.1 mm to 2 cm), no floor tile may
+##         float above or sink below y = 0, and the repair list must be complete and fresh (the repair tool finds
+##         nothing left to drop or snap on the repaired meshes), and no two floor tiles (meshes) keep coplanar
+##         overlapping triangles of similar colour deeper than 3 mm (a depth tie between tiles).
 ## Part B  (several generated dungeons): at every doorway the base floors of the two modules must meet without
 ##         a gap, the doorway markers must sit exactly one connection_nudge apart (sub-millimetre snapping) and
-##         every module must be turned by an exact multiple of 90 degrees.
+##         every module must be turned by an exact multiple of 90 degrees; the generator must have applied the repair
+##         to every listed mesh (and dropping covered triangles must not have opened a gap at any doorway).
 ## Pure geometry, headless, ~20 s. Needs PURGATORY_SAVE_ROOT like the other tests (the main scene is read for
 ## its exported settings).
 
+const FloorMeshRepair = preload("res://scripts/floor_mesh_repair.gd")
+const RepairTool = preload("res://tools/floor_mesh_repair_tool.gd")
 const MAIN_SCENE := "res://scenes/Purgatory_Dungeon_main_game_file.tscn"
 const GEN_SCENE := "res://scenes/dungeon_generation_function.tscn"
 const SEEDS : Array[int] = [3, 11, 29, 101, 2024, 777]
@@ -56,12 +67,34 @@ func _ready() -> void:
 
 	# ── Part A ───────────────────────────────────────────────────────────────
 	var seen : Dictionary = {}
+	var stacked_total_before : int = 0
 	for sc in scenes:
 		if seen.has(sc.resource_path):
 			continue
 		seen[sc.resource_path] = true
 		var inst : Node3D = sc.instantiate()
 		add_child(inst)
+		# the repaired state is what the game renders: apply the load-time repair like the generator does
+		var tool_node : Node = RepairTool.new()
+		var stacked_before : int = tool_node.stacked_overlap_samples(inst)
+		FloorMeshRepair.apply(inst, sc.resource_path)
+		var stacked_after : int = tool_node.stacked_overlap_samples(inst)
+		stacked_total_before += stacked_before
+		_check(stacked_after == 0, "%s: no coplanar stacked floor tiles of similar colour left (before repair %d samples, after %d)" % [sc.resource_path.get_file(), stacked_before, stacked_after])
+		# the repair list is complete and fresh: re-running the tool's analysis on the repaired meshes finds no
+		# stacked-tile clipping and no vertex snap left (a stale list after a glb re-import, or a new module, fails
+		# here). Up to a couple of triangles can still be droppable on a second pass (the clipped pieces newly cover a
+		# small neighbour).
+		var leftover : Dictionary = tool_node._scene_repairs(inst)
+		var left_adds : int = 0
+		var left_snaps : int = 0
+		var left_drops : int = 0
+		for np in leftover:
+			for sk in leftover[np]:
+				left_adds += (leftover[np][sk]["add"] as Array).size()
+				left_snaps += (leftover[np][sk]["snap"] as Array).size()
+				left_drops += (leftover[np][sk]["drop"] as Array).size()
+		_check(left_adds == 0 and left_snaps == 0 and left_drops <= 4, "%s: floor mesh repair list is complete (leftover on the repaired meshes: %d clips, %d snaps, %d drops)" % [sc.resource_path.get_file(), left_adds, left_snaps, left_drops])
 		var tiles : Array = _scene_floor(inst)
 		var gaps : Array[String] = _tile_gaps(tiles, sc.resource_path)
 		for g in gaps:
@@ -69,9 +102,12 @@ func _ready() -> void:
 		var floating : Array[String] = _floating_tiles(inst)
 		for f in floating:
 			_check(false, "%s: %s" % [sc.resource_path.get_file(), f])
+		for sl in _floor_slits(sc.resource_path):
+			_check(false, sl)
 		_check(true, "%s audited (%d floor tiles)" % [sc.resource_path.get_file(), tiles.size()])
 		inst.queue_free()
-	print("  part A: %d module scenes audited" % seen.size())
+	_check(stacked_total_before > 100, "the stacked-tile measure sees the problem in the unrepaired meshes (%d samples)" % stacked_total_before)
+	print("  part A: %d module scenes audited, %d stacked-tile samples before repair, 0 after" % [seen.size(), stacked_total_before])
 
 	# ── Part B ───────────────────────────────────────────────────────────────
 	var doors_total : int = 0
@@ -100,6 +136,7 @@ func _ready() -> void:
 		seed(sd)
 		var result : Dictionary = gen.generate_dungeon()
 		_check(bool(result.get("success", false)), "seed %d: generation succeeds" % sd)
+		_check_repair_wired(gen, sd)
 		var stats : Dictionary = _check_doors(gen, sd, float(cfg.connection_nudge))
 		doors_total += int(stats["doors"])
 		cracks_total += int(stats["cracks"])
@@ -247,6 +284,7 @@ func _geo_for_scene(scene_path: String) -> Dictionary:
 		return _scene_geo[scene_path]
 	var inst : Node3D = (load(scene_path) as PackedScene).instantiate()
 	add_child(inst)
+	FloorMeshRepair.apply(inst, scene_path)
 	var ta := PackedVector3Array()
 	var tb := PackedVector3Array()
 	var tc := PackedVector3Array()
@@ -321,6 +359,26 @@ func _module_covers(m: Node3D, inv: Transform3D, px: float, pz: float) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 #  Part B: doorways of a generated dungeon
 # ══════════════════════════════════════════════════════════════════════════════
+
+## The generator hands every module it instantiates to FloorMeshRepair: each mesh named in the repair list of a placed
+## module must carry the "repaired" mark, and the repaired meshes must be the ones the modules really render.
+func _check_repair_wired(gen: Node, seed_value: int) -> void:
+	FloorMeshRepair._load()
+	var listed : int = 0
+	var marked : int = 0
+	for m in gen.placed_modules:
+		var path : String = (m as Node3D).scene_file_path
+		if not FloorMeshRepair._data.has(path):
+			continue
+		for node_path in (FloorMeshRepair._data[path] as Dictionary):
+			var mi := (m as Node).get_node_or_null(NodePath(str(node_path))) as MeshInstance3D
+			if mi == null or mi.mesh == null:
+				continue
+			listed += 1
+			if mi.mesh.has_meta(FloorMeshRepair.META):
+				marked += 1
+	_check(listed > 100 and listed == marked, "seed %d: generator applies the floor mesh repair to every listed mesh (%d of %d marked)" % [seed_value, marked, listed])
+
 
 func _check_doors(gen: Node, seed_value: int, nudge: float) -> Dictionary:
 	var mods : Array = gen.placed_modules
@@ -411,3 +469,51 @@ func _door_uncovered(ma: Node3D, mb: Node3D, ca: Node3D, cb: Node3D, nrm: Vector
 				if OS.get_environment("SEAMDEBUG") != "" and open < 4:
 					print("      open sample t=%.2f s=%.2f  a-local=%s" % [t, s, str(inv_a * Vector3(px, 0.0, pz))])
 	return open
+
+
+## Gaps inside the base floor of a module scene, whether between two tiles or inside one mesh: every triangle edge is
+## sampled every 0.25 m; if the floor is missing just outside it (more than SLIT_MIN away) but floor resumes within
+## SLIT_MAX, that is a slit a ray can pass through. A free floor boundary (floor never resumes within SLIT_MAX) is
+## not a slit. Returns one message per distinct place (width rounded to 0.1 mm).
+const SLIT_MIN : float = 0.0001
+const SLIT_MAX : float = 0.02
+const SLIT_PROBES : Array[float] = [0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02]
+func _floor_slits(scene_path: String) -> Array[String]:
+	var geo : Dictionary = _geo_for_scene(scene_path)
+	var ta : PackedVector3Array = geo["a"]
+	var tb : PackedVector3Array = geo["b"]
+	var tc : PackedVector3Array = geo["c"]
+	var found : Dictionary = {}
+	var out : Array[String] = []
+	for t in ta.size():
+		var v : Array[Vector3] = [ta[t], tb[t], tc[t]]
+		for e in 3:
+			var p0 : Vector3 = v[e]
+			var p1 : Vector3 = v[(e + 1) % 3]
+			var p2 : Vector3 = v[(e + 2) % 3]
+			var d : Vector2 = Vector2(p1.x - p0.x, p1.z - p0.z)
+			var ln : float = d.length()
+			if ln < 0.3:
+				continue
+			var dn : Vector2 = d / ln
+			var outn : Vector2 = Vector2(-dn.y, dn.x)
+			if outn.dot(Vector2(p2.x - p0.x, p2.z - p0.z)) > 0.0:
+				outn = -outn
+			var n : int = maxi(int(ln / 0.25), 1)
+			for k in n:
+				var f : float = (float(k) + 0.5) / float(n)
+				var px : float = p0.x + d.x * f
+				var pz : float = p0.z + d.y * f
+				if _base_covered(geo, px + outn.x * SLIT_MIN, pz + outn.y * SLIT_MIN):
+					continue
+				for w in SLIT_PROBES:
+					if w > SLIT_MAX:
+						break
+					if _base_covered(geo, px + outn.x * w, pz + outn.y * w):
+						var key : String = "%.4f|%.1f|%.1f" % [w, snappedf(px, 1.0), snappedf(pz, 1.0)]
+						if not found.has(key):
+							found[key] = true
+							out.append("%s: floor slit up to %.1f mm wide at (%.3f, %.3f), edge direction (%.2f, %.2f)" % [
+								scene_path.get_file(), w * 1000.0, px, pz, dn.x, dn.y])
+						break
+	return out
