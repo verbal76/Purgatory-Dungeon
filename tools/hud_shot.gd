@@ -1,6 +1,6 @@
 # Dev utility (not shipped): boots the real dungeon scene and saves the gameplay HUD at three moments:
 #   <prefix>_a  idle at the start of a run
-#   <prefix>_b  hurt, with trap statuses, kills, wallet counts and the rapid-attack bar
+#   <prefix>_b  hurt, with trap statuses, kills and wallet counts
 #   <prefix>_c  the minimap overlay open (compass letters, portal and enemy markers)
 # Used by tools/ui_review.sh (HUD=1). Needs a display (xvfb) and is slow in software GL:
 #   SHOT_CLASS=barbarian|mage PURGATORY_FORCE_TOUCH=1 godot --rendering-driver opengl3 --path . \
@@ -42,9 +42,6 @@ func _process(_d: float) -> bool:
 		p.apply_status("drunk", 0)
 		p.apply_status("acid_pool", 15)
 		p.apply_status("heavy_gravity", 3)
-		p._attack_held = true
-		p._rapid_attack_charge = 0.6
-		p._refresh_rapid_attack_bar()
 	if _n == 55:
 		current_scene.kill_counter_label.text = "Kills: 27"
 	if _n == 60:

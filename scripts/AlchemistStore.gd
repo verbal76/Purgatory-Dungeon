@@ -59,7 +59,6 @@ var perks_def : Array = [
 	{"key": "greed",       "name": "Greed",            "desc": "Double Drop Chance +5%"},
 	{"key": "swiftness",   "name": "Swiftness",        "desc": "Move Speed +5%"},
 	{"key": "health_regen","name": "Regeneration",     "desc": "+0.5 HP/sec per level"},
-	{"key": "cyclone",     "name": "Cyclone",          "desc": "+0.5s Rapid Attack / -3s Cooldown"},
 	{"key": "trap_sense",  "name": "Trap Sense",       "desc": "Each level adds 25% chance a trap glows red — requires 5 runs"},
 ]
 

@@ -37,7 +37,7 @@ const AIM_DONE_SECONDS := 0.8
 const TEXT := {
 	"move": "Drag here to move",
 	"look": "Swipe on this side to look around",
-	"attack": "Tap to attack - hold to charge",
+	"attack": "Tap to attack",
 	"use": "Tap to use",
 	"block": "Hold to block",
 	"burst": "Burst costs a potion",

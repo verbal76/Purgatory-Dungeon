@@ -716,29 +716,10 @@ func _physics_tick(delta: float) -> void:
 		_change_state(_get_idle_state())
 		return
 
-	# SURGICAL ADD: Rapid Attack awareness. When the player is spinning, the brute
-	# cannot safely attack — it would just walk into the hitbox repeatedly.
-	# Instead it charges straight at the player at full speed, which feels
-	# aggressive and keeps pressure on without the suicidal melee loop.
-	var player_is_rapid_attack : bool = false
-	if is_instance_valid(player) and player.get("_rapid_attack_active") != null:
-		player_is_rapid_attack = player.get("_rapid_attack_active") == true
-
-	if player_is_rapid_attack:
-		# Charge directly at the player — skip waypoints and wall avoidance.
-		# The rapid_attack's AOE will hit them anyway; at least they look threatening.
-		var charge_dir := flat_to_player.normalized()
-		var chase_speed : float = close_speed * _cached_speed_mult * 1.5
-		_set_horizontal_velocity(charge_dir * chase_speed, move_acceleration, delta)
-		if actually_moving:
-			anim_player.speed_scale = _cached_speed_mult * 1.5
-			_change_state("standing_run_forward" if _is_armed else "unarmed_run_forward")
-		return
-
 	# Kick: higher priority than normal melee — interrupts when cooldown is clear.
 	# Random chance gate prevents kick from triggering every available tick.
 	if not _is_attacking and not _is_kicking_ai and _kick_cooldown_timer <= 0.0 \
-			and distance <= enemy_kick_range and not player_is_rapid_attack \
+			and distance <= enemy_kick_range \
 			and randf() < enemy_kick_chance:
 		_do_ai_kick(player)
 		return

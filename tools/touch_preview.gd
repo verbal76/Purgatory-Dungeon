@@ -8,7 +8,7 @@
 #      for the mm minimums),
 #      TOUCH_OPACITY (percent, default 70), TOUCH_SCALE (percent, default 100), TOUCH_STICK=idle|active|none,
 #      TOUCH_PRESSED="attack,block" (buttons drawn pressed), TOUCH_HINT=<onboarding step>, TOUCH_BRIGHT=1 (light wall),
-#      TOUCH_COOLDOWN (0..1, default 0.45), TOUCH_BADGE (default "3"), TOUCH_CHARGE (0..1, default none),
+#      TOUCH_COOLDOWN (0..1, default 0.45), TOUCH_BADGE (default "3"),
 #      TOUCH_DISABLED=AOE (drawn in the disabled look), TOUCH_MAP_ON=1 (map toggled on), TOUCH_DUMP=1 (print every button centre/radius, for before/after comparison).
 extends Control
 
@@ -17,7 +17,6 @@ var _bright: bool = false
 var _rng := RandomNumberGenerator.new()
 var _cooldown: float = 0.45
 var _badge: String = "3"
-var _charge: float = -1.0
 
 
 func _ready() -> void:
@@ -42,9 +41,6 @@ func _ready() -> void:
 	var cd: String = OS.get_environment("TOUCH_COOLDOWN")
 	_cooldown = float(cd) if cd != "" else 0.45
 	_badge = OS.get_environment("TOUCH_BADGE") if OS.get_environment("TOUCH_BADGE") != "" else "3"
-	var ch: String = OS.get_environment("TOUCH_CHARGE")
-	if ch != "":
-		_charge = float(ch)
 	for a in OS.get_environment("TOUCH_PRESSED").split(",", false):
 		if _tc.buttons.has(a):
 			(_tc.buttons[a] as TouchButton).pressed_visual = true
@@ -84,9 +80,6 @@ func _process(_delta: float) -> void:
 		aoe.badge = _badge
 		aoe.unavailable = dis
 		aoe.queue_redraw()
-	if _charge >= 0.0 and "charge" in _tc.buttons["attack"] and _tc.buttons["attack"].get("charge") != _charge:
-		_tc.buttons["attack"].set("charge", _charge)
-		_tc.buttons["attack"].queue_redraw()
 
 
 func _draw() -> void:

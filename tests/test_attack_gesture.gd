@@ -4,8 +4,9 @@ extends Node
 ##   TAP  = exactly one attack            HOLD (no drag) = exactly one attack after ATTACK_INTENT_MS, never repeating
 ##   DRAG = zero attacks, camera at once  DRAG BACK to the centre = still look, zero attacks; a new attack needs a new touch
 ##   touch-up / cancel / lost pointer / background / focus / pause / hide / exit_tree clear everything, no attack on the way out
-## And the field defect this file pins: the Mage kept machine-gunning after the finger left (the Rapid Attack started from a
-## hold-to-charge that the look finger had filled, or from a release that was lost while the tree was paused).
+## And the owner decision this file pins: the Rapid Attack (hold-to-charge, then automatic fire) no longer exists on any
+## control scheme. One press (or one touch gesture) is exactly one attack; holding never charges, repeats or changes anything,
+## the players have no charge / hold state and no ability bar, and a release lost while the tree was paused cannot start anything.
 ##
 ## Two parts, selected by ATTACK_CLASS (run_tests.sh runs both):
 ##   unset           the real TouchControls driven by synthetic InputEventScreenTouch / ScreenDrag events on a controllable clock
@@ -141,7 +142,7 @@ func _constants_tests(tc: TouchControls) -> void:
 	var tick_ms: float = 1000.0 / float(Engine.physics_ticks_per_second)
 	_check(TouchControls.ATTACK_INTENT_MS >= 100 and TouchControls.ATTACK_INTENT_MS <= 200, "hold-intent time is %d ms (120-180 ms class)" % TouchControls.ATTACK_INTENT_MS)
 	_check(float(TouchControls.ATTACK_PULSE_MS) >= 2.0 * tick_ms, "the attack pulse (%d ms) spans at least two physics ticks (%.1f ms each)" % [TouchControls.ATTACK_PULSE_MS, tick_ms])
-	_check(TouchControls.ATTACK_PULSE_MS * 10 < 1500, "the pulse is a tiny fraction of the 1.5 s Rapid Attack charge")
+	_check(not ("charge" in tc.buttons["attack"]), "the ATTACK button has no hold-to-charge ring any more")
 	_check(TouchControls.ATTACK_PULSE_MAX_MS > TouchControls.ATTACK_PULSE_MS and TouchControls.ATTACK_PULSE_MAX_MS <= 300, "the hard cap on a scheduled release is %d ms" % TouchControls.ATTACK_PULSE_MAX_MS)
 	var c: Vector2 = (tc.buttons["attack"] as TouchButton).center
 	_touch(0, c, true)
@@ -528,7 +529,7 @@ func _small_ui_tests() -> void:
 	SettingsManager.gameplay_settings[TouchControls.KEY_SCALE] = 100.0
 
 
-# ── Classic scheme: unchanged semantics (press / hold = charge / release), but never leaked ───────────
+# ── Classic scheme: press / hold / release, one press = one attack (holding never charges), never leaked ───────────
 func _classic_tests() -> void:
 	SettingsManager.gameplay_settings[TouchControls.KEY_SCHEME] = TouchControls.SCHEME_CLASSIC
 	var tc: TouchControls = _new_layer()
@@ -539,7 +540,7 @@ func _classic_tests() -> void:
 	_touch(0, c, true)
 	_check(Input.is_action_pressed("attack"), "Classic: touching ATTACK presses attack at once (unchanged)")
 	await _adv(tc, 2000)
-	_check(Input.is_action_pressed("attack") and _presses() == 1, "Classic: holding keeps it held (hold = charge, unchanged): one press")
+	_check(Input.is_action_pressed("attack") and _presses() == 1, "Classic: holding keeps it held (nothing charges): one press")
 	_touch(0, c, false)
 	await _adv(tc, 200)
 	_check(not Input.is_action_pressed("attack") and _attack_events == [true, false], "Classic: the lift releases it")
@@ -573,9 +574,10 @@ func _classic_tests() -> void:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# The real player in the real run (real time): the machine-gun defect, end to end.
+# The real player in the real run (real time): one press = one attack, end to end, and no Rapid Attack anywhere.
 var _bolts: int = 0
-var _rapid_seen: bool = false
+var _swings: int = 0                # rising edges of the player's _is_attacking: one per attack
+var _was_attacking: bool = false
 var _player: Node = null
 
 
@@ -589,8 +591,26 @@ func _wait(sec: float) -> void:
 	while Time.get_ticks_msec() < t_end:
 		await get_tree().process_frame
 		_flush()
-		if _player != null and _player.get("_rapid_attack_active") == true:
-			_rapid_seen = true
+		if _player != null:
+			var a: bool = _player.get("_is_attacking") == true
+			if a and not _was_attacking:
+				_swings += 1
+			_was_attacking = a
+
+
+## The attack action as a real device sends it (an InputEventAction through the input pipeline, like a mouse button).
+func _attack_action(pressed: bool) -> void:
+	var e := InputEventAction.new()
+	e.action = "attack"
+	e.pressed = pressed
+	Input.parse_input_event(e)
+	_flush()
+
+
+func _reset_attacks() -> void:
+	_reset_counts()
+	_bolts = 0
+	_swings = 0
 
 
 func _player_tests(cls: String) -> void:
@@ -628,94 +648,96 @@ func _player_tests(cls: String) -> void:
 	var c: Vector2 = (tc.buttons["attack"] as TouchButton).center
 	await _wait(0.5)
 
+	# THE RAPID ATTACK DOES NOT EXIST: no ability, charge, hold state, timers or bar on the player; no ring on the button.
+	for gone in ["rapid_attack_charge_time", "rapid_attack_duration", "rapid_attack_cooldown", "rapid_attack_attack_rate",
+			"_rapid_attack_charge", "_rapid_attack_active", "_rapid_attack_timer", "_rapid_attack_cooldown_remain",
+			"_rapid_attack_attack_timer", "_rapid_attack_bar_label", "_attack_held"]:
+		_check(not (gone in _player), "[%s] the player has no '%s'" % [cls, gone])
+	for gone_method in ["_start_rapid_attack", "_end_rapid_attack", "_start_mage_rapid_attack", "_end_mage_rapid_attack",
+			"_fire_rapid_attack_bolts", "_refresh_rapid_attack_bar"]:
+		_check(not _player.has_method(gone_method), "[%s] the player has no %s()" % [cls, gone_method])
+	var vitals = _player.get("_vitals")
+	_check(vitals != null and not ("ability_bar" in vitals) and not vitals.has_method("set_ability"), "[%s] the HUD has health only: no ability bar" % cls)
+	_check(not ("charge" in tc.buttons["attack"]), "[%s] the ATTACK button has no charge ring" % cls)
+
 	# TAP: one attack (one bolt for the Mage)
-	_reset_counts()
-	_bolts = 0
+	_reset_attacks()
 	_touch(0, c, true)
 	await _wait(0.06)
 	_touch(0, c, false)
 	await _wait(1.6)
 	_check(_presses() == 1, "[%s] a tap sends one attack press (%d)" % [cls, _presses()])
+	_check(_swings == 1, "[%s] a tap is exactly one attack (%d)" % [cls, _swings])
 	if cls == "mage":
 		_check(_bolts == 1, "[mage] a tap fires exactly one bolt (%d)" % _bolts)
-	_check(not _rapid_seen and _player.get("_rapid_attack_charge") == 0.0 and _player.get("_attack_held") == false, "[%s] a tap never charges or starts the Rapid Attack" % cls)
 
-	# HOLD 3.5 s without dragging, then lift: one attack, never a machine gun, not after the lift either
-	_reset_counts()
-	_bolts = 0
+	# HOLD 3.5 s without dragging, then lift: one attack, never a repeat, not after the lift either
+	_reset_attacks()
 	_touch(0, c, true)
 	await _wait(3.5)
 	_check(_presses() == 1, "[%s] holding 3.5 s: still exactly one attack press (%d)" % [cls, _presses()])
+	_check(_swings == 1, "[%s] holding 3.5 s: exactly one attack (%d)" % [cls, _swings])
 	if cls == "mage":
 		_check(_bolts == 1, "[mage] holding 3.5 s: exactly one bolt (%d)" % _bolts)
-	_check(not _rapid_seen and _player.get("_rapid_attack_charge") == 0.0 and _player.get("_attack_held") == false, "[%s] ...no charge builds from the look finger (charge %s)" % [cls, _player.get("_rapid_attack_charge")])
 	_touch(0, c, false)
 	await _wait(3.0)
-	_check(_presses() == 1 and not _rapid_seen, "[%s] ...and nothing fires after the finger leaves (presses %d)" % [cls, _presses()])
+	_check(_presses() == 1 and _swings == 1, "[%s] ...and nothing fires after the finger leaves (presses %d, attacks %d)" % [cls, _presses(), _swings])
 	if cls == "mage":
 		_check(_bolts == 1, "[mage] no bolt after the lift (%d)" % _bolts)
 
 	# DRAG (look) for 4 s, then lift: no attack at any time, and the camera really turned
-	_reset_counts()
-	_bolts = 0
+	_reset_attacks()
 	var yaw0: float = _player.rotation.y
 	_touch(0, c, true)
 	_drag(0, c + Vector2(60, 0))
 	await _wait(4.0)
 	_check(absf(_player.rotation.y - yaw0) > 0.3, "[%s] the look drag turns the real player (%.2f rad)" % [cls, _player.rotation.y - yaw0])
-	_check(_presses() == 0 and _player.get("_rapid_attack_charge") == 0.0, "[%s] 4 s of looking: zero attacks, zero charge" % cls)
+	_check(_presses() == 0 and _swings == 0, "[%s] 4 s of looking: zero attacks" % cls)
 	if cls == "mage":
 		_check(_bolts == 0, "[mage] 4 s of looking fires no bolt (%d)" % _bolts)
 	_drag(0, c)   # back to the centre: still look
 	await _wait(1.0)
 	_touch(0, c, false)
 	await _wait(3.0)
-	_check(_presses() == 0 and not _rapid_seen, "[%s] drag back to the centre and lift: still zero attacks, no Rapid Attack ever" % cls)
+	_check(_presses() == 0 and _swings == 0, "[%s] drag back to the centre and lift: still zero attacks" % cls)
 	if cls == "mage":
 		_check(_bolts == 0, "[mage] no bolt after the look gesture (%d)" % _bolts)
 
-	# STUCK-STATE INJECTION: a hold flag / full charge left behind by a release that was lost while paused.
-	# Before the fix the next plain tap's release started the 4 s machine gun.
-	_reset_counts()
-	_bolts = 0
-	_player.set("_attack_held", true)
-	_player.set("_rapid_attack_charge", 1.0)
-	await _wait(0.3)
-	_check(_player.get("_attack_held") == false and _player.get("_rapid_attack_charge") == 0.0, "[%s] the player drops a hold flag the input state no longer backs (held %s charge %s)" % [cls, _player.get("_attack_held"), _player.get("_rapid_attack_charge")])
-	_touch(0, c, true)
-	await _wait(0.05)
-	_touch(0, c, false)
-	await _wait(2.0)
-	_check(not _rapid_seen and _player.get("_rapid_attack_active") == false, "[%s] the tap after a stuck state does not start the Rapid Attack" % cls)
+	# DESKTOP / CONTROLLER: the attack action held for 4 s (a mouse button or trigger that is kept down) is one attack too.
+	_reset_attacks()
+	_attack_action(true)
+	await _wait(4.0)
+	_attack_action(false)
+	await _wait(1.5)
+	_check(_swings == 1, "[%s] the attack action held 4 s is exactly one attack (%d)" % [cls, _swings])
 	if cls == "mage":
-		_check(_bolts == 1, "[mage] ...it fires its one bolt (%d)" % _bolts)
+		_check(_bolts == 1, "[mage] the attack action held 4 s fires exactly one bolt (%d)" % _bolts)
 
-	# THE FIELD SCENARIO, reproduced in Classic (which keeps hold-to-charge): hold until the charge is full, background /
-	# pause (the release is delivered into a paused tree), come back, tap: no machine gun.
-	_reset_counts()
-	_bolts = 0
+	# CLASSIC, hold across an interruption: hold, pause / background (the release is delivered into a paused tree), come
+	# back: nothing fired in between and the next plain tap is exactly one attack.
+	_reset_attacks()
 	SettingsManager.gameplay_settings[TouchControls.KEY_SCHEME] = TouchControls.SCHEME_CLASSIC
 	tc.set_scheme(TouchControls.SCHEME_CLASSIC)
 	await _wait(0.3)
 	var cc: Vector2 = (tc.buttons["attack"] as TouchButton).center
 	_touch(0, cc, true)
-	await _wait(1.9)
-	_check(float(_player.get("_rapid_attack_charge")) >= 1.0, "[%s] (Classic) holding fills the Rapid Attack charge: the scenario is real (charge %s)" % [cls, _player.get("_rapid_attack_charge")])
+	await _wait(3.0)
+	_check(_swings == 1, "[%s] (Classic) holding 3 s is exactly one attack (%d)" % [cls, _swings])
+	if cls == "mage":
+		_check(_bolts == 1, "[mage] (Classic) holding 3 s fires exactly one bolt (%d)" % _bolts)
 	get_tree().paused = true   # the pause menu / the phone going to the background
 	await _wait(0.3)
 	_touch(0, cc, false)
 	get_tree().paused = false
-	await _wait(0.5)
-	_check(_player.get("_attack_held") == false and _player.get("_rapid_attack_charge") == 0.0, "[%s] (Classic) after the interruption no hold flag or charge is left" % cls)
-	_check(not _rapid_seen, "[%s] (Classic) the interrupted hold did not start the Rapid Attack" % cls)
-	var bolts_before: int = _bolts
+	await _wait(1.5)
+	_check(_swings == 1, "[%s] (Classic) the interrupted hold started nothing (%d attacks)" % [cls, _swings])
 	_touch(0, cc, true)
 	await _wait(0.12)
 	_touch(0, cc, false)
 	await _wait(2.0)
-	_check(not _rapid_seen, "[%s] (Classic) the next plain tap does not start the Rapid Attack" % cls)
+	_check(_swings == 2, "[%s] (Classic) the next plain tap is exactly one more attack (%d attacks in all)" % [cls, _swings])
 	if cls == "mage":
-		_check(_bolts - bolts_before <= 1, "[mage] (Classic) the tap fired at most one bolt (%d)" % (_bolts - bolts_before))
+		_check(_bolts == 2, "[mage] (Classic) the tap fired exactly one more bolt (%d bolts in all)" % _bolts)
 	_check(tc.attack_failsafe_releases == 0, "[%s] no fail-safe release was needed in the whole run (%d)" % [cls, tc.attack_failsafe_releases])
 	SettingsManager.gameplay_settings[TouchControls.KEY_SCHEME] = TouchControls.SCHEME_TWIN
 	tc.set_scheme(TouchControls.SCHEME_TWIN)

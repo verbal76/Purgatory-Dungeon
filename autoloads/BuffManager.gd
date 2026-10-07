@@ -716,7 +716,7 @@ func _apply_effect_dict(effect: Dictionary, apply: bool) -> void:
 # a multiplier / fraction by its own definition (attack_speed 1.0, damage_reduction 0.0).
 const PERCENT_OF_BASE_STATS : Array[String] = [
 	"move_speed", "move_acceleration", "spell_damage", "spell_range", "fireball_speed",
-	"shove_force", "kick_force", "rapid_attack_cooldown", "block_knockback_force",
+	"shove_force", "kick_force", "block_knockback_force",
 	"head_bob_intensity", "react_anim_speed", "footstep_interval_seconds",
 ]
 # The player's value for each percent stat the first time a buff touched it. Percentages stack

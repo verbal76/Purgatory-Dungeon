@@ -49,7 +49,6 @@ var center    : Vector2 = Vector2.ZERO  # in TouchControls space
 var pressed_visual : bool = false
 var toggled_on     : bool = false
 var cooldown       : float = 0.0        # 0..1 fraction remaining (ring over the button)
-var charge         : float = 0.0        # 0..1 hold-to-charge progress (ember ring on the rim)
 var badge          : String = ""        # small count in the corner (e.g. potions)
 var highlighted    : bool = false       # onboarding pulse
 var enabled_look   : bool = true
@@ -291,8 +290,6 @@ func _draw_baked(base_tex: Texture2D, icon_tex: Texture2D) -> void:
 	if tier == Tier.CONTEXT and not down:
 		draw_arc(c, r - rw - r * 0.03, 0.0, TAU, RIM_SEGMENTS, Color(PUI.EMBER.r, PUI.EMBER.g, PUI.EMBER.b, 0.85), maxf(r * 0.035, 2.0), true)   # contextual: an ember ring
 
-	if charge > 0.0:
-		draw_arc(c, r - rw * 0.5, -PI * 0.5, -PI * 0.5 + TAU * clampf(charge, 0.0, 1.0), RIM_SEGMENTS, PUI.EMBER_BRIGHT, rw * 0.62, true)
 	if highlighted:
 		var t: float = fmod(Time.get_ticks_msec() * 0.001, 1.2) / 1.2
 		draw_arc(c, r * (1.05 + 0.30 * t), 0.0, TAU, RIM_SEGMENTS, Color(PUI.EMBER_BRIGHT.r, PUI.EMBER_BRIGHT.g, PUI.EMBER_BRIGHT.b, 1.0 - t), maxf(r * 0.07, 3.0), true)
@@ -345,10 +342,6 @@ func _draw_coded() -> void:
 	draw_arc(c, fr - sh * 0.3, PI * 0.0, PI * 0.80, 24, Color(1, 1, 1, 0.05), sh * 0.5, true)               # lower-right: a faint lit lip
 	if down:
 		draw_arc(c, fr - sh - r * 0.05, 0.0, TAU, RIM_SEGMENTS, Color(PUI.EMBER.r, PUI.EMBER.g, PUI.EMBER.b, 0.16), r * 0.08, true)
-
-	# hold-to-charge: the bezel fills with bright ember
-	if charge > 0.0:
-		draw_arc(c, r - rw * 0.5, -PI * 0.5, -PI * 0.5 + TAU * clampf(charge, 0.0, 1.0), RIM_SEGMENTS, PUI.EMBER_BRIGHT, rw * 0.78, true)
 
 	# onboarding pulse: a single expanding ember ring
 	if highlighted:

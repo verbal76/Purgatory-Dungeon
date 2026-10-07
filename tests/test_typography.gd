@@ -34,7 +34,7 @@ const ROLE_SAMPLES := {
 	"label": ["Master Volume", "Level 3"],
 	"stat": ["Runs 12", "Barbarian  ·  Slot 3", "1 / 2"],
 	"hud_value": ["142 / 150", "Kills: 27", "Day 12 / 30", "100%", "Reversed controls", "30s", "[E] Use Bronze Key"],
-	"hud_label": ["Potions", "Rapid attack  3.2s", "Berserk — 1:14"],
+	"hud_label": ["Potions", "Berserk — 1:14"],
 	"body": ["Dome Radius +10%", "A voice inside your skull whispers…"],
 	"body_secondary": ["Press E to stop", "50% is easier, 100% is normal."],
 	"metadata": ["Purgatory Dungeon · development build after v5", "Slot 3  ·  tap to create a character"],
@@ -414,12 +414,6 @@ func _audit_hud(_view: Rect2) -> void:
 	var fs: int = vitals.health_label.get_theme_font_size("font_size")
 	var need: float = f.get_string_size("1000 / 1000", HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	_check(vitals.health_label.custom_minimum_size.x >= need - 0.5, "the health read-out box fits '1000 / 1000' (%.0f px box, %.0f px text)" % [vitals.health_label.custom_minimum_size.x, need])
-	var ability_need: float = 0.0
-	var af: Font = vitals.ability_label.get_theme_font("font")
-	var asz: int = vitals.ability_label.get_theme_font_size("font_size")
-	for s in ["Charging...", "Release!", "Rapid attack  10.0s", "Cooldown  120s"]:
-		ability_need = maxf(ability_need, af.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, asz).x)
-	_check(HudKit.BAR_W + ability_need + float(PUI.S3) < 700.0, "the ability caption fits beside the bar (%.0f px)" % ability_need)
 	# the heading plate: widest compass letter plus the plate margins must fit COMPASS_W
 	var hf: Font = PUI.font("display_bold")
 	var hsz: int = PUI.fs("hud_value")
