@@ -33,6 +33,23 @@ static func _load() -> void:
 		_data = (parsed as Dictionary).get("scenes", {})
 
 
+## Repairs every listed module's meshes now, on the calling (main) thread. The main game scene calls this BEFORE it starts the
+## worker-thread prop loads: rebuilding mesh surfaces on the main thread while workers create meshes raced inside the renderer's
+## mesh storage (the headless dummy renderer corrupted its RIDs and crashed; on a real renderer a mesh still being created could be
+## skipped, leaving its seam unrepaired). Afterwards apply() finds every mesh already repaired and does nothing.
+static func prepare_all() -> int:
+	_load()
+	var changed: int = 0
+	for scene_path in _data:
+		var packed := load(str(scene_path)) as PackedScene
+		if packed == null:
+			continue
+		var inst: Node = packed.instantiate()
+		changed += apply(inst, str(scene_path))
+		inst.free()
+	return changed
+
+
 ## Repairs the meshes of a freshly instantiated module. Returns the number of meshes changed by this call.
 static func apply(inst: Node, scene_path: String) -> int:
 	_load()

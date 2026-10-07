@@ -62,6 +62,7 @@ extends Node3D
 @export var jumpscare_texture : Texture2D   # Scary face image (.png, .jpg, etc.)
 @export var jumpscare_sound   : AudioStream # Scream / stinger audio file
 
+const FloorMeshRepair = preload("res://scripts/floor_mesh_repair.gd")
 const PropSpawnerScript = preload("res://scripts/prop_spawner.gd")
 
 @onready var dungeon_generation_function : Node = get_node_or_null("DungeonGenerationFunction")
@@ -124,6 +125,8 @@ func _ready() -> void:
 
 	# Heavy resources the population passes need (prop models and textures) load on worker threads
 	# while the layout is being built, so they are ready by the time they are first instantiated.
+	# The floor-mesh repairs run first, on this thread, while no worker thread is creating meshes (see FloorMeshRepair.prepare_all).
+	FloorMeshRepair.prepare_all()
 	_request_background_loads()
 
 	# Yield two frames so the loading screen (created by the player's _ready)
