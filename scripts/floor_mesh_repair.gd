@@ -136,10 +136,16 @@ static func _repair(mesh: ArrayMesh, per_surface: Dictionary) -> bool:
 		arrays_all[s] = arrays
 	mesh.clear_surfaces()
 	for s in n:
+		# A surface whose every triangle was dropped as covered is simply left out (an empty index array is not a valid surface, and the
+		# surfaces after it must keep their own material and name, so they are addressed by the index they actually got).
+		var kept: Variant = (arrays_all[s] as Array)[Mesh.ARRAY_INDEX]
+		if kept is PackedInt32Array and (kept as PackedInt32Array).is_empty():
+			continue
+		var si: int = mesh.get_surface_count()
 		mesh.add_surface_from_arrays(prims[s] as Mesh.PrimitiveType, arrays_all[s])
 		if mats[s] != null:
-			mesh.surface_set_material(s, mats[s])
+			mesh.surface_set_material(si, mats[s])
 		if names[s] != "":
-			mesh.surface_set_name(s, names[s])
+			mesh.surface_set_name(si, names[s])
 	mesh.set_meta(META, true)
 	return true
