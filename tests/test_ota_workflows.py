@@ -566,6 +566,10 @@ rm -rf "$SCRATCH"
 
     def run_it(self, jobs):
         env = dict(os.environ, RUNNER=os.path.join(ROOT, "tests", "run_tests.sh"))
+        # Hermetic: when this file is run BY tests/run_tests.sh the parent already exported a scratch PURGATORY_SAVE_ROOT, which the
+        # "sequential path leaves it alone" check below would see. Start from the environment a developer's shell has.
+        env.pop("PURGATORY_SAVE_ROOT", None)
+        env.pop("TEST_FILTER", None)
         if jobs is None:
             env.pop("TEST_JOBS", None)
         else:
