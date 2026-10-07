@@ -145,6 +145,23 @@ var _paused_since_msec : int  = 0     # wall-clock start of the current pause (0
 var _respawn_timer    : float = 0.0
 var _diff_timer       : float = 0.0
 var _pressure_timer   : float = 0.0   # Tracks seconds since player last took damage
+# ── Opening: keep the live population NEAR the player (see _recycle_far_sleepers) ──────────────────────────────────────
+# An enemy that is off-camera and more than 20 m away is frozen in place (character_base, off-screen freeze) and still
+# counts against the population cap, so the cap used to fill with sleepers left behind at the spawn points (the first
+# ones are placed up to 40 m out, and the player walks away from them) and nothing new was placed near the player until
+# the day-3 stale cull (CULL_START_DAY) recycled a quarter of them: minutes of empty dungeon, then everyone at once.
+# Now, when the cap is full, a growing share of it is kept within NEAR_RADIUS (the freeze distance) of the player: far,
+# off-screen sleepers go back to the pool (silently, they are not in view) and the top-up re-places them, nearest
+# spawn points first, close to the player and out of sight.
+const ZONE_MIN_POINTS      : int   = 4      # a zone with fewer spawn points than this is widened (see _refresh_active_zone)
+const ZONE_WIDEN_MAX       : float = 1.75   # ... up to 1.75 x active_zone_radius (40 m -> 70 m)
+const NEAR_RADIUS         : float = 20.0   # metres: awake distance, = character_base OFF_SCREEN_FREEZE_DIST_SQ (20 m)
+const RECYCLE_PER_TICK    : int   = 2      # far sleepers sent back per top-up tick (every ~4 s): the ramp is gradual
+const OPENING_RAMP_SECONDS: float = 120.0  # game time over which the near share grows from START to FULL
+const NEAR_FRACTION_START : float = 0.25   # share of the population cap wanted near the player at the start (cap 15 -> 4)
+const NEAR_FRACTION_FULL  : float = 0.60   # ... and once the ramp is over (cap 15 -> 9)
+var _run_time : float = 0.0                # game seconds the manager has been running (stops while paused)
+var _last_near_count : int = 0               # enemies within NEAR_RADIUS at the last _recycle_far_sleepers() count
 const DIFF_CHECK_INTERVAL    : float = 10.0
 const KILL_PLANE_Y            : float = -15.0  # Same floor the player uses (brute_player.gd)
 const PRESSURE_THRESHOLD     : float = 30.0  # Seconds of no damage before pressure spawn
@@ -398,7 +415,7 @@ func _refresh_active_zone() -> void:
 		return
 
 	var player_pos   : Vector3 = _player.global_position
-	var max_sq       : float   = active_zone_radius * active_zone_radius
+	var max_sq       : float   = pow(active_zone_radius * ZONE_WIDEN_MAX, 2.0)   # widest radius a sparse start may use
 	var min_sq       : float   = min_spawn_distance * min_spawn_distance
 	var sep_sq       : float   = min_separation_distance * min_separation_distance
 
@@ -432,21 +449,29 @@ func _refresh_active_zone() -> void:
 
 	# Greedy selection: accept each candidate only if it is far enough from every
 	# already-accepted point. Builds spread from the inside out automatically.
-	_active_zone.clear()
-	var accepted_positions : Array = []   # Vector3 list — no per-frame allocation
+	# A start with no spawn point inside active_zone_radius (zone empty: no enemy at all until the player walks into some)
+	# or only one or two gets a wider radius, up to ZONE_WIDEN_MAX x, until it has ZONE_MIN_POINTS.
+	for widen in [1.0, 1.4, ZONE_WIDEN_MAX]:
+		var radius_sq : float = pow(active_zone_radius * float(widen), 2.0)
+		_active_zone.clear()
+		var accepted_positions : Array = []   # Vector3 list — no per-frame allocation
 
-	for candidate in candidates:
-		if _active_zone.size() >= initial_zone_size:
-			break
-		var pos      : Vector3 = candidate.pos
-		var too_close : bool   = false
-		for accepted_pos in accepted_positions:
-			if pos.distance_squared_to(accepted_pos) < sep_sq:
-				too_close = true
+		for candidate in candidates:
+			if _active_zone.size() >= initial_zone_size:
 				break
-		if not too_close:
-			_active_zone.append(candidate.data)
-			accepted_positions.append(pos)
+			if candidate.dist_sq > radius_sq:
+				continue   # the list is sorted by distance with a mild darkness nudge, so test every entry
+			var pos      : Vector3 = candidate.pos
+			var too_close : bool   = false
+			for accepted_pos in accepted_positions:
+				if pos.distance_squared_to(accepted_pos) < sep_sq:
+					too_close = true
+					break
+			if not too_close:
+				_active_zone.append(candidate.data)
+				accepted_positions.append(pos)
+		if _active_zone.size() >= ZONE_MIN_POINTS:
+			break
 
 
 # Fills the initial spawn queue from the active zone, capped at population_cap.
@@ -862,6 +887,7 @@ func _physics_process(delta: float) -> void:
 			CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME + paused_sec,
 			Time.get_ticks_msec() * 0.001)
 
+	_run_time      += delta
 	_cull_timer    += delta
 	_respawn_timer += delta
 	_diff_timer    += delta
@@ -1056,9 +1082,50 @@ func resume_spawning() -> void:
 	_spawning_locked = false
 
 
+# How many of the live enemies should be within NEAR_RADIUS of the player right now: a quarter of the cap at the start,
+# growing to 60 % over OPENING_RAMP_SECONDS, so the opening neither starts empty nor floods.
+func _near_target() -> int:
+	var k : float = clampf(_run_time / OPENING_RAMP_SECONDS, 0.0, 1.0)
+	return int(roundf(float(_current_pop_cap) * lerpf(NEAR_FRACTION_START, NEAR_FRACTION_FULL, k)))
+
+
+# When fewer enemies than _near_target() are near the player, sends up to RECYCLE_PER_TICK far, off-screen enemies back to
+# the pool through their own _retire_stuck() (no death, no drops, nobody sees it) so the top-up that follows re-places them
+# close to the player. `allow_recycle` false only counts. Never touches an enemy within NEAR_RADIUS or one that is on screen. Returns how many were recycled.
+func _recycle_far_sleepers(allow_recycle: bool = true) -> int:
+	if _player == null or not is_instance_valid(_player):
+		return 0
+	var want_near : int = _near_target()
+	var near      : int = 0
+	var far       : Array = []
+	var near_sq   : float = NEAR_RADIUS * NEAR_RADIUS
+	var player_pos : Vector3 = _player.global_position
+	for node in _active_enemies:
+		if not is_instance_valid(node) or not (node is Node3D):
+			continue
+		var enemy : Node3D = node as Node3D
+		if enemy.get("_is_dead") == true:
+			continue
+		if player_pos.distance_squared_to(enemy.global_position) <= near_sq:
+			near += 1
+		elif enemy.get("_is_on_screen") != true and enemy.has_method("_retire_stuck"):
+			far.append(enemy)
+	_last_near_count = near
+	if not allow_recycle or near >= want_near or far.is_empty():
+		return 0
+	far.shuffle()
+	var count : int = mini(mini(RECYCLE_PER_TICK, want_near - near), far.size())
+	for i in count:
+		(far[i] as Node3D).call("_retire_stuck")
+	return count
+
+
 func _top_up_population() -> void:
 	if _spawning_locked:
 		return
+	# The cap is full: if that is mostly sleepers left far behind, trade a few for enemies near the player.
+	_recycle_far_sleepers(_current_pop_cap - _live_count <= 0)   # always refreshes _last_near_count; recycles only when the cap is full
+	var awake_short : bool = _last_near_count < _near_target()
 	var deficit : int = _current_pop_cap - _live_count
 	if deficit <= 0:
 		return
@@ -1074,6 +1141,11 @@ func _top_up_population() -> void:
 	# Pick random entries from the active zone to keep spawning unpredictable
 	var zone_copy : Array = _active_zone.duplicate()
 	zone_copy.shuffle()
+	if awake_short and _player != null and is_instance_valid(_player):
+		# Too few enemies within reach of the player: fill the closest spawn points first (a spot 30 m away only makes
+		# another sleeper). Distances are squared, the zone is at most initial_zone_size entries, once per top-up tick.
+		var pp : Vector3 = _player.global_position
+		zone_copy.sort_custom(func(a, b): return pp.distance_squared_to(a.get("position", Vector3.ZERO)) < pp.distance_squared_to(b.get("position", Vector3.ZERO)))
 
 	# SURGICAL FIX: Run the heavy spawning in an async coroutine
 	_staggered_spawn_wave(zone_copy, limit)

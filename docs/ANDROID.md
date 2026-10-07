@@ -53,7 +53,7 @@ sensitivity apply to both.
 | Left thumb: floating stick (anywhere in the lower-left 40%) | move_forward/back/left/right (analog) | WASD | left stick |
 | Big sword button, lower-right rim. **One touch = at most one attack, decided by what the finger does** (see *Attack gesture*): a **tap** (or a short rest) attacks once; **dragging from it aims** (a continuous turn rate measured from the touch-down point) and never attacks; holding never repeats, auto-fires or charges | attack (+ look while dragging) | Left Mouse (+ mouse) | RT (+ right stick) |
 | Empty screen on the right (no button under the finger) | nothing: there is no look stick and no look zone | - | - |
-| Slide chevrons, kick boot, shield (hold), flask (cooldown ring, potion count) on an arc around Attack | jump, kick, block, AOE | Space, F, Right Mouse, Q | B, RB, D-pad down, LB |
+| Repulse (chevrons icon), kick boot, shield (hold), flask (cooldown ring, potion count) on an arc around Attack | jump, kick, block, AOE | Space, F, Right Mouse, Q | B, RB, D-pad down, LB |
 | USE / OPEN (appears only at a chest you can open), second ring | equip | E | A |
 | Pause / Map (top right, map toggles) | ui_menu / minimap | Esc / Tab | Start / - |
 | Android back | ui_cancel | - | - |
@@ -63,7 +63,7 @@ sensitivity apply to both.
 |---|---|
 | Left thumb: floating stick | move (analog) |
 | Right side: swipe/drag (no stick) | look (yaw, one motion event per drag event) |
-| Big sword button (press / hold / release: one press = one attack, holding never charges or repeats), boot, chevrons, shield (hold), flask, USE, Pause, Map | attack, kick, jump, block, AOE, equip, ui_menu, minimap |
+| Big sword button (press / hold / release: one press = one attack, holding never charges or repeats), boot, Repulse (chevrons), shield (hold), flask, USE, Pause, Map | attack, kick, jump, block, AOE, equip, ui_menu, minimap |
 
 ### Twin-stick design notes
 - **Why**: Classic needs repeated swipes to turn while moving. In twin-stick the Attack button is the aim control, as

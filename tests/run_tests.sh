@@ -125,6 +125,8 @@ done
 for cls in barbarian mage; do
 	REPULSE_CLASS="$cls" run "res://tests/test_repulse.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_repulse.tscn
 done
+# The opening keeps a growing share of the population near the player (far off-screen sleepers are recycled).
+run "res://tests/test_enemy_opening.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_enemy_opening.tscn
 for seed in 11 5 2024; do
 	CHEST_SEED="$seed" run "res://tests/test_chests.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_chests.tscn
 done
