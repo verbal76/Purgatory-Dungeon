@@ -52,7 +52,7 @@ const REMAPPABLE_ACTIONS : Array = [
 	{"name": "move_back",     "label": "Move Back"},
 	{"name": "move_left",     "label": "Strafe Left"},
 	{"name": "move_right",    "label": "Strafe Right"},
-	{"name": "jump",          "label": "Slide (Evade)"},
+	{"name": "jump",          "label": "Repulse"},
 	{"name": "attack",        "label": "Attack"},
 	{"name": "kick",          "label": "Kick / Shove"},
 	{"name": "AOE",           "label": "AOE Blast"},

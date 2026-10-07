@@ -293,29 +293,5 @@ func _ready() -> void:
 	_check(is_equal_approx(player._status_acid_dps, 1.0) and is_equal_approx(player._status_acid_timer, 15.0), "acid defaults to 1.0 dps for 15 s")
 	player._status_acid = false
 
-	# --- Slide knockback kicks each prop once per slide (Barbarian) ------------------------------------
-	if cls == "barbarian":
-		# The dungeon is random: real barrels near the start point are kickable too, and a kicked barrel
-		# can chain into its neighbours (including the fakes below). Count only the fakes.
-		for real in get_tree().get_nodes_in_group("kickable_prop"):
-			real.remove_from_group("kickable_prop")
-		var props: Array = []
-		for i in 3:
-			var prop := FakeProp.new()
-			prop.add_to_group("kickable_prop")
-			add_child(prop)
-			prop.global_position = player.global_position + Vector3(0.5 * i, 0, 0.5)
-			props.append(prop)
-		player._slide_kicked_props.clear()
-		for tick in 6:
-			player._check_slide_knockback()
-		var kicks: Array = props.map(func(p): return p.kicks)
-		_check(kicks == [1, 1, 1], "every prop in range is kicked exactly once across a slide's ticks %s" % [kicks])
-		player._slide_kicked_props.clear()
-		player._check_slide_knockback()
-		_check(props.all(func(p): return p.kicks == 2), "the next slide kicks them again")
-		for prop in props:
-			prop.queue_free()
-
 	print("test_buffs (%s): %d checks, %d failures" % [cls, _checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)

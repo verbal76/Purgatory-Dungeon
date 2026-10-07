@@ -101,10 +101,7 @@ var _slide_timer           : float   = 0.0
 var _slide_duration        : float   = 0.0
 var _slide_direction       : Vector3 = Vector3.ZERO
 var _slide_cam_lift        : float   = 0.0
-var _slide_knocked_enemies : Array   = []
-# Props already kicked by the current slide: a prop in range used to be kicked (and its 8% loot
-# roll re-rolled) on every physics tick of the slide.
-var _slide_kicked_props   : Array   = []
+var _repulse_cooldown       : float   = 0.0
 
 # ── Status effects (from booby traps) ──────────────────────────────────────
 var _status_reversed_view     : bool  = false
@@ -943,36 +940,32 @@ func _handle_movement(delta: float) -> void:
 			if _idle_timer >= idle_return_delay: _change_state(_get_idle_state())
 
 
+# The jump / Slide button now performs REPULSE (it used to slide backwards). `_is_sliding` is kept as the "repulse in
+# progress" flag: it already makes take_damage() ignore hits, lifts the camera and gates the other actions, which is exactly
+# the short protected, rooted window the emergency push needs.
 func _handle_slide(delta: float) -> void:
 	if not InputMap.has_action("jump"):
 		return
 
-	if Input.is_action_just_pressed("jump") and not _is_sliding \
+	if _repulse_cooldown > 0.0:
+		_repulse_cooldown -= delta
+
+	if Input.is_action_just_pressed("jump") and not _is_sliding and _repulse_cooldown <= 0.0 \
 			and not _is_dead and not _is_blocking and is_on_floor():
 		_start_slide()
 
 	if _is_sliding:
 		_slide_timer += delta
-		var progress : float = clampf(_slide_timer / _slide_duration, 0.0, 1.0)
+		velocity.x = 0.0
+		velocity.z = 0.0
 
-		# Quadratic deceleration: fast lunge at the start, smooth halt at the end.
-		var spd : float = slide_power * (1.0 - progress) * (1.0 - progress)
-		velocity.x = _slide_direction.x * spd
-		velocity.z = _slide_direction.z * spd
-
-		# Camera lunge lift — rises quickly at the start then fades.
-		if progress < 0.2:
+		# Camera lift — rises quickly at the start then fades.
+		if _slide_timer / _slide_duration < 0.2:
 			_slide_cam_lift = lerpf(_slide_cam_lift, 0.08, delta * 20.0)
 
-		_check_slide_knockback()
-
-		if progress >= 1.0:
+		if _slide_timer >= _slide_duration:
 			_is_sliding = false
 			_slide_timer = 0.0
-			velocity.x   = 0.0
-			velocity.z   = 0.0
-			_slide_knocked_enemies.clear()
-			_slide_kicked_props.clear()
 			_change_state(_get_idle_state())
 
 
@@ -986,55 +979,14 @@ func _start_slide() -> void:
 		_set_kick_hitbox_active(false)
 		anim_player.speed_scale = 1.0
 
-	# Slide backward — opposite of the look direction (+Z in Godot's coordinate system).
-	_slide_direction = Vector3(sin(_yaw), 0.0, cos(_yaw))
-	_is_sliding      = true
-	_slide_timer     = 0.0
-	# Duration so total distance ≈ slide_distance_clear. With quadratic decel the
-	# integral of (1-t)^2 over [0,1] is 1/3, so: distance = power * duration / 3.
-	_slide_duration  = 3.0 * slide_distance_clear / maxf(slide_power, 0.1)
-	_slide_cam_lift  = 0.0
-	_slide_knocked_enemies.clear()
-	_slide_kicked_props.clear()
-
-
-func _check_slide_knockback() -> void:
-	var my_pos : Vector3 = global_position
-
-	# Only knock one enemy per slide so the player doesn't chain-stun an entire room.
-	if _slide_knocked_enemies.size() < 1:
-		for node in get_tree().get_nodes_in_group("enemies"):
-			if not (node is Node3D) or not is_instance_valid(node):
-				continue
-			var enemy : Node3D = node as Node3D
-			if enemy.get("_is_dead"):
-				continue
-			if my_pos.distance_to(enemy.global_position) > slide_knock_radius:
-				continue
-			if _slide_knocked_enemies.has(enemy):
-				continue
-
-			if enemy.has_method("take_knockback"):
-				enemy.take_knockback(_slide_direction, kick_force, 1.0)
-			_slide_knocked_enemies.append(enemy)
-
-			# Shorten remaining travel to slide_distance_hit after the bump.
-			_slide_duration = _slide_timer + 3.0 * slide_distance_hit / maxf(slide_power, 0.1)
-
-	# Kickable props in the slide's radius take the same impulse treatment: every prop once per
-	# slide (kicking a whole pile of barrels on a good slide is intended), so one prop's loot
-	# roll is not re-rolled on every tick it stays in range.
-	for prop in get_tree().get_nodes_in_group("kickable_prop"):
-		if not (prop is Node3D) or not is_instance_valid(prop):
-			continue
-		var prop_node : Node3D = prop as Node3D
-		if my_pos.distance_to(prop_node.global_position) > slide_knock_radius:
-			continue
-		if _slide_kicked_props.has(prop_node):
-			continue
-		if prop_node.has_method("apply_kick"):
-			prop_node.apply_kick(_slide_direction, kick_force * 10.0)
-			_slide_kicked_props.append(prop_node)
+	_is_sliding       = true
+	_slide_timer      = 0.0
+	_slide_duration   = REPULSE_DURATION
+	_slide_cam_lift   = 0.0
+	_repulse_cooldown = REPULSE_COOLDOWN
+	velocity.x = 0.0
+	velocity.z = 0.0
+	_repulse_burst(slide_power / 20.0)   # Heavy Gravity halves slide_power, so it halves the push too
 
 
 func _set_weapon_hitbox_active(active: bool) -> void:

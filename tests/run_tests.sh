@@ -121,6 +121,10 @@ done
 for cls in barbarian mage; do
 	REVERSE_CLASS="$cls" run "res://tests/test_reversed_view.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_reversed_view.tscn
 done
+# Repulse (jump / Slide input): radial push of every enemy around the player, protected window, cool-down.
+for cls in barbarian mage; do
+	REPULSE_CLASS="$cls" run "res://tests/test_repulse.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_repulse.tscn
+done
 for seed in 11 5 2024; do
 	CHEST_SEED="$seed" run "res://tests/test_chests.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_chests.tscn
 done

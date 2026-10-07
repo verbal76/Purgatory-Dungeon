@@ -74,7 +74,7 @@ func glyph(action: String) -> String:
 			match action:
 				"equip": return "USE"
 				"ui_accept": return "TAP"
-				"jump": return "SLIDE"
+				"jump": return "REPULSE"
 				"kick": return "KICK"
 				"attack": return "ATTACK"
 				"block": return "BLOCK"
