@@ -822,6 +822,11 @@ func _prewarm_pool() -> void:
 	var mages : int = int(round(float(want) * mage_spawn_chance)) if _mage_scene != null else 0
 	if _brute_scene == null:
 		mages = want
+	# The pressure spawn (_check_pressure_spawn) ignores the cap and always wants a MAGE: with the opening wave at the
+	# cap `want` is only PREWARM_SPARE and 20 % of that rounds to 0, so without this the first pressure spawn would
+	# instantiate a mage plus its six-fireball pool in the middle of play. Always park at least one.
+	if _mage_scene != null and not GlobalRunData.debug_no_mages:
+		mages = maxi(mages, 1)
 	if GlobalRunData.debug_no_mages:
 		mages = 0
 	if GlobalRunData.debug_no_brutes:

@@ -1,19 +1,23 @@
 extends Node
-## Character model budget. The enemy / player models are glTF imports whose exporter wrote every material of a mesh
-## as a COPY of the whole vertex buffer (non-indexed, one primitive per material, all pointing at the same
-## accessor). The Mage enemy therefore carried 205 surfaces and 3,079,510 triangles (the whole 15 k triangle body,
-## drawn 205 times and skinned 205 times per frame, in view or not for the skin updates), the Brute drew its body
-## twice (46,059 triangles). The assets now keep one surface per distinct vertex buffer; the rendered image is
-## pixel-identical (checked by rendering before / after).
-## This test fails if a model gets a surface that duplicates another surface of the same mesh, or if a model's
-## triangle count or surface count grows past a budget that is a little above today's real numbers.
+## Character model budget. The Mage enemy glTF export wrote every material of its mesh as a COPY of the whole vertex
+## buffer (non-indexed): 205 primitives (103 x Vampire_MAT1, 102 x Vampire_MAT_Transparent) = 3,079,510 triangles,
+## the whole 15 k triangle body drawn and skinned 205 times per frame. The asset now keeps ONE surface per distinct
+## (vertex buffer, material) pair: 2 surfaces, one of each material, in the original order, so the look (both
+## materials, MAT1's normal map included) and the draw order are unchanged. The Brute keeps its original two Body
+## primitives (Body_MAT4 and EyeSpec_MAT2 differ in the eye region, so neither can be dropped safely).
+## This test fails if a mesh carries two surfaces with the same vertices AND the same material (a pure duplicate),
+## if a model's surface structure or material set changes (a lost material is caught), or if triangles exceed the budget.
 
-# scene -> [max triangles, max surfaces per mesh]
-const BUDGET := {
-	"res://characters/brute/scenes/brute_enemy.tscn": [34000, 1],
-	"res://characters/brute/scenes/brute_player.tscn": [34000, 1],
-	"res://characters/Lutsch Mage/scenes/Mage enemy.tscn": [20000, 1],
-	"res://characters/Lutsch Mage/scenes/Mage player.tscn": [36000, 1],
+## scene -> {tris: budget, mesh_surfaces: {mesh node name: expected surface count}, materials: names that must exist}
+const MODELS := {
+	"res://characters/Lutsch Mage/scenes/Mage enemy.tscn": {"tris": 31000, "mesh_surfaces": {"Vampire": 2},
+		"materials": ["Vampire_MAT1", "Vampire_MAT_Transparent"]},
+	"res://characters/brute/scenes/brute_enemy.tscn": {"tris": 47000, "mesh_surfaces": {"MaleBruteA_Body": 2},
+		"materials": ["Body_MAT4", "EyeSpec_MAT2"]},
+	"res://characters/brute/scenes/brute_player.tscn": {"tris": 47000, "mesh_surfaces": {"MaleBruteA_Body": 2},
+		"materials": ["Body_MAT4", "EyeSpec_MAT2"]},
+	"res://characters/Lutsch Mage/scenes/Mage player.tscn": {"tris": 49000, "mesh_surfaces": {"MaleBruteA_Body": 2},
+		"materials": ["Body_MAT4", "EyeSpec_MAT2"]},
 }
 
 var _fails: int = 0
@@ -39,43 +43,58 @@ func _tris(mesh: Mesh) -> int:
 	return tris
 
 
-## True when two surfaces of `mesh` hold the very same vertices (a full duplicate that only changes the material).
-func _has_duplicate_surface(mesh: Mesh) -> bool:
-	var seen: Array = []
+## Surfaces of `mesh` that repeat an earlier surface's vertices AND material (pure duplicates).
+func _pure_duplicates(mesh: Mesh) -> int:
+	var seen: Array = []   # [vertices, material]
+	var dup := 0
 	for i in mesh.get_surface_count():
 		var v: PackedVector3Array = mesh.surface_get_arrays(i)[Mesh.ARRAY_VERTEX]
+		var m: Material = mesh.surface_get_material(i)
 		for prev in seen:
-			if (prev as PackedVector3Array).size() == v.size() and prev == v:
-				return true
-		seen.append(v)
-	return false
+			if prev[1] == m and (prev[0] as PackedVector3Array).size() == v.size() and prev[0] == v:
+				dup += 1
+				break
+		seen.append([v, m])
+	return dup
 
 
 func _scan(node: Node, acc: Dictionary) -> void:
 	if node is MeshInstance3D and (node as MeshInstance3D).mesh != null:
 		var mesh := (node as MeshInstance3D).mesh
 		acc["tris"] += _tris(mesh)
-		acc["max_surfaces"] = maxi(acc["max_surfaces"], mesh.get_surface_count())
-		if _has_duplicate_surface(mesh):
-			acc["duplicates"].append(str(node.name))
+		acc["duplicates"] += _pure_duplicates(mesh)
+		acc["surfaces"][str(node.name)] = mesh.get_surface_count()
+		for i in mesh.get_surface_count():
+			var mat := mesh.surface_get_material(i)
+			if mat != null:
+				acc["materials"][mat.resource_name] = mat
 	for c in node.get_children():
 		_scan(c, acc)
 
 
 func _ready() -> void:
-	for path in BUDGET:
+	for path in MODELS:
+		var spec: Dictionary = MODELS[path]
 		var ps := load(path) as PackedScene
 		_check(ps != null, "%s loads" % path.get_file())
 		if ps == null:
 			continue
 		var inst := ps.instantiate()
-		var acc := {"tris": 0, "max_surfaces": 0, "duplicates": []}
+		var acc := {"tris": 0, "duplicates": 0, "surfaces": {}, "materials": {}}
 		_scan(inst, acc)
 		inst.free()
-		var limit: Array = BUDGET[path]
-		_check(acc["duplicates"].is_empty(), "%s: no surface duplicates another surface of its mesh (%s)" % [path.get_file(), acc["duplicates"]])
-		_check(int(acc["tris"]) <= int(limit[0]), "%s: %d triangles, budget %d" % [path.get_file(), acc["tris"], limit[0]])
-		_check(int(acc["max_surfaces"]) <= int(limit[1]), "%s: at most %d surfaces per mesh (has %d)" % [path.get_file(), limit[1], acc["max_surfaces"]])
-		print("test_enemy_assets: %-24s %6d triangles, up to %d surface(s) per mesh" % [path.get_file(), acc["tris"], acc["max_surfaces"]])
+		var fname: String = path.get_file()
+		_check(int(acc["duplicates"]) == 0, "%s: %d surface(s) duplicate another surface's vertices and material" % [fname, acc["duplicates"]])
+		_check(int(acc["tris"]) <= int(spec["tris"]), "%s: %d triangles, budget %d" % [fname, acc["tris"], spec["tris"]])
+		for mesh_name in spec["mesh_surfaces"]:
+			_check(int(acc["surfaces"].get(mesh_name, -1)) == int(spec["mesh_surfaces"][mesh_name]),
+					"%s: mesh %s has %d surfaces (expected %d)" % [fname, mesh_name, acc["surfaces"].get(mesh_name, -1), spec["mesh_surfaces"][mesh_name]])
+		for mat_name in spec["materials"]:
+			_check(acc["materials"].has(mat_name), "%s: material %s is still used by a surface" % [fname, mat_name])
+		# the Mage's MAT1 carries the normal map: it must not get lost
+		if acc["materials"].has("Vampire_MAT1"):
+			var m1 := acc["materials"]["Vampire_MAT1"] as BaseMaterial3D
+			_check(m1 != null and m1.normal_enabled and m1.normal_texture != null, "%s: Vampire_MAT1 keeps its normal map" % fname)
+		print("test_enemy_assets: %-24s %6d triangles, surfaces %s, materials %s" % [fname, acc["tris"], acc["surfaces"], acc["materials"].keys()])
 	print("test_enemy_assets: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)
