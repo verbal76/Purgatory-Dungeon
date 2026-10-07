@@ -11,7 +11,10 @@
 #
 #   Also owns the boot-health checkpoint, the update client, the "Applying update" panel and
 #   the diagnostics overlay (reachable even when the game layer is broken: F9, or five quick taps
-#   in the top-left corner).
+#   in the top-left corner; also from Options > About > developer tools). The overlay is NEVER shown by
+#   itself: a finished download, a staged update or a failed check produce no on-screen text from this
+#   layer. Players read update state in Options > About through the public API below
+#   (status_snapshot(), update_state(), can_check_now(), check_now()).
 #
 #   Inert (does nothing, never touches user://ota or the network) unless the export feature
 #   `ota` is present, or, in NON-template builds only, the user arg `--ota-enable` is given.
@@ -23,6 +26,7 @@
 #     --ota-enable  --ota-root=DIR  --ota-pointer=URL (http://127.0.0.1 allowed)  --ota-platform=android
 #     --ota-channel=X  --ota-action=rollback|disable|enable  --ota-quit-after-check  --ota-no-autocheck
 #     --ota-pubkey=FILE (a PEM public key replacing the embedded one: runs with throw-away keys)
+#     --ota-diagnostics (open the diagnostics overlay at start; the overlay is never shown otherwise)
 #
 #   Offline first: nothing here waits for the network. The game starts from the newest verified
 #   package already on the device (or the embedded baseline); checks run afterwards in the
@@ -207,6 +211,8 @@ func _ready() -> void:
 		add_child(updater)
 		if core.first_run:
 			_show_panel()
+	if hooks_allowed and _args.has("ota-diagnostics"):
+		show_diagnostics.call_deferred()   # developer hook: the overlay only ever opens on request
 
 
 # --- boot health ---------------------------------------------------------------------------
@@ -308,8 +314,7 @@ func _on_status_changed() -> void:
 
 func _on_update_finished(result: String) -> void:
 	print("[OTA] ", result)
-	if result.contains("restart to run"):
-		toast(result)
+	# Deliberately no on-screen message here: a staged update is reported in Options > About only.
 	if _args.has("ota-quit-after-check"):
 		print("OTA_IDENTITY_JSON " + JSON.stringify(identity()))
 		get_tree().quit()
@@ -381,9 +386,130 @@ func identity() -> Dictionary:
 	}
 
 
-## What follows the version in the menu footer: " · v7.2 ready, restart to apply" while a newer OTA is staged and
-## waiting, else "". The running version itself is running_version() (BuildInfo.display_string() prints it), so an
-## inert client or a baseline run leaves the release footer exactly "Purgatory Dungeon v7".
+# --- public status API for the game layer (Options > About) -----------------------------------------------------
+# The game layer never reads `core`/`updater` directly and never talks to the network: it asks this node. Every
+# value is secret-free (no key material, no tokens, no file contents). All of it degrades to "inactive" when the
+# client is off (desktop, editor, tests), so callers only need get_node_or_null("/root/Boot") plus has_method().
+
+## update_state() values. "checking"/"downloading" are transient; "pending_restart" persists until the next start.
+const STATE_INACTIVE := "inactive"                 # no OTA client in this build/launch (desktop, editor, no native identity)
+const STATE_DISABLED := "disabled"                 # a developer switched OTA off (baseline mode)
+const STATE_UNCHECKED := "unchecked"               # client on, no check completed yet this launch
+const STATE_CHECKING := "checking"
+const STATE_DOWNLOADING := "downloading"           # an update was found and is being fetched / verified
+const STATE_UP_TO_DATE := "up_to_date"
+const STATE_PENDING_RESTART := "pending_restart"   # verified and staged: runs at the next cold start (never mid-run)
+const STATE_DOWNLOADED := "downloaded"             # verified, but not staged (activation was refused)
+const STATE_OFFLINE := "offline"
+const STATE_INCOMPATIBLE := "incompatible"         # needs a newer APK (or a newer save schema)
+const STATE_REJECTED := "rejected"                 # failed signature / hash / blacklist checks: NOT installed
+const STATE_FAILED := "failed"
+
+
+## The update client's state as ONE word (STATE_*). Transient work wins over a staged update so the UI can show
+## progress; then a staged update (pending_restart); then the outcome of the last check.
+func update_state() -> String:
+	if not ota_enabled:
+		return STATE_INACTIVE
+	if bool(core.state["disabled"]):
+		return STATE_DISABLED
+	var st: String = updater.status if updater != null else "unchecked"
+	if st == "checking":
+		return STATE_CHECKING
+	if st == "downloading" or st == "available":
+		return STATE_DOWNLOADING
+	if staged_version() != "":
+		return STATE_PENDING_RESTART
+	if not core.slot("ready").is_empty():
+		return STATE_DOWNLOADED
+	match st:
+		"up_to_date", "downloaded":
+			return STATE_UP_TO_DATE
+		"offline":
+			return STATE_OFFLINE
+		"incompatible":
+			return STATE_INCOMPATIBLE
+		"rejected":
+			return STATE_REJECTED
+		"failed":
+			return STATE_FAILED
+	return STATE_UNCHECKED
+
+
+## True when a manual check may start now (client on, not disabled, nothing already running).
+func can_check_now() -> bool:
+	return ota_enabled and updater != null and not updater.busy and not bool(core.state["disabled"])
+
+
+## Manual "Check for updates": the SAME pipeline as the automatic check (pointer -> signed manifest -> signature,
+## runtime and save-schema checks -> package download -> size + SHA-256 -> stage as PENDING). Nothing is applied
+## now: a staged update only runs at the next cold start. Returns update_state() once the attempt finished, or
+## "inactive" / "disabled" / "busy" when nothing was started (a second call while one runs returns "busy").
+## Progress is announced through `status_changed`.
+func check_now() -> String:
+	if not ota_enabled or updater == null:
+		return STATE_INACTIVE
+	if bool(core.state["disabled"]):
+		return STATE_DISABLED
+	if updater.busy:
+		return "busy"
+	_last_auto_check_ms = Time.get_ticks_msec()   # a manual attempt counts, so an automatic one does not follow at once
+	print("[OTA] manual check")
+	await updater.check(true)
+	return update_state()
+
+
+## What went wrong last, for troubleshooting only (the technical reason, never a stack trace); "" when fine.
+func last_error() -> String:
+	if not ota_enabled or updater == null:
+		return ""
+	if updater.status in ["offline", "failed", "rejected", "incompatible"]:
+		return updater.status_detail
+	return ""
+
+
+## Secret-free status snapshot (Dictionary) for the About screen and Copy diagnostics. Keys:
+##   client (bool), inert_reason, state (STATE_*), busy, native_version ("7"), running_version ("7" / "7.2"),
+##   app_minor, ota_id ("dev-000002" or ""), ota_seq, staged_version ("7.3" or ""), staged_ota_id,
+##   latest_ota_id (what the channel offered at the last check), checked_at, runtime_id, runtime_fingerprint,
+##   channel ("" when the client is off), engine, platform, bootstrap, baseline_source, healthy, rollback_count,
+##   disabled, rejected (ids), last_error.
+func status_snapshot() -> Dictionary:
+	var act: Dictionary = core.active if ota_enabled else {}
+	var pend: Dictionary = core.slot("pending") if ota_enabled else {}
+	var staged: String = staged_version()
+	return {
+		"client": ota_enabled,
+		"inert_reason": inert_reason,
+		"state": update_state(),
+		"busy": updater != null and updater.busy,
+		"native_version": native_version(),
+		"running_version": running_version(),
+		"app_minor": app_minor(),
+		"ota_id": str(act.get("ota_id", "")),
+		"ota_seq": int(act.get("seq", 0)),
+		"staged_version": staged,
+		"staged_ota_id": str(pend.get("ota_id", "")) if staged != "" else "",
+		"latest_ota_id": str(updater.remote.get("ota_id", "")) if updater != null else "",
+		"checked_at": updater.checked_at if updater != null else "",
+		"runtime_id": runtime_id,
+		"runtime_fingerprint": str(native_info.get("runtime_fingerprint", "")),
+		"channel": channel if ota_enabled else "",
+		"engine": Config.engine_version(),
+		"platform": platform,
+		"bootstrap": Config.BOOTSTRAP_VERSION,
+		"baseline_source": str(native_info.get("commit", "")),
+		"healthy": healthy,
+		"rollback_count": int(core.state["rollback_count"]) if ota_enabled else 0,
+		"disabled": bool(core.state["disabled"]) if ota_enabled else false,
+		"rejected": (core.state["bad"] as Array).duplicate() if ota_enabled else [],
+		"last_error": last_error(),
+	}
+
+
+## Legacy (v7.x menu footer): " · v7.2 ready, restart to apply" while a newer OTA is staged and waiting, else "".
+## The main menu no longer shows it (Options > About does); kept because the unit tests and BuildInfo.compose_display
+## still take a suffix. The running version itself is running_version().
 func footer_suffix() -> String:
 	var sv: String = staged_version()
 	if sv == "":

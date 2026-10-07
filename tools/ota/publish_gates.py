@@ -213,19 +213,23 @@ def anonymous_verdict(results) -> list:
 RECEIPT_KEYS = ("schema", "published", "pointer_moved", "release_created", "reason", "channel", "ota_id", "seq", "native_version",
                 "app_minor", "owner_version", "source_sha",
                 "base_source_sha", "native_base_tag", "runtime_id", "runtime_fingerprint", "pck_sha256", "pck_size",
-                "manifest_sha256", "signature_sha256", "urls", "release_host", "base_url", "anonymous_read_verified", "run", "created_at")
+                "manifest_sha256", "signature_sha256", "urls", "release_host", "base_url", "anonymous_read_verified", "suite", "run", "created_at")
+SUITE_MODES = ("own-run", "reused")
 
 
 def make_receipt(published: bool, pointer_moved: bool, release_created: bool, reason: str = "", **facts) -> dict:
     r = {k: None for k in RECEIPT_KEYS}
     r.update({"schema": 1, "published": bool(published), "pointer_moved": bool(pointer_moved),
               "release_created": bool(release_created), "reason": reason or None, "created_at": otalib.utc_now(),
-              "urls": {"pck": None, "manifest": None, "signature": None, "pointer": None}, "run": {"id": None, "url": None}})
+              "urls": {"pck": None, "manifest": None, "signature": None, "pointer": None}, "run": {"id": None, "url": None},
+              "suite": {"mode": None, "run_url": None}})
     for k, v in facts.items():
         if k == "urls":
             r["urls"].update(v)
         elif k == "run":
             r["run"].update(v)
+        elif k == "suite":
+            r["suite"].update(v)
         elif k in r:
             r[k] = v
         else:
@@ -251,6 +255,8 @@ def summary_lines(r: dict) -> list:
         f"Runtime: {r.get('runtime_id') or 'unknown'} / {r.get('runtime_fingerprint') or 'unknown'}",
         f"Base URL: {r.get('base_url') or 'unknown'}",
         f"Anonymous read verified: {yn(r.get('anonymous_read_verified'))}",
+        "Test suite: " + {"own-run": "ran in this publication run", "reused": "verified green on this exact commit in an earlier run (reused)"}.get(
+            (r.get("suite") or {}).get("mode"), "unknown") + (f" ({r['suite']['run_url']})" if (r.get("suite") or {}).get("run_url") else ""),
         f"Pointer moved: {yn(r.get('pointer_moved'))}",
         f"Published: {yn(r.get('published'))}" + ("" if r.get("published") else f" (reason: {r.get('reason')})"),
     ]
@@ -273,6 +279,15 @@ def validate_receipt(r: dict) -> str:
         return "anonymous_read_verified must be a boolean"
     if r["published"] and r["anonymous_read_verified"] is not True:
         return "a published receipt needs anonymous_read_verified (every artifact and the pointer were read back without credentials)"
+    suite = r["suite"]
+    if not isinstance(suite, dict) or set(suite) != {"mode", "run_url"}:
+        return "suite must be {mode, run_url}"
+    if suite["mode"] not in (None,) + SUITE_MODES:
+        return f"suite.mode must be one of {list(SUITE_MODES)}"
+    if suite["mode"] == "reused" and not str(suite["run_url"] or "").startswith("https://"):
+        return "a reused suite result must name the https URL of the run it came from"
+    if r["published"] and suite["mode"] is None:
+        return "a published receipt must say how the full test suite requirement was met (suite.mode)"
     if r["published"]:
         for k in ("channel", "ota_id", "seq", "native_version", "app_minor", "owner_version", "source_sha", "runtime_id", "runtime_fingerprint", "pck_sha256", "pck_size",
                   "manifest_sha256", "signature_sha256"):
@@ -534,6 +549,8 @@ def main(argv=None) -> int:
               "manifest-url", "signature-url", "pointer-url"):
         p.add_argument("--" + k, default="")
     p.add_argument("--anonymous-read-verified", default="")
+    p.add_argument("--suite-mode", default="")
+    p.add_argument("--suite-run-url", default="")
     p.add_argument("--base-url", default="")
     p.add_argument("--seq", type=int, default=0)
     p.add_argument("--native-version", type=int, default=0)
@@ -626,7 +643,8 @@ def main(argv=None) -> int:
                      "signature_sha256": a.signature_sha256 or None, "release_host": a.release_host or None,
                      "urls": {"pck": a.pck_url or None, "manifest": a.manifest_url or None, "signature": a.signature_url or None,
                               "pointer": a.pointer_url or None},
-                     "run": {"id": a.run_id or None, "url": a.run_url or None}}
+                     "run": {"id": a.run_id or None, "url": a.run_url or None},
+                     "suite": {"mode": a.suite_mode or None, "run_url": a.suite_run_url or None}}
             r = make_receipt(_flag(a.published), _flag(a.pointer_moved), _flag(a.release_created), a.reason, **facts)
             otalib.write_atomic(a.out, otalib.canonical_json(r))
             print(json.dumps(r, indent=2, sort_keys=True))

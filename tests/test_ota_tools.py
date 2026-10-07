@@ -1837,7 +1837,7 @@ class TestPublishGates(TmpCase):
                      manifest_sha256="2" * 64, signature_sha256="3" * 64, release_host="o/r", base_url="https://h/releases/download/ota-dev-000003",
                      anonymous_read_verified=True,
                      urls={"pck": "https://h/p", "manifest": "https://h/m", "signature": "https://h/s", "pointer": "https://h/l"},
-                     run={"id": "9", "url": "https://h/run/9"})
+                     run={"id": "9", "url": "https://h/run/9"}, suite={"mode": "own-run", "run_url": "https://h/run/9"})
         facts.update(over)
         return facts
 
@@ -1881,6 +1881,15 @@ class TestPublishGates(TmpCase):
         bad = dict(r)
         bad.pop("urls")
         self.assertNotEqual(gates.validate_receipt(bad), "")
+        # the receipt says how the full-suite requirement was met: in this run, or by a verified earlier green run (which it names)
+        self.assertEqual(r["suite"], {"mode": "own-run", "run_url": "https://h/run/9"})
+        reused = gates.make_receipt(True, True, True, "", **self.full_receipt(suite={"mode": "reused", "run_url": "https://h/run/8"}))
+        self.assertEqual(reused["suite"]["mode"], "reused")
+        for bad_suite in ({"mode": None, "run_url": None}, {"mode": "skipped", "run_url": "https://h/run/8"}, {"mode": "reused", "run_url": None},
+                          {"mode": "reused", "run_url": "http://h/run/8"}):
+            with self.assertRaises(otalib.OtaError, msg=str(bad_suite)):
+                gates.make_receipt(True, True, True, "", **self.full_receipt(suite=bad_suite))
+        self.assertIsNone(gates.make_receipt(False, False, False, "x", channel="dev")["suite"]["mode"], "an unpublished receipt may lack it")
 
     def test_receipt_cli(self):
         r = tool("publish_gates.py", "receipt", "--out", self.p("r.json"), "--published", "0", "--reason", "no key", "--channel", "dev",
@@ -1897,9 +1906,11 @@ class TestPublishGates(TmpCase):
                  "--source-sha", SRC40, "--runtime-id", "android-godot-4.6.0-r1",
                  "--runtime-fingerprint", FP64, "--pck-sha256", "1" * 64, "--pck-size", "9", "--manifest-sha256", "2" * 64,
                  "--signature-sha256", "3" * 64, "--pck-url", "https://h/p", "--manifest-url", "https://h/m", "--signature-url", "https://h/s",
-                 "--pointer-url", "https://h/l", "--base-url", "https://h/b", "--anonymous-read-verified", "1")
+                 "--pointer-url", "https://h/l", "--base-url", "https://h/b", "--anonymous-read-verified", "1",
+                 "--suite-mode", "reused", "--suite-run-url", "https://h/run/8")
         self.assertEqual(r.returncode, 0, out(r))
         self.assertTrue(jload(self.p("r3.json"))["published"])
+        self.assertEqual(jload(self.p("r3.json"))["suite"], {"mode": "reused", "run_url": "https://h/run/8"})
         self.assertEqual((jload(self.p("r3.json"))["owner_version"], jload(self.p("r3.json"))["app_minor"]), ("v7.2", 2))
 
     def test_branch_cli(self):
@@ -2517,6 +2528,7 @@ class TestArtifactGates(TmpCase):
         self.assertTrue(lines[3].startswith("Runtime: android-godot-4.6.0-r1 / "))
         self.assertIn("Base URL: https://h/releases/download/ota-dev-000003", lines)
         self.assertIn("Anonymous read verified: yes", lines)
+        self.assertIn("Test suite: ran in this publication run (https://h/run/9)", lines)
         self.assertIn("Published: yes", lines)
         ul = gates.summary_lines(u)
         self.assertIn("Anonymous read verified: no", ul)
@@ -2578,7 +2590,7 @@ class TestPublishWorkflow(unittest.TestCase):
     def test_steps_run_in_the_documented_order(self):
         order = ["name: 01 Pin the exact commit", "name: 02a Gate the host", "name: 02b Resolve identity", "name: 02c Native baseline tag",
                  "name: 03 Native baseline",
-                 "name: 04 Classify", "name: 05 Runtime gate", "uses: ./.github/workflows/ota-tests.yml", "name: 07 Build the payload", "name: 07b Assign app_minor",
+                 "name: 04 Classify", "name: 05 Runtime gate", "name: 05b Look for a VERIFIED", "uses: ./.github/workflows/ota-tests.yml", "name: 07 Build the payload", "name: 07b Assign app_minor",
                  "name: 08 Build the manifest", "name: 09 Signing key", "name: 10 The key's public half", "name: 11 Sign",
                  "name: 12 Inspect", "name: 13 Create the immutable release", "name: 14 Re-download", "name: 15 Verify the published objects are ANONYMOUSLY",
                  "name: 16 Advance the channel pointer", "name: 17 Publication receipt"]
@@ -2753,7 +2765,7 @@ class TestPublishWorkflow(unittest.TestCase):
             self.lacks(bad)
         if self.d:
             jobs = self.d["jobs"]
-            self.assertEqual(jobs["prepare"]["permissions"], {"contents": "read"})
+            self.assertEqual(jobs["prepare"]["permissions"], {"contents": "read", "actions": "read"}, "read-only: 05b lists earlier runs")
             self.assertEqual(jobs["tests"]["permissions"], {"contents": "read"})
             self.assertEqual(jobs["publish"]["permissions"], {"contents": "write"})
             self.assertFalse(self.d["concurrency"]["cancel-in-progress"], "never cancel a publication half way")
@@ -2782,7 +2794,7 @@ class TestPublishWorkflow(unittest.TestCase):
             # write token: only the steps that create / upload / clobber a release, plus the signing-key reader; reads are anonymous
             self.assertEqual(holders["publish"], ["09", "13", "16"])
             # the prepare job is contents: read; its two token steps only read releases of this repository
-            self.assertEqual(holders["prepare"], ["02b", "03"])
+            self.assertEqual(holders["prepare"], ["02b", "03", "05b"])
             self.assertNotIn("tests", holders)
             self.assertEqual(set(self.d["env"]), {"OTA_NATIVE_BASE_TAG_OVERRIDE", "OTA_ACCEPT_GUARDED"}, "workflow-wide env holds plain variables only, never a token or secret")
             self.assertNotIn("secrets", str(self.d["env"]) + str(self.d.get("defaults")))
@@ -2908,7 +2920,8 @@ class TestOtherWorkflows(unittest.TestCase):
             for job in ("validate-and-export", "android"):
                 runs = [s.get("run", "") for s in d["jobs"][job]["steps"]]
                 self.assertIn("python3 tools/ota_runtime.py --check", runs, job)
-                self.assertNotIn("needs", d["jobs"][job], job + " no longer waits for an ota-key job")
+            self.assertNotIn("needs", d["jobs"]["validate-and-export"], "no longer waits for an ota-key job")
+            self.assertEqual(d["jobs"]["android"]["needs"], "validate-and-export", "the APK is built only after the FULL suite is green (and waits for nothing else)")
             self.assertNotIn("ota-key", d["jobs"])
         # everything else is still there
         for keep in ("tools/release_tool.py check", "tests/run_tests.sh", "tools/verify_package.py", "tools/android/build_apk.sh", "tools/publish_release.sh",

@@ -219,7 +219,7 @@ func _display_loaded_profile() -> void:
 		"vitality":    "Vitality",    "adrenaline":  "Adrenaline",
 		"ferocity":    "Ferocity",    "scavenge":    "Scavenge",
 		"greed":       "Greed",       "swiftness":   "Swiftness",
-		"health_regen": "Regeneration", "cyclone":   "Cyclone",
+		"health_regen": "Regeneration",
 		"trap_sense":  "Trap Sense"
 	}
 

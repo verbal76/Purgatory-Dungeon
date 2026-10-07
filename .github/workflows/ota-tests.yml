@@ -3,6 +3,11 @@ name: OTA tests (reusable)
 # The release gate for an OTA (docs/OTA.md section 11): the FULL headless suite, tests/run_tests.sh, on one exact commit.
 # Called by ota-publish.yml with the pinned SHA; it is a workflow_call only, so nothing can start it on its own.
 # Read-only: it never publishes, tags or writes anything.
+#
+# COST (docs/RELEASES.md "CI cost"): ota-publish.yml only calls this workflow when it cannot VERIFY (tools/ota/proven_suite.py, through the
+# GitHub API) that the same suite already passed on the same commit. The last step below is the attestation that makes THIS run a source
+# such a later publication may reuse: it runs only after the suite passed, and only when the tested tree is the tree of the pinned commit.
+# Its name is a constant of proven_suite.py (tests/test_ota_tools.py keeps them equal).
 on:
   workflow_call:
     inputs:
@@ -22,13 +27,14 @@ jobs:
   suite:
     name: Full test suite on the exact SHA
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45   # typical: 15-19 minutes; every Godot stage also has its own `timeout`
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+          persist-credentials: false   # the suite runs repository code: no token stays in .git/config
 
       - name: Exact commit
         env:
@@ -87,3 +93,18 @@ jobs:
 
       - name: Full suite (tests/run_tests.sh)
         run: tests/run_tests.sh "$GODOT"
+
+      - name: Exact-tree check (is the tested tree the tree of the pinned commit?)
+        id: exacttree
+        env:
+          WANT: ${{ inputs.ref }}
+        run: |
+          same=false
+          if python3 tools/ota/proven_suite.py same-tree --sha "$WANT"; then same=true; fi
+          echo "same=$same" >> "$GITHUB_OUTPUT"
+
+      - name: Exact-SHA attestation (the suite above passed on the tree of the commit)
+        if: steps.exacttree.outputs.same == 'true'
+        env:
+          WANT: ${{ inputs.ref }}
+        run: echo "the full suite passed on the exact tree of commit $WANT"

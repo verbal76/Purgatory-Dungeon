@@ -7,7 +7,6 @@
 #
 #   Top-left cluster, rows from the top (see HudVitals):
 #       health bar + value     ROW_HEALTH_H
-#       ability bar + caption  ROW_ABILITY_H
 #       kills + heading plate  at kills_row_top()
 #   Top-right: day counter (GameClock), wallet under it on phones (PlayerWallet).
 #
@@ -18,14 +17,12 @@ extends RefCounted
 
 const EDGE := PUI.S5                 # distance from the screen edge (plus the phone safe-area inset)
 const ROW_HEALTH_H := 32
-const ROW_ABILITY_H := 24
 const ROW_KILLS_H := 32
 const ROW_GAP := PUI.S1
 const CLUSTER_GAP := PUI.S2
 const BAR_W := 240.0
 const COMPASS_W := 72.0              # fits the widest heading ("NW") in the display face on a phone, plus the plate margins
 const HEALTH_BAR_H := 22.0
-const ABILITY_BAR_H := 12.0
 
 
 ## Safe-area insets (left, top, right, bottom) in virtual px. Phones only: on a desktop window the OS "safe area"
@@ -45,7 +42,7 @@ static func origin(vp: Viewport) -> Vector2:
 
 ## Distance from the cluster's top to the kills / heading row.
 static func kills_row_top() -> float:
-	return float(ROW_HEALTH_H + ROW_GAP + ROW_ABILITY_H + CLUSTER_GAP)
+	return float(ROW_HEALTH_H + CLUSTER_GAP)
 
 
 ## Offset of the top-right anchor: x = distance from the right edge, y = distance from the top.

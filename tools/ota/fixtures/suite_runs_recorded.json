@@ -1,0 +1,657 @@
+{
+ "_comment": "Recorded from the public API of verbal76/Purgatory-Dungeon (runs 37461192035 = CI on a pull_request, 37463060653 = OTA publish), trimmed to the fields tools/ota/proven_suite.py reads. Both predate the exact-SHA attestation step.",
+ "jobs": {
+  "37461192035": [
+   {
+    "completed_at": "2026-10-06T12:24:18Z",
+    "conclusion": "success",
+    "head_sha": "6dd77bea6c73b5c677b0e6f7d0144ee7e72cd567",
+    "id": 112260891247,
+    "name": "validate-and-export",
+    "run_attempt": 1,
+    "run_id": 37461192035,
+    "started_at": "2026-10-06T12:08:52Z",
+    "status": "completed",
+    "steps": [
+     {
+      "conclusion": "success",
+      "name": "Set up job",
+      "number": 1,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Run actions/checkout@v4",
+      "number": 2,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Cache Godot editor + export templates",
+      "number": 3,
+      "status": "completed"
+     },
+     {
+      "conclusion": "skipped",
+      "name": "Install Godot 4.6-stable",
+      "number": 4,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Locate Godot",
+      "number": 5,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Verify Godot version",
+      "number": 6,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Check public version consistency",
+      "number": 7,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Native runtime lock (docs/OTA.md section 3)",
+      "number": 8,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Validate project and run tests",
+      "number": 9,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Write build_info.json (shipped inside the game)",
+      "number": 10,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Export Windows build",
+      "number": 11,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Verify exported package",
+      "number": 12,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Write build info",
+      "number": 13,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Upload Windows build",
+      "number": 14,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Post Cache Godot editor + export templates",
+      "number": 27,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Post Run actions/checkout@v4",
+      "number": 28,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Complete job",
+      "number": 29,
+      "status": "completed"
+     }
+    ],
+    "workflow_name": "CI"
+   },
+   {
+    "completed_at": "2026-10-06T12:17:26Z",
+    "conclusion": "success",
+    "head_sha": "6dd77bea6c73b5c677b0e6f7d0144ee7e72cd567",
+    "id": 112260891925,
+    "name": "android",
+    "run_attempt": 1,
+    "run_id": 37461192035,
+    "started_at": "2026-10-06T12:08:52Z",
+    "status": "completed",
+    "steps": [
+     {
+      "conclusion": "success",
+      "name": "Set up job",
+      "number": 1,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Run actions/checkout@v4",
+      "number": 2,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Run actions/setup-java@v4",
+      "number": 3,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Cache Godot editor + Android export templates",
+      "number": 4,
+      "status": "completed"
+     },
+     {
+      "conclusion": "skipped",
+      "name": "Install Godot 4.6-stable + Android templates",
+      "number": 5,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Locate Godot",
+      "number": 6,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Verify Godot version",
+      "number": 7,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Check public version consistency",
+      "number": 8,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Native runtime lock (docs/OTA.md section 3)",
+      "number": 9,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Mobile input / splash / menu tests",
+      "number": 10,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Write build_info.json (shipped inside the game)",
+      "number": 11,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Android signing key",
+      "number": 12,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Build and qualify the APK",
+      "number": 13,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Android build record",
+      "number": 14,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Upload APK",
+      "number": 15,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Post Cache Godot editor + Android export templates",
+      "number": 28,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Post Run actions/setup-java@v4",
+      "number": 29,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Post Run actions/checkout@v4",
+      "number": 30,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Complete job",
+      "number": 31,
+      "status": "completed"
+     }
+    ],
+    "workflow_name": "CI"
+   },
+   {
+    "completed_at": "2026-10-06T12:08:50Z",
+    "conclusion": "skipped",
+    "head_sha": "6dd77bea6c73b5c677b0e6f7d0144ee7e72cd567",
+    "id": 112260893245,
+    "name": "promote",
+    "run_attempt": 1,
+    "run_id": 37461192035,
+    "started_at": "2026-10-06T12:08:50Z",
+    "status": "completed",
+    "steps": [],
+    "workflow_name": "CI"
+   },
+   {
+    "completed_at": "2026-10-06T12:24:18Z",
+    "conclusion": "skipped",
+    "head_sha": "6dd77bea6c73b5c677b0e6f7d0144ee7e72cd567",
+    "id": 112266963701,
+    "name": "publish",
+    "run_attempt": 1,
+    "run_id": 37461192035,
+    "started_at": "2026-10-06T12:24:18Z",
+    "status": "completed",
+    "steps": [],
+    "workflow_name": "CI"
+   }
+  ],
+  "37463060653": [
+   {
+    "completed_at": "2026-10-06T12:25:26Z",
+    "conclusion": "success",
+    "head_sha": "6dd77bea6c73b5c677b0e6f7d0144ee7e72cd567",
+    "id": 112267174974,
+    "name": "Pin, identity, classify, runtime gate",
+    "run_attempt": 1,
+    "run_id": 37463060653,
+    "started_at": "2026-10-06T12:24:53Z",
+    "status": "completed",
+    "steps": [
+     {
+      "conclusion": "success",
+      "name": "Set up job",
+      "number": 1,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Run actions/checkout@v4",
+      "number": 2,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "01 Pin the exact commit (branch must be ota/<channel>/<40-hex sha> and github.sha must equal it)",
+      "number": 3,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "02a Gate the host (this repository must be PUBLIC, read anonymously, and equal REPO in ota_config.gd)",
+      "number": 4,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "02b Resolve identity (seq = highest published ota-<channel>-NNNNNN + 1, never reused)",
+      "number": 5,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "02c Native baseline tag (v<VERSION> of the pinned commit; OTA_NATIVE_BASE_TAG is optional and must agree)",
+      "number": 6,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "03 Native baseline (the published release Purgatory Dungeon v<N> and its APK, downloaded anonymously)",
+      "number": 7,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "04 Classify against the native baseline (APK-required or guarded stops here)",
+      "number": 8,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "05 Runtime gate (ota_runtime.py --check, and this commit's fingerprint == the baseline's)",
+      "number": 9,
+      "status": "completed"
+     },
+     {
+      "conclusion": "skipped",
+      "name": "Receipt (prepare stage; written when nothing could be published)",
+      "number": 10,
+      "status": "completed"
+     },
+     {
+      "conclusion": "skipped",
+      "name": "Upload the prepare-stage receipt",
+      "number": 11,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Post Run actions/checkout@v4",
+      "number": 22,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Complete job",
+      "number": 23,
+      "status": "completed"
+     }
+    ],
+    "workflow_name": "OTA publish"
+   },
+   {
+    "completed_at": "2026-10-06T12:42:26Z",
+    "conclusion": "success",
+    "head_sha": "6dd77bea6c73b5c677b0e6f7d0144ee7e72cd567",
+    "id": 112267408360,
+    "name": "Full test suite on the exact SHA / Full test suite on the exact SHA",
+    "run_attempt": 1,
+    "run_id": 37463060653,
+    "started_at": "2026-10-06T12:25:29Z",
+    "status": "completed",
+    "steps": [
+     {
+      "conclusion": "success",
+      "name": "Set up job",
+      "number": 1,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Run actions/checkout@v4",
+      "number": 2,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Exact commit",
+      "number": 3,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Engine version of the runtime (ci.yml GODOT_RELEASE via ota/boundary.json)",
+      "number": 4,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Cache Godot editor + export templates",
+      "number": 5,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Install Godot 4.6-stable",
+      "number": 6,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Locate Godot",
+      "number": 7,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Verify Godot version",
+      "number": 8,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Full suite (tests/run_tests.sh)",
+      "number": 9,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Post Cache Godot editor + export templates",
+      "number": 17,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Post Run actions/checkout@v4",
+      "number": 18,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Complete job",
+      "number": 19,
+      "status": "completed"
+     }
+    ],
+    "workflow_name": "OTA publish"
+   },
+   {
+    "completed_at": "2026-10-06T12:47:00Z",
+    "conclusion": "success",
+    "head_sha": "6dd77bea6c73b5c677b0e6f7d0144ee7e72cd567",
+    "id": 112274386841,
+    "name": "Build, sign, publish, verify, advance the pointer",
+    "run_attempt": 1,
+    "run_id": 37463060653,
+    "started_at": "2026-10-06T12:42:29Z",
+    "status": "completed",
+    "steps": [
+     {
+      "conclusion": "success",
+      "name": "Set up job",
+      "number": 1,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Run actions/checkout@v4",
+      "number": 2,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Exact commit",
+      "number": 3,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Engine version of the runtime (ci.yml GODOT_RELEASE via ota/boundary.json)",
+      "number": 4,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Cache Godot editor + Android export templates",
+      "number": 5,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Install Godot 4.6-stable + Android templates",
+      "number": 6,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Locate and verify Godot",
+      "number": 7,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "03b Native baseline APK again (for the byte comparison; anonymous download of the public release)",
+      "number": 8,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "07 Build the payload (baseline pack from base_source_sha, byte comparison with the shipped APK, cumulative patch)",
+      "number": 9,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "07b Assign app_minor from the LIVE pointer (same native generation -> pointer minor + 1, else 1; v7.1, v7.2 ...)",
+      "number": 10,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "08 Build the manifest (client schema 1)",
+      "number": 11,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "09 Signing key (secret OTA_SIGNING_KEY_PEM_BASE64, else the private draft release; never created here)",
+      "number": 12,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "10 The key's public half must equal PUBLIC_KEY_PEM in scripts/boot/ota_config.gd",
+      "number": 13,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "11 Sign (RSA SHA-256 PKCS#1 v1.5 over the exact manifest bytes)",
+      "number": 14,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "12 Inspect with the client's own verification code (signature, runtime, package, files[], protected paths, version)",
+      "number": 15,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "13 Create the immutable release ota-<channel>-<seq> (aborts if the tag exists; never Latest)",
+      "number": 16,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "14 Re-download the published objects ANONYMOUSLY and verify them again",
+      "number": 17,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "15 Verify the published objects are ANONYMOUSLY reachable (checked before the pointer moves)",
+      "number": 18,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "16 Advance the channel pointer (forward only, prerelease, never Latest) and confirm it is live",
+      "number": 19,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "17 Publication receipt (JSON in the job summary and as an artifact)",
+      "number": 20,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Upload the receipt (never the key; the large pack is already a release asset)",
+      "number": 21,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Post Cache Godot editor + Android export templates",
+      "number": 41,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Post Run actions/checkout@v4",
+      "number": 42,
+      "status": "completed"
+     },
+     {
+      "conclusion": "success",
+      "name": "Complete job",
+      "number": 43,
+      "status": "completed"
+     }
+    ],
+    "workflow_name": "OTA publish"
+   }
+  ]
+ },
+ "runs": [
+  {
+   "conclusion": "success",
+   "event": "pull_request",
+   "head_branch": "v7-1-ota",
+   "head_repository": {
+    "full_name": "verbal76/Purgatory-Dungeon"
+   },
+   "head_sha": "6dd77bea6c73b5c677b0e6f7d0144ee7e72cd567",
+   "html_url": "https://github.com/verbal76/Purgatory-Dungeon/actions/runs/37461192035",
+   "id": 37461192035,
+   "name": "CI",
+   "path": ".github/workflows/ci.yml",
+   "repository": {
+    "full_name": "verbal76/Purgatory-Dungeon"
+   },
+   "run_attempt": 1,
+   "run_started_at": "2026-10-06T12:08:49Z",
+   "status": "completed",
+   "updated_at": "2026-10-06T12:24:19Z"
+  },
+  {
+   "conclusion": "success",
+   "event": "push",
+   "head_branch": "ota/dev/6dd77bea6c73b5c677b0e6f7d0144ee7e72cd567",
+   "head_repository": {
+    "full_name": "verbal76/Purgatory-Dungeon"
+   },
+   "head_sha": "6dd77bea6c73b5c677b0e6f7d0144ee7e72cd567",
+   "html_url": "https://github.com/verbal76/Purgatory-Dungeon/actions/runs/37463060653",
+   "id": 37463060653,
+   "name": "OTA publish",
+   "path": ".github/workflows/ota-publish.yml",
+   "repository": {
+    "full_name": "verbal76/Purgatory-Dungeon"
+   },
+   "run_attempt": 1,
+   "run_started_at": "2026-10-06T12:24:49Z",
+   "status": "completed",
+   "updated_at": "2026-10-06T12:47:01Z"
+  }
+ ]
+}

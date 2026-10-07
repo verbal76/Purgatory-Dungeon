@@ -35,7 +35,8 @@ var gameplay_settings : Dictionary = {
 	"TouchScale"    : 100.0,
 	"TouchLookSens" : 100.0,
 	"TouchScheme"   : "twin",   # "twin" (default: move stick + Attack, which also aims by dragging) or "classic" (swipe to look)
-	"ShowPerf"      : false,   # phone playtests: frame-time readout (Options > Gameplay)
+	"ShowPerf"      : false,   # frame-time readout; developer tools only (Options > About, after DeveloperMode is unlocked)
+	"DeveloperMode" : false,   # hidden: tap the version in Options > About 7 times; shows the developer tools there
 }
 
 # Computed in _ready() — points to Documents/PurgetoryDungeon/settings.json.
@@ -74,6 +75,10 @@ func load_settings() -> void:
 		# Merge over defaults so newly added keys always appear.
 		for key in parsed.keys():
 			gameplay_settings[key] = parsed[key]
+		# The performance readout is a developer tool: a settings file written by an older build (where it was an
+		# ordinary Gameplay option) must not leave it on screen for a player who cannot see the switch any more.
+		if not bool(gameplay_settings.get("DeveloperMode", false)):
+			gameplay_settings["ShowPerf"] = false
 
 
 # ── Save ────────────────────────────────────────────────────────────────────
@@ -259,5 +264,16 @@ func _set_bus_volume(bus_name: String, linear_value: float) -> void:
 
 
 # Read-only accessor used throughout the codebase.
+## Developer tools switch (Options > About). Turning it off also turns the performance readout off.
+func set_developer_mode(on: bool) -> void:
+	if not on:
+		gameplay_settings["ShowPerf"] = false
+	update_setting("DeveloperMode", on)
+
+
+func is_developer_mode() -> bool:
+	return bool(gameplay_settings.get("DeveloperMode", false))
+
+
 func get_setting(setting_name: String, default: float = 100.0) -> float:
 	return float(gameplay_settings.get(setting_name, default))

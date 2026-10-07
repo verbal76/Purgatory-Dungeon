@@ -4,20 +4,22 @@
 # Description: The Alchemist's Lab - the perk ledger, on the Purgatory design system
 #              (docs/UI_DESIGN_SYSTEM.md). A parchment sheet (PUI.paper_panel) on the void background,
 #              upgrade slips of paper with iron/brass buttons, and a bottom bar of iron controls:
-#                  [ Load Character ]       [ < 1 / 2 > ]       [ Start Another Run ]
+#                  [ Main Menu ]            [ < 1 / 2 > ]       [ Start Another Run ]
 #              Perks per page: 9 (3x3) on desktop, 6 (3x2) on touch - see perks_per_page().
 #
 #  MOD NOTES:
 #  - "Sanctuary" was renamed "Hare's Delight"; save key "sanctuary" is preserved.
 #  - Mechanics (costs, caps, requirements, the single-write purchase) are untouched by the visual pass.
 #  - Test hooks kept: visible_perks(), perks_per_page(), _purchase_perk(), _start_new_run(), and the
-#    nodes UpgradeBtn_<key>, LoadCharacterButton, StartAnotherRunButton.
+#    nodes UpgradeBtn_<key>, MainMenuButton (was LoadCharacterButton), StartAnotherRunButton.
+#  - "Main Menu" (bottom-left, also Esc / back) only changes scene to the main menu: no profile is loaded or
+#    saved by leaving (purchases are written when they happen).
 # ==============================================================================
 extends Control
 
 const DungeonEntry = preload("res://scripts/dungeon_entry.gd")   # threaded dungeon load (no global class name)
 
-@export var character_selection_scene : String = "res://scenes/CharacterSelection.tscn"
+@export var main_menu_scene : String = "res://scenes/MainMenu.tscn"
 const DUNGEON_SCENE    : String = "res://scenes/Purgatory_Dungeon_main_game_file.tscn"
 const PERKS_PER_PAGE   : int    = 9
 const PERKS_PER_PAGE_PHONE : int = 6   # 3x2: thumb-sized Trade buttons need the room
@@ -43,7 +45,7 @@ var _next_btn        : Button          = null
 var _prev_icon       : PUIIcon         = null
 var _next_icon       : PUIIcon         = null
 var _nav_bar         : HBoxContainer   = null
-var _load_char_btn   : Button          = null
+var _main_menu_btn   : Button          = null
 var _new_run_btn     : Button          = null
 var _back_btn        : Button          = null   # hidden legacy button (old scenes)
 
@@ -57,7 +59,6 @@ var perks_def : Array = [
 	{"key": "greed",       "name": "Greed",            "desc": "Double Drop Chance +5%"},
 	{"key": "swiftness",   "name": "Swiftness",        "desc": "Move Speed +5%"},
 	{"key": "health_regen","name": "Regeneration",     "desc": "+0.5 HP/sec per level"},
-	{"key": "cyclone",     "name": "Cyclone",          "desc": "+0.5s Rapid Attack / -3s Cooldown"},
 	{"key": "trap_sense",  "name": "Trap Sense",       "desc": "Each level adds 25% chance a trap glows red — requires 5 runs"},
 ]
 
@@ -75,8 +76,8 @@ func _ready() -> void:
 	_build_nav_buttons()
 	_update_ui()
 	_update_page_controls()
-	if _load_char_btn:
-		_load_char_btn.call_deferred("grab_focus")
+	if _main_menu_btn:
+		_main_menu_btn.call_deferred("grab_focus")
 	_wire_button_clicks()
 	resized.connect(_apply_margins)
 	_apply_margins()
@@ -221,12 +222,12 @@ func _build_nav_buttons() -> void:
 	_nav_bar.add_theme_constant_override("separation", PUI.S4)
 	root_v.add_child(_nav_bar)
 
-	_load_char_btn = PUI.button("Load Character", "nav")
-	_load_char_btn.name = "LoadCharacterButton"
-	_load_char_btn.custom_minimum_size = Vector2(400, PUI.BUTTON_H)
-	_load_char_btn.pressed.connect(_go_to_character_selection)
-	PUI.button_chevron(_load_char_btn, "chevron_left")
-	_nav_bar.add_child(_load_char_btn)
+	_main_menu_btn = PUI.button("Main Menu", "nav")
+	_main_menu_btn.name = "MainMenuButton"
+	_main_menu_btn.custom_minimum_size = Vector2(400, PUI.BUTTON_H)
+	_main_menu_btn.pressed.connect(_go_to_main_menu)
+	PUI.button_chevron(_main_menu_btn, "chevron_left")
+	_nav_bar.add_child(_main_menu_btn)
 
 	_nav_bar.add_child(_expander())
 
@@ -275,7 +276,7 @@ func _expander() -> Control:
 
 # Phones: a 72-high bottom bar with wider buttons. The ledger takes the remaining height.
 func _fit_nav_for_phone() -> void:
-	for b in [_load_char_btn, _new_run_btn]:
+	for b in [_main_menu_btn, _new_run_btn]:
 		b.custom_minimum_size = Vector2(420, 72)
 
 
@@ -341,16 +342,17 @@ func _update_page_controls() -> void:
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		get_viewport().set_input_as_handled()
-		_go_to_character_selection()
+		_go_to_main_menu()
 
 
 # ══════════════════════════════════════════════════════════════
 #  NAVIGATION ACTIONS
 # ══════════════════════════════════════════════════════════════
 
-func _go_to_character_selection() -> void:
+## Back to the main menu. Changes scene and nothing else: no profile is loaded or saved here.
+func _go_to_main_menu() -> void:
 	PlayerWallet.hide_hud()
-	get_tree().change_scene_to_file(character_selection_scene)
+	get_tree().change_scene_to_file(main_menu_scene)
 
 
 func _start_new_run() -> void:

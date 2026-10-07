@@ -13,7 +13,7 @@ extends RefCounted
 ## Version of the on-device OTA bootstrap protocol. Manifests may demand a minimum.
 const BOOTSTRAP_VERSION := 1
 ## Bumped whenever the native layer changes incompatibly (see ota/runtime_lock.json).
-const RUNTIME_REVISION := 1
+const RUNTIME_REVISION := 2
 ## The channel an installed app follows unless its native build info names another one
 ## (the "ota_channel" field written at APK build time). Channels are manifest pointers, not
 ## packages: a later "stable" channel is a second pointer, not a second code path.

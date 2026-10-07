@@ -12,7 +12,7 @@
 #  - SURGICAL ADD: Camera head bob system based on horizontal speed, with tunable export variables.
 #  - SURGICAL FIX: Modified _do_block to hold at half animation until released, then finish fast.
 #  - SURGICAL FIX: Added block knockback physics and hit grunt sound to take_damage override.
-#  - SURGICAL PIVOT: Implemented "Zelda Method" attack input. Normal swings fire instantly on press. Holding the button charges the Rapid Attack in the background.
+#  - SURGICAL PIVOT: Implemented "Zelda Method" attack input. Normal swings fire instantly on press: one press = one attack; holding never charges or repeats.
 #  - SURGICAL FIX: Block hold uses speed_scale=0.0 to freeze animation in place.
 #    anim_player.pause() + play() restarts from frame 0 — wrong behaviour.
 #    speed_scale=0.0 then speed_scale=2.5 freezes and resumes from the same frame.
@@ -53,12 +53,6 @@ extends BruteCharacter
 @export var kick_force      : float = 9.0 # Knockback force applied by kick
 @export var kick_stun_time : float = 3.0 # Duration target is stunned after kick
 @export var block_knockback_force : float = 18.0 # Speed player slides back when blocking a hit
-
-# ── Rapid Attack Attack ──────────────────────────────────────────────────────────
-@export var rapid_attack_charge_time  : float = 1.5   # Seconds to fill the charge bar
-@export var rapid_attack_duration     : float = 4.0   # Seconds the rapid attack lasts
-@export var rapid_attack_cooldown     : float = 30.0  # Seconds before rapid attack can recharge
-@export var rapid_attack_attack_rate  : float = 0.2   # Seconds between auto-hits (5 hits/sec)
 
 # ── AOE (Potion Blast) ────────────────────────────────────────
 @export var aoe_base_radius : float = 3.5 # Base size of the potion blast dome
@@ -125,6 +119,7 @@ var _status_day_effects_days  : int   = 0
 # Tracked timers for timed effects (replacing fire-and-forget create_timer
 # calls so the status label can display a live countdown).
 var _status_drunk_timer    : float = 0.0   # Seconds remaining on drunk effect
+var _status_reversed_view_timer : float = 0.0   # Seconds remaining on Reversed View (same length as Intoxicated)
 var _status_controls_timer : float = 0.0   # Seconds remaining on reversed controls
 
 # ── Status label ───────────────────────────────────────────────────────────────
@@ -135,16 +130,6 @@ var _status_panel        : Control  = null
 var _status_update_timer : float    = 0.0
 const STATUS_UPDATE_INTERVAL : float = 0.5
 
-# ── Rapid Attack state ──────────────────────────────────────────────────────────
-var _attack_held              : bool  = false
-var _rapid_attack_charge           : float = 0.0
-var _rapid_attack_active           : bool  = false
-var _rapid_attack_timer            : float = 0.0
-var _rapid_attack_cooldown_remain  : float = 0.0
-var _rapid_attack_attack_timer     : float = 0.0
-
-# ── Rapid Attack HUD ────────────────────────────────────────────────────────────
-var _rapid_attack_bar_label: Label     = null   # caption beside the ability bar (owned by _vitals)
 var _hit_targets     : Dictionary = {}
 
 # ── Buff System Hooks ──────────────────────────────────────────
@@ -176,7 +161,7 @@ var _streak_fire   : GPUParticles3D = null
 
 # ── HUD ────────────────────────────────────────────────────────
 var _hud_layer       : CanvasLayer = null
-var _vitals          : HudVitals   = null   # health bar + value, ability bar + caption (scripts/ui/hud_vitals.gd)
+var _vitals          : HudVitals   = null   # health bar + value (scripts/ui/hud_vitals.gd)
 var _health_label    : Label       = null
 
 # ── Damage vignette ────────────────────────────────────────────
@@ -313,46 +298,6 @@ func _do_block() -> void:
 
 
 # ══════════════════════════════════════════════════════════════
-#  RAPID ATTACK
-#  Berserker frenzy: auto-swings at attack_rate for `duration` seconds,
-#  player takes zero damage, first-person view and movement unchanged.
-# ══════════════════════════════════════════════════════════════
-
-func _start_rapid_attack() -> void:
-	if _is_dead:
-		return
-	# Cancel any in-flight single-swing / kick — we own the hitbox now.
-	if _is_attacking:
-		_is_attacking = false
-		_set_weapon_hitbox_active(false)
-		_hit_targets.clear()
-	if _is_kicking:
-		_is_kicking = false
-		_set_kick_hitbox_active(false)
-		_hit_targets.clear()
-
-	_rapid_attack_active       = true
-	_rapid_attack_timer        = rapid_attack_duration
-	_rapid_attack_attack_timer = 0.0
-	_is_attacking              = true
-	anim_player.speed_scale    = attack_speed_scale * attack_speed * 1.5
-	_refresh_rapid_attack_bar()
-
-
-func _end_rapid_attack() -> void:
-	_rapid_attack_active  = false
-	_is_attacking    = false
-	_set_weapon_hitbox_active(false)
-	_hit_targets.clear()
-	_rapid_attack_cooldown_remain = rapid_attack_cooldown
-	anim_player.speed_scale  = 1.0
-	_refresh_rapid_attack_bar()
-
-	if not _is_dead:
-		_change_state(_get_idle_state())
-
-
-# ══════════════════════════════════════════════════════════════
 #  HUB PERK APPLICATION
 # ══════════════════════════════════════════════════════════════
 
@@ -388,11 +333,6 @@ func _apply_hub_perks() -> void:
 	var health_regen_lv : int = int(perk_levels.get("health_regen", 0))
 	if health_regen_lv > 0:
 		passive_regen += 0.5 * float(health_regen_lv)
-
-	var cyclone_lv : int = int(perk_levels.get("cyclone", 0))
-	if cyclone_lv > 0:
-		rapid_attack_duration += 0.5 * float(cyclone_lv)
-		rapid_attack_cooldown  = maxf(rapid_attack_cooldown - 3.0 * float(cyclone_lv), 10.0)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -633,7 +573,6 @@ func _fire_swing_sparks() -> void:
 func take_damage(amount: float, source_node: Node3D = null) -> void:
 	if _is_dead: return
 	if _is_sliding: return  # Invincible during the evasive slide.
-	if _rapid_attack_active: return  # Invincible during rapid attack frenzy.
 
 	if _is_blocking and source_node != null:
 		var to_source : Vector3 = (source_node.global_position - global_position).normalized()
@@ -757,13 +696,11 @@ func _build_hud() -> void:
 	_hud_layer.name = "HUD"
 	add_child(_hud_layer)
 
-	# Health bar + value, rapid-attack bar + caption: one shared component (the Mage uses the same).
+	# Health bar + value: one shared component (the Mage uses the same).
 	_vitals = HudVitals.new()
 	_hud_layer.add_child(_vitals)
 	_health_label            = _vitals.health_label
-	_rapid_attack_bar_label  = _vitals.ability_label
 	_refresh_health_bar(max_health, max_health)
-	_refresh_rapid_attack_bar()
 
 	# Damage vignette — sits above all other HUD elements so it bleeds over
 	# the health bar and fills the whole screen. mouse_filter IGNORE so it
@@ -792,26 +729,6 @@ func _refresh_health_bar(current: float, max_val: float) -> void:
 	_vitals.set_health(current, max_val)
 
 
-func _refresh_rapid_attack_bar() -> void:
-	if _vitals == null:
-		return
-
-	if _rapid_attack_active:
-		_vitals.set_ability(clampf(_rapid_attack_timer / rapid_attack_duration, 0.0, 1.0),
-				HudVitals.Ability.ACTIVE, _rapid_attack_timer)
-
-	elif _rapid_attack_cooldown_remain > 0.0:
-		_vitals.set_ability(1.0 - clampf(_rapid_attack_cooldown_remain / rapid_attack_cooldown, 0.0, 1.0),
-				HudVitals.Ability.COOLDOWN, _rapid_attack_cooldown_remain)
-
-	elif _attack_held:
-		_vitals.set_ability(_rapid_attack_charge,
-				HudVitals.Ability.RELEASE if _rapid_attack_charge >= 1.0 else HudVitals.Ability.CHARGING)
-
-	else:
-		_vitals.set_ability(1.0, HudVitals.Ability.READY)
-
-
 # Called by BuffManager._finalize_close after the day-change slot machine
 # closes. Any in-flight action (attack/kick/slide/block) that was mid-await
 # when the tree paused would leave its state flag stuck `true` forever — the
@@ -833,6 +750,7 @@ func _on_buff_pick_finished() -> void:
 
 
 func _on_die() -> void:
+	clear_timed_statuses()
 	if _streak_fire != null:
 		_streak_fire.emitting = false
 
@@ -894,24 +812,10 @@ func _physics_tick(delta: float) -> void:
 		take_damage(max_health + 1.0)
 
 	# ── Attack Input Polling (ZELDA METHOD) ──────────────────────────────────
+	# One press = exactly one swing. Holding never charges, repeats or changes anything.
 	if Input.is_action_just_pressed("attack") and not _is_attacking and not _is_kicking \
-			and not _is_sliding and not _is_blocking and not _rapid_attack_active and not _is_dead:
-		_attack_held = true
-		_rapid_attack_charge = 0.0
+			and not _is_sliding and not _is_blocking and not _is_dead:
 		_do_attack()
-
-	if Input.is_action_pressed("attack") and _attack_held and not _is_dead and _rapid_attack_cooldown_remain <= 0.0:
-		_rapid_attack_charge = minf(_rapid_attack_charge + delta / rapid_attack_charge_time, 1.0)
-		_refresh_rapid_attack_bar()
-
-	if Input.is_action_just_released("attack") and _attack_held:
-		_attack_held = false
-		if _rapid_attack_charge >= 1.0 and _rapid_attack_cooldown_remain <= 0.0 and not _rapid_attack_active:
-			_rapid_attack_charge = 0.0
-			_start_rapid_attack()
-		else:
-			_rapid_attack_charge = 0.0
-			_refresh_rapid_attack_bar()
 
 	_check_kill_streak()
 	_tick_kill_haste(delta)
@@ -935,6 +839,13 @@ func _physics_tick(delta: float) -> void:
 			_status_drunk = false
 			_refresh_status_label()
 
+	if _status_reversed_view and _status_reversed_view_timer > 0.0:
+		_status_reversed_view_timer -= delta
+		if _status_reversed_view_timer <= 0.0:
+			_status_reversed_view = false
+			_reset_view_arm()
+			_refresh_status_label()
+
 	if _status_reversed_controls and _status_controls_timer > 0.0:
 		_status_controls_timer -= delta
 		if _status_controls_timer <= 0.0:
@@ -942,7 +853,7 @@ func _physics_tick(delta: float) -> void:
 			_refresh_status_label()
 
 	# Throttle status label refresh — no need to rebuild text every 60Hz tick.
-	if _status_drunk or _status_reversed_controls or _status_acid:
+	if _status_drunk or _status_reversed_view or _status_reversed_controls or _status_acid:
 		_status_update_timer -= delta
 		if _status_update_timer <= 0.0:
 			_status_update_timer = STATUS_UPDATE_INTERVAL
@@ -954,41 +865,6 @@ func _physics_tick(delta: float) -> void:
 		move_and_slide()
 		_update_footsteps(delta)
 		return
-
-	if _rapid_attack_active:
-		# Normal first-person movement + view + footsteps — player is in
-		# full control during rapid attack. The only difference vs. normal
-		# play is the auto-swing tick below and the damage immunity in
-		# take_damage (see "_rapid_attack_active" gate there).
-		_handle_view_input(delta)
-		_apply_view_rotation()
-		_handle_movement(delta)
-		_update_footsteps(delta)
-		_apply_head_bob(delta)
-
-		_rapid_attack_timer -= delta
-		_rapid_attack_attack_timer -= delta
-
-		# Auto-chop. Keeps the weapon hitbox hot so anything walked into
-		# during the swing connects, then re-triggers each time the attack
-		# timer drains.
-		if _rapid_attack_attack_timer <= 0.0:
-			_rapid_attack_attack_timer = rapid_attack_attack_rate
-			_hit_targets.clear()
-			_set_weapon_hitbox_active(true)
-			_play_anim(pick_attack())
-			anim_player.speed_scale = attack_speed_scale * attack_speed * 1.5
-			_fire_swing_sparks()
-
-		_refresh_rapid_attack_bar()
-
-		if _rapid_attack_timer <= 0.0:
-			_end_rapid_attack()
-		return
-
-	if _rapid_attack_cooldown_remain > 0.0:
-		_rapid_attack_cooldown_remain = maxf(_rapid_attack_cooldown_remain - delta, 0.0)
-		_refresh_rapid_attack_bar()
 
 	_handle_view_input(delta)
 	_apply_view_rotation()
@@ -1203,7 +1079,7 @@ func _do_attack() -> void:
 	var wait_time : float = maxf((duration / attack_speed_scale) - 0.15, 0.05)
 	await get_tree().create_timer(wait_time).timeout
 
-	if _rapid_attack_active or _is_dead:
+	if _is_dead:
 		return
 
 	_set_weapon_hitbox_active(false)
@@ -1350,10 +1226,9 @@ func _process(_delta: float) -> void:
 func apply_status(effect_name: String, days_duration: int, strength: float = 0.0) -> void:
 	match effect_name:
 		"reversed_view":
-			_status_reversed_view    = true
-			_status_day_effects_days = maxi(_status_day_effects_days, days_duration)
-			if not GameClock.day_changed.is_connected(_on_day_changed):
-				GameClock.day_changed.connect(_on_day_changed)
+			# Timer-based like Intoxicated (and the same length); the day count argument is ignored. Re-applying refreshes it.
+			_status_reversed_view       = true
+			_status_reversed_view_timer = STATUS_REVERSED_VIEW_SECONDS
 		"heavy_gravity":
 			if not _status_heavy_gravity:
 				_status_heavy_gravity    = true
@@ -1363,7 +1238,7 @@ func apply_status(effect_name: String, days_duration: int, strength: float = 0.0
 				GameClock.day_changed.connect(_on_day_changed)
 		"drunk":
 			_status_drunk       = true
-			_status_drunk_timer = 30.0   # Tracked float replaces fire-and-forget timer
+			_status_drunk_timer = STATUS_DRUNK_SECONDS   # Tracked float replaces fire-and-forget timer
 		"reversed_controls":
 			_status_reversed_controls = true
 			_status_controls_timer    = 30.0
@@ -1386,9 +1261,7 @@ func _refresh_status_label() -> void:
 	var lines : Array[String] = []
 
 	if _status_reversed_view:
-		lines.append("Vision Reversed  (%d day%s)" % [
-			_status_day_effects_days,
-			"s" if _status_day_effects_days != 1 else ""])
+		lines.append("Vision Reversed  (%.0fs)" % maxf(_status_reversed_view_timer, 0.0))
 
 	if _status_heavy_gravity:
 		lines.append("Heavy Gravity  (%d day%s)" % [
@@ -1411,10 +1284,37 @@ func _refresh_status_label() -> void:
 		_status_panel.visible = true
 
 
+# Puts the camera arm back upright right now. _apply_view_rotation() normally does it every tick, but the blocking branch of
+# the physics tick returns before reaching it, so ending Reversed View (expiry or death) must not rely on that.
+func _reset_view_arm() -> void:
+	var arm : SpringArm3D = get_node_or_null("SpringArm3D") as SpringArm3D
+	if arm != null:
+		arm.rotation.x = 0.0
+
+# Ends every timed trap status at once (death: the screen must not stay upside-down / swaying behind the death overlay,
+# and nothing may carry into whatever comes next). Day-based Heavy Gravity is restored here too.
+func clear_timed_statuses() -> void:
+	_status_reversed_view       = false
+	_status_reversed_view_timer = 0.0
+	_reset_view_arm()
+	_status_drunk               = false
+	_status_drunk_timer         = 0.0
+	_status_reversed_controls   = false
+	_status_controls_timer      = 0.0
+	_status_acid                = false
+	_status_acid_timer          = 0.0
+	if _status_heavy_gravity:
+		_status_heavy_gravity = false
+		slide_power           *= 2.0
+	_status_day_effects_days = 0
+	if GameClock.day_changed.is_connected(_on_day_changed):
+		GameClock.day_changed.disconnect(_on_day_changed)
+	_refresh_status_label()
+
+
 func _on_day_changed(_day: int) -> void:
 	_status_day_effects_days -= 1
 	if _status_day_effects_days <= 0:
-		_status_reversed_view = false
 		if _status_heavy_gravity:
 			_status_heavy_gravity = false
 			slide_power           *= 2.0

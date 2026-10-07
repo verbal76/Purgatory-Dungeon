@@ -51,7 +51,7 @@ sensitivity apply to both.
 | Touch control | Action | Keyboard | Controller |
 |---|---|---|---|
 | Left thumb: floating stick (anywhere in the lower-left 40%) | move_forward/back/left/right (analog) | WASD | left stick |
-| Big sword button, lower-right rim (hold to charge). **Dragging from it aims**: a continuous turn rate measured from the touch-down point | attack (+ look while dragging) | Left Mouse (+ mouse) | RT (+ right stick) |
+| Big sword button, lower-right rim. **One touch = at most one attack, decided by what the finger does** (see *Attack gesture*): a **tap** (or a short rest) attacks once; **dragging from it aims** (a continuous turn rate measured from the touch-down point) and never attacks; holding never repeats, auto-fires or charges | attack (+ look while dragging) | Left Mouse (+ mouse) | RT (+ right stick) |
 | Empty screen on the right (no button under the finger) | nothing: there is no look stick and no look zone | - | - |
 | Slide chevrons, kick boot, shield (hold), flask (cooldown ring, potion count) on an arc around Attack | jump, kick, block, AOE | Space, F, Right Mouse, Q | B, RB, D-pad down, LB |
 | USE / OPEN (appears only at a chest you can open), second ring | equip | E | A |
@@ -63,7 +63,7 @@ sensitivity apply to both.
 |---|---|
 | Left thumb: floating stick | move (analog) |
 | Right side: swipe/drag (no stick) | look (yaw, one motion event per drag event) |
-| Big sword button (hold to charge), boot, chevrons, shield (hold), flask, USE, Pause, Map | attack, kick, jump, block, AOE, equip, ui_menu, minimap |
+| Big sword button (press / hold / release: one press = one attack, holding never charges or repeats), boot, chevrons, shield (hold), flask, USE, Pause, Map | attack, kick, jump, block, AOE, equip, ui_menu, minimap |
 
 ### Twin-stick design notes
 - **Why**: Classic needs repeated swipes to turn while moving. In twin-stick the Attack button is the aim control, as
@@ -73,10 +73,32 @@ sensitivity apply to both.
   `BUTTON` > `STICK` (left lower 40%) > `NONE`; Classic also has `LOOK` for its swipe). A touch on a button is that
   button. **A finger that starts on empty screen outside the move zone is ignored** in twin-stick (there is no look
   zone): it is owned by `NONE`, so it cannot turn into anything later, whatever it does. Extra fingers in the occupied
-  move zone are ignored the same way. A finger that goes down on ATTACK stays a BUTTON finger (press/hold/release,
-  `MIN_PRESS_MS` stretching unchanged) and also measures an aim drag from its touch-down point; it keeps aiming
-  wherever it wanders (even far outside the button) until it is lifted, and the drag never releases or re-presses
-  attack. Releasing ATTACK ends the drag at once. Left-thumb movement and the aim drag work together.
+  move zone are ignored the same way. A finger that goes down on ATTACK stays a BUTTON finger and is both the attack
+  button and the look surface: it measures an aim drag from its touch-down point and keeps aiming wherever it wanders
+  (even far outside the button) until it is lifted. Whether it ALSO attacks is decided by the attack gesture below.
+  Releasing ATTACK ends the drag at once. Left-thumb movement and the aim drag work together. A new finger on a HOLD
+  button (or a finger index that goes down again without a lift in between) takes the button over: the previous finger is
+  gone, so a lost lift can never own a button or the attack gesture for ever.
+- **Attack gesture** (twin-stick only; `Gesture` in `touch_controls.gd`). The same thumb rests on ATTACK to look, so a
+  touch on it must not attack the moment it lands. Touch-down only starts a gesture (state PENDING, nothing pressed):
+  | The finger... | Result |
+  |---|---|
+  | lifts within `ATTACK_INTENT_MS` (150 ms) without leaving the slop circle (**tap**) | **one** attack, at the lift |
+  | stays down and still inside the slop circle for `ATTACK_INTENT_MS` (**hold**) | **one** attack, at that moment; holding on never repeats, auto-fires or charges |
+  | moves beyond the slop circle around the touch-down point, or the aim drag engages (**look**) | **zero** attacks for the rest of this touch (also if it had already attacked once: still at most one) |
+  | comes back to the centre after looking | still look until the lift: **zero** attacks; a new attack needs a new touch |
+  | is cancelled by the engine, lost, replaced by another finger, or the app is paused / backgrounded / loses focus / the layer is hidden or freed | nothing; no attack on the way out |
+  Every gesture is at most one attack. The attack itself is a **pulse**: the layer presses `attack` and releases it
+  itself `ATTACK_PULSE_MS` (80 ms, at least two 30 Hz physics ticks so polling and event gameplay both see it) later, so
+  a finger never "holds" attack. There is no hold-to-charge or auto-repeat on any control scheme (the Rapid Attack
+  ability was removed everywhere). Camera cost: none. Classification only adds a
+  flag; the aim path is the unchanged per-rendered-frame integration, and the slop circle is smaller than the aim's
+  engage distance, so the camera cannot start turning under an undecided gesture (the gesture is also forced to look the
+  moment the aim engages).
+  Tuning (`ATTACK_*` in `touch_controls.gd`): `ATTACK_SLOP_MM` 1.5 mm = ~9.5 dp (Android's own touch slop is 8 dp), converted to
+  virtual px with the panel dpi (Pixel: ~15 px) and clamped to 8-20 px; `ATTACK_INTENT_MS` 150 (a tap is ~60-150 ms,
+  a look drag starts moving within ~100 ms); `ATTACK_PULSE_MAX_MS` 250 hard cap on any scheduled release. These are
+  starting values reasoned from Android touch behaviour; only a real phone can say whether they feel right.
 - **Input path and frame pacing**: the look command is turned into one `InputEventMouseMotion` (device 0) per
   **rendered frame** by `TouchControls._process` (`_aim_frame`) with the REAL frame delta (px = rate x dt, dt capped at
   `LOOK_MAX_STEP` = 0.25 s so a pause or resume cannot jump the camera) and delivered the same frame
@@ -100,9 +122,19 @@ sensitivity apply to both.
   so it is frame-rate independent (dt capped by `LOOK_MAX_STEP`). It removes tremor so the aim is not loose or wavy. Lifting
   the finger, a touch cancel, background, lock or pause zero the filtered command at once (no coasting). Applies live;
   Classic is unaffected.
-- **Lifecycle**: `release_all()` (background, lock, call, shade, pause menu, layer disabled, scheme
-  change, node exit) and an engine touch cancel clear every finger, the stick, the drag and the look command, so
-  nothing keeps moving, turning or attacking after returning; stale drags from the old fingers are ignored.
+- **Lifecycle**: `release_all()` (background AND coming back, lock, call, shade, window focus lost / gained, pause menu,
+  layer disabled or hidden, scheme change, node exit) and an engine touch cancel clear every finger, the stick, the
+  drag, the attack gesture and the look command, so nothing keeps moving, turning or attacking after returning;
+  stale drags from the old fingers are ignored. `release_all()` also clears the engine's action state at once
+  (`Input.action_release`) instead of relying on a buffered release event alone.
+- **Fail-safe against stuck input** (`TouchControls._enforce_inputs`, every frame): a held button action must have a live
+  finger or a scheduled release (never older than `ATTACK_PULSE_MAX_MS`); a move axis needs the stick finger; and for a
+  second after we release attack the engine's own attack state must agree. Anything else is released and counted in
+  `attack_failsafe_releases` (0 on every normal path; `tests/test_attack_gesture.gd` injects the stuck states).
+  **Field defect this fixed** (Mage firing a machine gun after the finger left): the Rapid Attack (hold attack 1.5 s,
+  release = 4 s of automatic fire) was reachable by resting the look thumb on ATTACK, and by a release lost to a pause.
+  The Rapid Attack ability has since been removed from the game entirely (owner decision), so the players no longer
+  have any hold/charge state: one press = one attack on every control scheme.
 - **Visuals**: the move stick has a faint idle marker at rest (`STICK_IDLE_ALPHA`) and an ember rim when held; a
   faint ember drag ring (drawn above the buttons) shows while dragging from ATTACK. No other marker exists on the right.
   No shaders, nothing redrawn per frame.
@@ -127,6 +159,9 @@ sensitivity apply to both.
 | `TWIN_ARC_R`, `TWIN_ARC_START`, `TWIN_ARC_STEP` | 178 px, 165 deg, 40 deg | slide 165, kick 205, block 245, burst 285 deg (screen angles, 0 = right, 90 = down) around Attack |
 | `TWIN_USE_ANGLE` | 225 deg on a second ring | USE between kick and block |
 | `ATTACK_MIN_MM` / `SUB_MIN_MM` | 16 / 9 mm | physical minimum diameters |
+| `ATTACK_INTENT_MS` | 150 ms | a finger resting this long inside the slop circle attacks once (hold); a lift sooner is a tap |
+| `ATTACK_SLOP_MM` (+ `ATTACK_SLOP_MIN_PX` / `_MAX_PX`) | 1.5 mm (8-20 px) | movement beyond this around the touch-down point = look, never an attack |
+| `ATTACK_PULSE_MS` / `ATTACK_PULSE_MAX_MS` | 80 / 250 ms | length of the single attack press / hard cap of any scheduled release |
 
 Layout at the Pixel 10 Pro XL (2992x1344 window, 1280x720 expand canvas -> 1602x720 visible, safe
 area MARGIN 36/28): Attack centre (1436, 578) r 100; slide (1264, 624), kick (1275, 503), block (1361, 417),
@@ -186,7 +221,7 @@ time, fades when the player does the thing, is saved, and is retired after 3 ign
 ## Phone UI
 `scripts/touch/mobile_ui.gd` (touch platforms only) enlarges the default font, raises any smaller
 font and gives buttons a 72 px minimum on the 1280x720 phone canvas. Screens with fixed layouts were
-adapted individually (main menu without Quit, character select without dev toggles and with the
+adapted individually (main menu with an Exit button above the version text, kept inside the safe area; character select without dev toggles and with the
 game's own keyboard, Alchemist 3x2 pages, pause menu Resume/Options/Exit, death-screen buttons,
 tap-to-stop buff roulette, wallet moved top-right). `tools/ui_shot.gd` renders any scene at phone
 shape for review (needs a display; opengl3 under xvfb works).
@@ -196,7 +231,7 @@ The APK contains the OTA client (`scripts/boot/`) and declares the INTERNET perm
 index and package (nothing else uses the network). Saves live in `user://PurgetoryDungeon`;
 OTA state lives in `user://ota`, so updates never write the save folder, and the save folder is backed up before an update is
 first activated. The APK bakes `runtime_id` / `runtime_fingerprint` into `build_info.json`; `tools/verify_apk.py` requires them.
-How updates are made, published, applied and rolled back: `docs/OTA.md`. The main menu footer shows the running version: `Purgatory Dungeon v7` on the APK as installed and `v7.K` while an OTA runs; tapping the top-left corner 5 times opens the diagnostics overlay.
+How updates are made, published, applied and rolled back: `docs/OTA.md`. Players see no OTA/debug text over the menus or the game: the main menu footer is the Exit button over the plain version (`Purgatory Dungeon v7` on the APK as installed, `v7.K` while an OTA runs), inside the phone safe area. Update state, the OTA label, runtime/channel and **Check for updates** / **Copy diagnostics** live in **Options > About** (last tab, 5th on a phone); an update that was downloaded and verified says "Update ready - restart to apply" there and starts the next time the game is opened. The native diagnostics overlay is a developer tool: tap the version in About seven times to unlock Developer tools (Open update diagnostics, performance readout), or use F9 / five quick taps in the top-left corner.
 
 ## Lifecycle and saves
 - Saves live in the app's private `user://` (folder `PurgetoryDungeon`, spelling kept for
@@ -209,11 +244,13 @@ How updates are made, published, applied and rolled back: `docs/OTA.md`. The mai
 
 ## Performance notes
 Mobile renderer, 3D scaled to 0.75, MSAA off, no shadow-casting lights anywhere, torch lights fade by
-distance. Options > Gameplay > "Show performance readout" overlays FPS, 1% low, worst frame, draw
-calls; the same line goes to `adb logcat` every 30 s. Real-device numbers are still to be gathered.
+distance. The performance readout (FPS, 1% low, worst frame, draw calls; the same line goes to `adb logcat` every 30 s) is a
+developer tool, off by default: Options > About, tap the version seven times, then "Show performance readout" (turning
+Developer tools off also turns it off). Real-device numbers are still to be gathered.
 
 ## Testing
 `tests/run_tests.sh` includes `test_touch_controls` (the Classic scheme, run with `PURGATORY_FORCE_TOUCH=1`),
+`test_attack_gesture` (tap / hold = exactly one attack, drag and drag-back = zero, a new touch for a new attack, cancel / lost pointer / background / focus / pause / hide / free clear everything, the fail-safe on injected stuck states, no classification latency on the camera, Classic unchanged; plus the real Barbarian and Mage counting attacks and bolts over seconds, including the lost-release field scenario),
 `test_aim_pacing` (frame-time independence of the aim across steady and spiky pacing, bounded bursts, zeroing on release/cancel/background, pause/resume), `test_twin_stick` (default/persisted scheme, layout at five canvas shapes with and without cutouts, mm minimums,
 ownership of simultaneous fingers, look response and frame-rate independence, attack drag, lifecycle,
 Options selector, onboarding, plus the real Barbarian and Mage turned by the ATTACK drag, empty right-side screen inert),

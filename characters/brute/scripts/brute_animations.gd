@@ -6,6 +6,11 @@
 extends CharacterBase
 class_name BruteCharacter
 
+# How long the timed trap statuses on the player last. Reversed View deliberately uses the Intoxicated duration (one
+# authoritative value): a whole in-game day of an upside-down view was far too long to be interesting.
+const STATUS_DRUNK_SECONDS := 30.0
+const STATUS_REVERSED_VIEW_SECONDS := STATUS_DRUNK_SECONDS
+
 const ANIMATION_MAP := {
 	"standing_idle"        : "StandingIdle",
 	"unarmed_idle"         : "UnarmedIdleLookingVer",

@@ -361,7 +361,7 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 	_touch(1, atk.center, true)
 	_drag(1, atk.center + Vector2(90, 0), Vector2(90, 0))
 	await _frames(4)
-	_check(Input.is_action_pressed("move_right") and Input.is_action_pressed("attack"), "move stick + attack drag work together (%s)" % [_down_actions()])
+	_check(Input.is_action_pressed("move_right") and not Input.is_action_pressed("attack") and tc.attack_pulses == 0, "move stick + attack drag work together, and the drag never attacks (%s)" % [_down_actions()])
 	_check(not _real_motion().is_empty() and _real_motion().all(func(m): return m[0] > 0.0), "the attack drag turns right while the move finger is down (%d events) cmd %s sm %s idx %d owners %s smooth %s" % [_real_motion().size(), tc._look_cmd, tc._aim_smoothed, tc._atk_index, tc._owners, tc.aim_smoothing])
 	_check(tc._owners[0]["kind"] == TouchControls.Owner.STICK and tc._owners[1]["kind"] == TouchControls.Owner.BUTTON and tc._owners[1]["button"] == "attack", "each finger has exactly one owner")
 	# no cross-talk: moving the move finger does not change the aim command and vice versa
@@ -374,12 +374,12 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 	# a second finger on another button while the attack finger is dragging
 	_touch(2, kick.center, true)
 	await _frames(3)
-	_check(Input.is_action_pressed("kick") and Input.is_action_pressed("attack") and tc._look_cmd.x < 0.0, "kick while dragging from ATTACK: both live, still aiming")
+	_check(Input.is_action_pressed("kick") and not Input.is_action_pressed("attack") and tc._look_cmd.x < 0.0, "kick while dragging from ATTACK: both live, still aiming, no attack")
 	# the attack finger leaves the button area and keeps controlling until it is lifted
 	_drag(1, atk.center + Vector2(-600, 300), Vector2.ZERO)
 	_motion.clear()
 	await _frames(3)
-	_check(Input.is_action_pressed("attack") and not _real_motion().is_empty() and _real_motion().all(func(m): return m[0] < 0.0), "far from the button the finger still aims and attack stays held")
+	_check(not Input.is_action_pressed("attack") and not _real_motion().is_empty() and _real_motion().all(func(m): return m[0] < 0.0), "far from the button the finger still aims and never attacks")
 	_touch(1, atk.center, false)
 	await _frames(2)
 	_check(tc._look_cmd == Vector2.ZERO and Input.is_action_pressed("kick") and Input.is_action_pressed("move_forward"), "lifting the attack finger only stops the aim (and releases attack)")
@@ -400,7 +400,7 @@ func _ownership_tests(tc: TouchControls, view: Vector2) -> void:
 	_drag(1, atk.center + Vector2(-80, 0), Vector2(-80, 0))
 	_touch(2, blk.center, true)
 	await _frames(4)
-	_check(Input.is_action_pressed("move_forward") and Input.is_action_pressed("attack") and Input.is_action_pressed("block"), "move + attack-drag + block at once (%s)" % [_down_actions()])
+	_check(Input.is_action_pressed("move_forward") and not Input.is_action_pressed("attack") and Input.is_action_pressed("block"), "move + attack-drag + block at once (%s)" % [_down_actions()])
 	_check(not _real_motion().is_empty() and _real_motion().all(func(m): return m[0] < 0.0), "the attack drag turns left meanwhile")
 	_touch(2, blk.center, false)
 	_touch(1, atk.center, false)
@@ -573,15 +573,18 @@ func _aim_filter_tests(tc: TouchControls, view: Vector2) -> void:
 
 	# 1) the thumb settling on the button: +-3 px jitter around touch-down is zero turn
 	_motion.clear()
+	tc.now_override_ms = Time.get_ticks_msec()   # frozen: the thumb rests longer than the hold-intent time in a slow test frame
 	_touch(0, l0, true)
 	for j in [Vector2(3, 0), Vector2(-3, 0), Vector2(0, 3), Vector2(0, -3), Vector2(3, 3), Vector2(-3, -3), Vector2(2, -2), Vector2(-2, 2), Vector2(5.5, 0)]:
 		_drag(0, l0 + j, Vector2.ZERO)
 		_check(tc._look_cmd == Vector2.ZERO and tc._atk_vec == Vector2.ZERO, "jitter %s px around touch-down turns nothing" % j)
 	await _frames(5)
-	_check(_real_motion().is_empty() and Input.is_action_pressed("attack"), "...and sends no look motion while attack stays held")
+	_check(_real_motion().is_empty() and not Input.is_action_pressed("attack") and tc._atk_gesture == TouchControls.Gesture.PENDING, "...and sends no look motion, and the gesture is still undecided (nothing pressed)")
 	# 2) past the settle zone but under the engage threshold: still nothing
 	_drag(0, at.call(0.15), Vector2.ZERO)
 	_check(tc._look_cmd == Vector2.ZERO and not tc._atk_engaged, "a 0.15 deflection (%.0f px) does not engage" % (settle + radius * 0.15))
+	tc.now_override_ms = -1   # the gesture is LOOK by now (past the slop circle)
+	_check(tc._atk_gesture == TouchControls.Gesture.LOOK, "...but it is already a look gesture (past the slop circle)")
 	# 3) a slow deliberate drag turns monotonically and continuously (no jump at the engage point)
 	var prev: float = 0.0
 	var mono := true
@@ -741,14 +744,16 @@ func _attack_drag_tests(tc: TouchControls, view: Vector2) -> void:
 	var atk: TouchButton = tc.buttons["attack"]
 	_attack_events.clear()
 	_motion.clear()
+	tc.now_override_ms = Time.get_ticks_msec()   # frozen while the thumb rests (slow frames must not turn the rest into a hold)
 	_touch(0, atk.center + Vector2(10, 5), true)
-	_check(Input.is_action_pressed("attack") and tc._atk_index == 0, "touching ATTACK presses attack")
+	_check(not Input.is_action_pressed("attack") and tc._atk_index == 0 and tc._atk_gesture == TouchControls.Gesture.PENDING, "touching ATTACK presses nothing yet: the gesture decides")
 	var radius: float = TouchControls.AIM_DRAG_RADIUS * tc.ui_scale
 	# a jitter inside the dead zone does not turn
 	_drag(0, atk.center + Vector2(10 + 6, 5), Vector2(6, 0))
 	await _frames(3)
 	_check(_real_motion().is_empty(), "finger jitter on ATTACK does not turn")
-	# drag far outside the button and back: attack never releases, the camera turns while it is down
+	tc.now_override_ms = -1
+	# drag far outside the button and back: it is a look gesture, it never attacks, and the camera turns while it is down
 	var path: Array = [Vector2(70, 0), Vector2(200, -50), Vector2(400, -100), Vector2(-300, 40), Vector2(-60, 0)]
 	var turned_right := false
 	var turned_left := false
@@ -756,14 +761,14 @@ func _attack_drag_tests(tc: TouchControls, view: Vector2) -> void:
 		_drag(0, atk.center + off, Vector2.ZERO)
 		_motion.clear()
 		await _frames(3)
-		_check(Input.is_action_pressed("attack"), "attack stays pressed while dragging to %s" % off)
+		_check(not Input.is_action_pressed("attack"), "dragging to %s never attacks" % off)
 		for m in _real_motion():
 			if m[0] > 0.0:
 				turned_right = true
 			if m[0] < 0.0:
 				turned_left = true
 	_check(turned_right and turned_left, "dragging from ATTACK turns right and left")
-	_check(_attack_events == [true], "exactly one attack press and no release/re-press while dragging (%s)" % [_attack_events])
+	_check(_attack_events.is_empty() and tc.attack_pulses == 0, "no attack press at all while dragging (%s)" % [_attack_events])
 	_check(tc._owners[0]["kind"] == TouchControls.Owner.BUTTON and tc._owners[0]["button"] == "attack", "the dragging finger is still the attack button's")
 	_touch(0, atk.center, false)
 	await get_tree().create_timer(0.25).timeout
@@ -788,11 +793,11 @@ func _attack_drag_tests(tc: TouchControls, view: Vector2) -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
-	_check(not Input.is_action_pressed("attack") and _attack_events == [true, false], "attack released once after the drag (%s)" % [_attack_events])
-	# a quick tap on ATTACK still lasts long enough for polling code
+	_check(not Input.is_action_pressed("attack") and _attack_events.is_empty(), "nothing attacked on lift-off after a drag (%s)" % [_attack_events])
+	# a quick tap on ATTACK attacks once, and the press lasts long enough for polling code
 	_touch(0, atk.center, true)
 	_touch(0, atk.center, false)
-	_check(Input.is_action_pressed("attack"), "a tap on ATTACK is still stretched to MIN_PRESS_MS")
+	_check(Input.is_action_pressed("attack") and tc.attack_pulses == 1, "a tap on ATTACK is one attack pulse, long enough for polling code (%d)" % tc.attack_pulses)
 	await get_tree().create_timer(0.25).timeout
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -823,7 +828,7 @@ func _lifecycle_tests(tc: TouchControls, view: Vector2) -> void:
 		_drag(1, atk.center + Vector2(radius, 0), Vector2.ZERO)
 		_touch(2, (tc.buttons["block"] as TouchButton).center, true)
 		await _frames(2)
-		_check(Input.is_action_pressed("move_right") and Input.is_action_pressed("attack") and Input.is_action_pressed("block") and tc._look_cmd != Vector2.ZERO, "[%s] move + attack-drag + block all live" % mode)
+		_check(Input.is_action_pressed("move_right") and Input.is_action_pressed("block") and tc._look_cmd != Vector2.ZERO, "[%s] move + attack-drag + block all live" % mode)
 		match mode:
 			"background": tc.notification(NOTIFICATION_APPLICATION_PAUSED)
 			"focus_out": tc.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
@@ -1170,9 +1175,9 @@ func _real_player_test(cls: String) -> void:
 	_touch(1, atk.center, true)
 	_drag(1, atk.center + Vector2(-radius, 0), Vector2.ZERO)
 	await _frames(12)
-	_check(Input.is_action_pressed("attack"), "[%s] attack is held during the drag" % cls)
+	_check(not Input.is_action_pressed("attack"), "[%s] attack is not pressed during the drag" % cls)
 	_check(player.rotation.y > y5 + 0.4, "[%s] dragging from ATTACK turns the player left while attacking (%.2f -> %.2f)" % [cls, y5, player.rotation.y])
-	_check(_attack_events == [true], "[%s] no attack release/re-press during the drag (%s)" % [cls, _attack_events])
+	_check(_attack_events.is_empty(), "[%s] no attack press at all during the drag (%s)" % [cls, _attack_events])
 	_touch(1, atk.center, false)
 	await get_tree().create_timer(0.2).timeout
 	await get_tree().process_frame

@@ -14,11 +14,11 @@
 #   TWIN-STICK (default), landscape, virtual 1280x720-ish canvas:
 #     left thumb   floating move stick           -> move_left/right/forward/back (analog strength)
 #     right side   empty screen is inert: a finger that is not on a button does nothing
-#     lower right  big ATTACK button at the rim  -> attack (hold = charge, release = fire). A finger that
-#                  starts on ATTACK and drags aims: a continuous turn RATE (deflection = speed) measured from the
-#                  touch-down point, fed to the players as mouse-look motion once per physics frame (they need
-#                  no change), so the player turns while attacking without lifting; the drag never
-#                  releases/re-presses it.
+#     lower right  big ATTACK button at the rim  -> attack, ONE attack per touch (see "ATTACK gesture" below). The
+#                  same finger is the look control: a finger that starts on ATTACK and drags aims (a continuous turn
+#                  RATE, deflection = speed, measured from the touch-down point, fed to the players as mouse-look
+#                  motion once per rendered frame). A drag NEVER attacks; a tap or a short rest attacks once; holding
+#                  never repeats or charges.
 #     arc around   slide, kick, block (hold), burst (cooldown ring + potion count): subordinate buttons on a
 #     ATTACK       semicircle on its upper/left side, plus the contextual USE one ring further out
 #     top right    pause, map (toggle)
@@ -26,7 +26,7 @@
 #   CLASSIC (exactly the original behaviour and layout):
 #     left thumb   floating move stick (as above)
 #     right side   swipe anywhere free to look  -> yaw, as mouse-look motion (the game has no pitch)
-#     lower right  ABXY-style cluster           -> attack (hold = charge), kick, slide, block (hold)
+#     lower right  ABXY-style cluster           -> attack (press/hold/release: one press = one attack, holding never charges or repeats), kick, slide, block (hold)
 #                  burst (potion blast, with cooldown + potion count), contextual USE
 #     top right    pause, map (toggle)
 #
@@ -104,7 +104,39 @@ const SUB_MIN_MM      := 9.0
 const FALLBACK_DPI    := 480.0    # Pixel-class panel when the OS reports nothing
 const FALLBACK_SCREEN_H := 1344.0 # Pixel 10 Pro XL panel height, used only when no screen size is known
 
+# ── Twin-stick ATTACK gesture (the ATTACK button is also the look surface, so a touch on it must first be classified) ──
+# A finger that goes down on ATTACK is PENDING: nothing is pressed yet. Then exactly one of
+#   TAP    lifted again within ATTACK_INTENT_MS without leaving the slop circle  -> ONE attack, at the lift
+#   HOLD   still down, still inside the slop circle after ATTACK_INTENT_MS        -> ONE attack, at that moment
+#   LOOK   moved farther than the slop radius from the touch-down point (or the aim drag engaged)
+#                                                                                -> ZERO attacks, for the rest of the touch
+# LOOK is latched until the finger lifts: coming back over the button does not attack; the next attack needs a new
+# touch. A hold does not repeat, auto-fire or charge (nothing in the game charges): the attack is a fixed ATTACK_PULSE_MS press followed by a release that the layer itself guarantees.
+# Numbers (reasoned for real Android touch, not for the mouse):
+#   ATTACK_SLOP_MM        1.5 mm = ~9.5 dp: Android's own touch slop is 8 dp (ViewConfiguration), a resting thumb rolls and
+#                         tremors a few mm-tenths, a deliberate look drag covers it in a few ms. In virtual px via the
+#                         panel dpi (Pixel: ~15 px), clamped so it stays below the aim engage distance
+#                         (AIM_SETTLE_PX + AIM_ENGAGE x AIM_DRAG_RADIUS = 24 px at 100% size): the camera cannot start
+#                         turning while the gesture is still undecided, so classifying costs the camera NO latency.
+#   ATTACK_INTENT_MS      150: a tap is ~60-150 ms (Android's tap timeout is 100-ish and long-press 400-500), and a
+#                         thumb that goes down to look starts moving within ~100 ms; 150 ms separates "put the thumb down
+#                         and drag" from "put the thumb down and stay" without making a held attack feel late.
+#   ATTACK_PULSE_MS       80: spans at least two 30 Hz physics ticks, so polling gameplay (brute_player) and event gameplay
+#                         (mage_player) both see the press.
+#   ATTACK_PULSE_MAX_MS   250: hard cap of any scheduled release (fail-safe, see _enforce_inputs).
+const ATTACK_INTENT_MS     := 150
+const ATTACK_SLOP_MM       := 1.5
+const ATTACK_SLOP_MIN_PX   := 8.0
+const ATTACK_SLOP_MAX_PX   := 20.0
+const ATTACK_PULSE_MS      := 80
+const ATTACK_PULSE_MAX_MS  := 250
+const ATTACK_WATCH_MIN_MS  := 100    # after our attack release: how long until the engine's own state must agree...
+const ATTACK_WATCH_MAX_MS  := 1000   # ...and for how long that is checked
+
+const STICK_AXES: Array[String] = ["move_left", "move_right", "move_forward", "move_back"]
+
 enum Owner { NONE, STICK, LOOK, BUTTON }
+enum Gesture { NONE, PENDING, FIRED, LOOK }
 
 var touch_enabled : bool = true
 var ui_scale      : float = 1.0
@@ -133,6 +165,15 @@ var _atk_origin : Vector2 = Vector2.ZERO # where that finger touched down (the d
 var _atk_vec : Vector2 = Vector2.ZERO
 var _atk_settled : bool = false          # the finger has moved past AIM_SETTLE_PX since touch-down
 var _atk_engaged : bool = false          # hysteresis state: the drag is past AIM_ENGAGE and still above LOOK_DEADZONE
+var _atk_gesture : int = Gesture.NONE    # twin ATTACK gesture state (see above)
+var _atk_down_ms : int = 0
+var _atk_down_pos : Vector2 = Vector2.ZERO   # touch-down point: the slop circle is centred here (_atk_origin moves with the drag)
+var _atk_slop_px : float = ATTACK_SLOP_MAX_PX
+var _stale : Array[String] = []          # scratch for _enforce_inputs (reused: no per-frame allocation)
+var _attack_release_ms : int = 0         # when we last released attack (for the engine-state watch), 0 = nothing to watch
+var attack_pulses : int = 0              # attacks sent through the twin gesture (diagnostics / tests)
+var attack_failsafe_releases : int = 0   # times the fail-safe had to force a release (should stay 0)
+var now_override_ms : int = -1           # tests: a controllable clock (>= 0), real time otherwise
 var _look_cmd : Vector2 = Vector2.ZERO   # curved aim command of the ATTACK drag (length <= 1): the target of the smoothing
 var _aim_smoothed : Vector2 = Vector2.ZERO   # the low-passed command that look_step actually applies
 var _owners : Dictionary = {}            # finger index -> {"kind": Owner, "button": String}
@@ -337,6 +378,7 @@ func _ready() -> void:
 		onboarding.setup(self)
 
 	get_viewport().size_changed.connect(_relayout)
+	visibility_changed.connect(_on_visibility_changed)
 	_relayout()
 
 
@@ -355,10 +397,23 @@ func set_enabled(on: bool) -> void:
 
 
 func _notification(what: int) -> void:
-	# Phone call, Home button, app switcher, screen lock: never leave an input stuck down.
+	# Phone call, Home button, app switcher, screen lock: never leave an input stuck down. Coming BACK also lets go: a finger
+	# that lifted while we were away never delivered its release, so whatever it owned is stale by definition.
 	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT \
-			or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+			or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT or what == NOTIFICATION_APPLICATION_RESUMED \
+			or what == NOTIFICATION_APPLICATION_FOCUS_IN or what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
 		release_all()
+
+
+## The whole layer was hidden (a screen that covers the display): its buttons can no longer receive a lift, so let go.
+func _on_visibility_changed() -> void:
+	if not visible:
+		release_all()
+
+
+## The clock of the gesture logic and the press timers: real milliseconds, or the test clock.
+func _now() -> int:
+	return now_override_ms if now_override_ms >= 0 else Time.get_ticks_msec()
 
 
 # A finger also produces emulated mouse clicks, and the keyboard map binds left/right mouse to
@@ -472,13 +527,16 @@ func _process(delta: float) -> void:
 			release_all()
 		_poll_settings(delta)   # Options opened from the pause menu: the layer is ready when the game resumes
 		return
-	# Deferred releases for very short taps.
+	# Deferred releases (very short taps, the attack pulse), the attack gesture clock, then the fail-safe.
+	var now: int = _now()
 	if not _pending_release.is_empty():
-		var now: int = Time.get_ticks_msec()
 		for action in _pending_release.keys():
 			if now >= int(_pending_release[action]):
 				_pending_release.erase(action)
 				_send(action, false, 0.0)
+				_settle_visual(action)
+	_attack_gesture_tick(now)
+	_enforce_inputs(now)
 	if _stick_active and _stick_vec.length() > STICK_DEADZONE:
 		move_time += delta
 	_poll_settings(delta)
@@ -548,7 +606,6 @@ func _refresh_button_status() -> void:
 	if b == null:
 		return
 	var player := get_tree().get_first_node_in_group("player")
-	_refresh_charge(player)
 	var cd: float = 0.0
 	if player != null:
 		var remain: float = 0.0
@@ -570,19 +627,6 @@ func _refresh_button_status() -> void:
 		b.queue_redraw()
 
 
-# Hold-to-charge progress of the Rapid Attack (both classes expose it) as an ember ring on ATTACK.
-func _refresh_charge(player: Node) -> void:
-	var atk: TouchButton = buttons.get("attack")
-	if atk == null:
-		return
-	var ch: float = 0.0
-	if player != null and "_rapid_attack_charge" in player:
-		ch = clampf(float(player.get("_rapid_attack_charge")), 0.0, 1.0)
-	if not is_equal_approx(atk.charge, ch):
-		atk.charge = ch
-		atk.queue_redraw()
-
-
 # ── Contextual USE button ─────────────────────────────────────────────────────
 
 ## Called (call_group) by things the player can interact with when they come into / out of range.
@@ -601,14 +645,20 @@ func set_use_context(active: bool, text: String = "USE") -> void:
 # ── Input routing ─────────────────────────────────────────────────────────────
 
 func _input(event: InputEvent) -> void:
-	if not touch_enabled or get_tree().paused:
+	if not touch_enabled or not visible or get_tree().paused:
+		# A lift or cancel must still reach us while the layer is off (a finger that lifts during a pause or a buff pick
+		# would otherwise stay "down" in _owners); everything else belongs to the menu on top.
+		if event is InputEventScreenTouch and not _owners.is_empty():
+			var up := event as InputEventScreenTouch
+			if not up.pressed or up.canceled:
+				_touch_up(up.index, true, up.position)
 		return
 	if event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
 		if st.pressed and not st.canceled:
 			_touch_down(st.index, st.position)
 		else:
-			_touch_up(st.index)   # a lift or an engine cancel: the same clean release
+			_touch_up(st.index, st.canceled, st.position)   # a lift or an engine cancel: the same clean release (a cancel never attacks)
 		get_viewport().set_input_as_handled()
 	elif event is InputEventScreenDrag:
 		var sd := event as InputEventScreenDrag
@@ -636,18 +686,22 @@ func _nearest_button(p: Vector2) -> TouchButton:
 # additionally measures an aim drag from its touch-down point.
 func _touch_down(index: int, p: Vector2) -> void:
 	if _owners.has(index):
-		return
+		# A press on a finger index we still think is down: the lift of the old finger never reached us (an index is reused
+		# as soon as a finger lifts). The old finger is gone: drop whatever it owned, then handle the new one normally.
+		_drop_owner(index)
 	var b := _nearest_button(p)
 	if b != null:
+		# One live finger per HOLD button. A second touch on it means the first finger is gone or was never ours any more
+		# (a lost lift would otherwise own the button, and the attack gesture, for ever).
+		if b.mode == TouchButton.Mode.HOLD:
+			for other in _owners.keys():
+				var oo: Dictionary = _owners[other]
+				if int(oo["kind"]) == Owner.BUTTON and oo["button"] == b.action:
+					_drop_owner(int(other), true)
 		_owners[index] = {"kind": Owner.BUTTON, "button": b.action}
-		if is_twin() and b.action == "attack" and _atk_index < 0:
-			_atk_index = index
-			_atk_origin = p
-			_atk_vec = Vector2.ZERO
-			_atk_settled = false
-			_atk_engaged = false
-			_aim_smoothed = Vector2.ZERO
-			_look_cmd = Vector2.ZERO
+		if is_twin() and b.action == "attack":
+			_begin_attack_gesture(index, p, b)   # nothing is pressed yet: the gesture decides (tap / hold = one attack, drag = look)
+			return
 		_button_down(b)
 		return
 	if stick_zone.has_point(p) and not _stick_active:
@@ -682,7 +736,7 @@ func _touch_move(index: int, p: Vector2, rel: Vector2) -> void:
 			_look(rel)   # Classic only: twin-stick never creates a LOOK owner
 		Owner.BUTTON:
 			if index == _atk_index:
-				_aim_drag(p)
+				_attack_move(p)
 
 
 ## The ATTACK finger moved to `p`: ignore the thumb settling, then follow the drag.
@@ -720,7 +774,9 @@ func _update_look_cmd() -> void:
 	_look_cmd = look_response(_atk_vec) if _atk_engaged else Vector2.ZERO
 
 
-func _touch_up(index: int) -> void:
+## A finger lifted (or the engine cancelled it: `canceled`, which can never attack). `up_pos` is where it lifted
+## (Vector2.INF when unknown): a lift far from the touch-down point is a look gesture even if its drags were dropped.
+func _touch_up(index: int, canceled: bool = false, up_pos: Vector2 = Vector2.INF) -> void:
 	var o: Dictionary = _owners.get(index, {})
 	if o.is_empty():
 		return
@@ -733,16 +789,157 @@ func _touch_up(index: int) -> void:
 			_stick_draw.queue_redraw()
 		Owner.BUTTON:
 			if index == _atk_index:
-				_atk_index = -1
-				_atk_vec = Vector2.ZERO
-				_atk_engaged = false
-				_atk_settled = false
-				_look_cmd = Vector2.ZERO
-				_aim_smoothed = Vector2.ZERO   # releasing ATTACK ends the drag: the turn stops at once (no coasting); the attack releases below
-				_overlay_draw.queue_redraw()
+				# The twin ATTACK gesture ends here: a tap (still PENDING: never classified as look, not held long enough to
+				# have fired) is the one attack; everything else (look, an attack already fired, a cancel) sends none.
+				var tap: bool = _atk_gesture == Gesture.PENDING and not canceled
+				if tap and up_pos.is_finite() and up_pos.distance_to(_atk_down_pos) > _atk_slop_px:
+					tap = false
+				_reset_attack_gesture()   # releasing ATTACK ends the drag at once: the turn stops (no coasting)
+				if tap:
+					_fire_attack_pulse()
+				_settle_visual("attack")
+				return
 			var b: TouchButton = buttons.get(o["button"])
 			if b != null:
 				_button_up(b)
+
+
+## A finger index that is no longer valid (its lift was lost, or another finger now sits on its button). Same cleanup as a
+## cancelled touch. `takeover`: another finger is taking over the same button right now, so the button itself stays as is.
+func _drop_owner(index: int, takeover: bool = false) -> void:
+	if not takeover:
+		_touch_up(index, true)
+		return
+	var o: Dictionary = _owners.get(index, {})
+	if o.is_empty():
+		return
+	_owners.erase(index)
+	if index == _atk_index:
+		_reset_attack_gesture()
+
+
+# ── Twin ATTACK gesture ────────────────────────────────────────────────────────
+
+func _begin_attack_gesture(index: int, p: Vector2, b: TouchButton) -> void:
+	_atk_index = index
+	_atk_origin = p
+	_atk_down_pos = p
+	_atk_down_ms = _now()
+	_atk_vec = Vector2.ZERO
+	_atk_settled = false
+	_atk_engaged = false
+	_aim_smoothed = Vector2.ZERO
+	_look_cmd = Vector2.ZERO
+	_atk_gesture = Gesture.PENDING
+	_atk_slop_px = clampf(ATTACK_SLOP_MM * device_px_per_mm(), ATTACK_SLOP_MIN_PX, ATTACK_SLOP_MAX_PX)
+	b.pressed_visual = true   # the touch is registered (the visual does not claim an attack)
+	b.queue_redraw()
+
+
+func _reset_attack_gesture() -> void:
+	_atk_index = -1
+	_atk_vec = Vector2.ZERO
+	_atk_engaged = false
+	_atk_settled = false
+	_look_cmd = Vector2.ZERO
+	_aim_smoothed = Vector2.ZERO
+	_atk_gesture = Gesture.NONE
+	if _overlay_draw != null:
+		_overlay_draw.queue_redraw()
+
+
+## The ATTACK finger moved to `p`. Past the slop circle (or once the aim drag engages) the gesture is LOOK for good; the aim
+## itself is exactly what it was (same call, same frame: classification adds no latency to the camera).
+func _attack_move(p: Vector2) -> void:
+	if _atk_gesture != Gesture.LOOK and p.distance_to(_atk_down_pos) > _atk_slop_px:
+		_enter_look()
+	_aim_drag(p)
+	if _atk_engaged and _atk_gesture != Gesture.LOOK:
+		_enter_look()
+
+
+func _enter_look() -> void:
+	_atk_gesture = Gesture.LOOK   # latched until the finger lifts: back over the button does not attack
+	_settle_visual("attack")
+
+
+## HOLD: a finger still on ATTACK inside the slop circle after ATTACK_INTENT_MS fires its ONE attack now.
+func _attack_gesture_tick(now: int) -> void:
+	if _atk_gesture == Gesture.PENDING and now - _atk_down_ms >= ATTACK_INTENT_MS:
+		_atk_gesture = Gesture.FIRED
+		_fire_attack_pulse()
+
+
+## The single attack of a gesture: a press that this layer releases itself ATTACK_PULSE_MS later (never "held by a finger").
+func _fire_attack_pulse() -> void:
+	if _held.has("attack"):
+		return   # the previous pulse is still in flight (the player's own attack lockout is longer than this anyway)
+	_pending_release.erase("attack")
+	_send("attack", true, 1.0)
+	_pending_release["attack"] = _now() + ATTACK_PULSE_MS
+	attack_pulses += 1
+	_settle_visual("attack")
+	action_performed.emit("attack")
+
+
+## Button look follows the truth: down while its action is held (or, twin ATTACK, while the finger is on it undecided).
+func _settle_visual(action: String) -> void:
+	var b: TouchButton = buttons.get(action)
+	if b == null or b.mode == TouchButton.Mode.TOGGLE:
+		return
+	var down: bool = _held.has(action) or (action == "attack" and is_twin() and _atk_gesture == Gesture.PENDING)
+	if b.pressed_visual != down:
+		b.pressed_visual = down
+		b.queue_redraw()
+
+
+## Is a finger that is still alive responsible for this held action? (Twin ATTACK is never held by a finger: it is a pulse.)
+func _has_live_owner(action: String) -> bool:
+	if action == "attack" and is_twin():
+		return false
+	for index in _owners:
+		var o: Dictionary = _owners[index]
+		if int(o["kind"]) == Owner.BUTTON and o["button"] == action:
+			return true
+	return false
+
+
+## FAIL-SAFE, every frame: no input may stay active after the thing that owns it is gone. A held button action must have a live
+## finger or a scheduled release (and a scheduled release must not outlive ATTACK_PULSE_MAX_MS); axes need the stick finger;
+## and the engine's own attack state must agree with ours shortly after we released it. Whatever violates this is released
+## and counted in `attack_failsafe_releases` (the tests prove it stays 0 on every normal path and trips on injected state).
+func _enforce_inputs(now: int) -> void:
+	if not _held.is_empty():
+		for action in _held:   # (no per-frame allocation: stale actions are collected in a reused array and released after the loop)
+			var b: TouchButton = buttons.get(action)
+			if b == null or b.mode == TouchButton.Mode.TOGGLE:
+				continue
+			if _pending_release.has(action):
+				if now - int(_press_ms.get(action, now)) <= ATTACK_PULSE_MAX_MS:
+					continue
+				_pending_release.erase(action)
+			elif _has_live_owner(action):
+				continue
+			_stale.append(action)
+		for action in _stale:
+			attack_failsafe_releases += 1
+			_send(action, false, 0.0)
+			_settle_visual(action)
+		_stale.clear()
+		if not _stick_active:
+			for axis in STICK_AXES:
+				if _held.has(axis):
+					attack_failsafe_releases += 1
+					_stick_vec = Vector2.ZERO
+					_apply_stick()
+					break
+	if _attack_release_ms > 0:
+		var age: int = now - _attack_release_ms
+		if age > ATTACK_WATCH_MAX_MS:
+			_attack_release_ms = 0
+		elif age >= ATTACK_WATCH_MIN_MS and not _held.has("attack") and Input.is_action_pressed("attack"):
+			attack_failsafe_releases += 1
+			Input.action_release("attack")   # the engine still thinks attack is down although we released it: set it straight
 
 
 func _button_down(b: TouchButton) -> void:
@@ -763,7 +960,7 @@ func _button_up(b: TouchButton) -> void:
 	b.pressed_visual = false
 	b.queue_redraw()
 	# Polling gameplay code (Input.is_action_just_pressed) needs the press to span a frame.
-	var since: int = Time.get_ticks_msec() - int(_press_ms.get(b.action, 0))
+	var since: int = _now() - int(_press_ms.get(b.action, 0))
 	if since < MIN_PRESS_MS:
 		_pending_release[b.action] = int(_press_ms.get(b.action, 0)) + MIN_PRESS_MS
 	else:
@@ -810,11 +1007,15 @@ func _send(action: String, pressed: bool, strength: float) -> void:
 			return
 		_held[action] = strength
 		if was == 0.0:
-			_press_ms[action] = Time.get_ticks_msec()
+			_press_ms[action] = _now()
+			if action == "attack":
+				_attack_release_ms = 0
 	else:
 		if was == 0.0:
 			return
 		_held.erase(action)
+		if action == "attack":
+			_attack_release_ms = _now()
 	var ev := InputEventAction.new()
 	ev.action = action
 	ev.pressed = pressed and strength > 0.0
@@ -822,24 +1023,24 @@ func _send(action: String, pressed: bool, strength: float) -> void:
 	Input.parse_input_event(ev)
 
 
-## Releases everything held through the touch layer and forgets all fingers.
+## Releases everything held through the touch layer and forgets all fingers (and any attack gesture in progress: it
+## sends no attack). The engine's action state is cleared at once as well as through the buffered release event: a
+## release that has to wait for a paused tree or a backgrounded app to be delivered is a release that can be lost.
 func release_all() -> void:
 	_owners.clear()
 	_pending_release.clear()
 	_stick_active = false
 	_stick_vec = Vector2.ZERO
-	_atk_index = -1
-	_atk_vec = Vector2.ZERO
-	_atk_engaged = false
-	_atk_settled = false
-	_look_cmd = Vector2.ZERO   # nothing keeps turning after a background / lock / pause
-	_aim_smoothed = Vector2.ZERO
+	_reset_attack_gesture()   # nothing keeps turning or attacking after a background / lock / pause
 	for action in _held.keys():
 		var ev := InputEventAction.new()
 		ev.action = action
 		ev.pressed = false
 		ev.strength = 0.0
 		Input.parse_input_event(ev)
+		Input.action_release(action)
+		if action == "attack":
+			_attack_release_ms = _now()
 	_held.clear()
 	for action in buttons:
 		var b: TouchButton = buttons[action]

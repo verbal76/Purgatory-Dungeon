@@ -37,7 +37,7 @@ one native baseline; a runtime lock (`ota/runtime_lock.json`, `tools/ota_runtime
 APK is defined once in `ota/boundary.json` (`tools/ota/classify.py` enforces it). Never edit `scripts/boot/**`,
 `project.godot`, `export_presets.cfg`, `ota/**`, the Android manifest settings or the engine version expecting an OTA to
 carry it (changing them changes the fingerprint: run `python3 tools/ota_runtime.py --check`, then `--bump`/`--relock`).
-An OTA cannot add a new global `class_name`, autoload or input action. Publication = push branch `ota/<channel>/<40-hex sha>`
+An OTA cannot add a new global `class_name`, autoload or input action. Players see no OTA/channel/debug text over the menus or the game: update state, the OTA label, **Check for updates** (`Boot.check_now()`, the one updater) and **Copy diagnostics** live in Options > About (docs/OTA.md section 10); the performance readout and the native diagnostics overlay are developer tools. Publication = push branch `ota/<channel>/<40-hex sha>`
 (`.github/workflows/ota-publish.yml`); recovery = automatic rollback, the diagnostics overlay and channel revocation. The
 signing key lives outside the repo (CI key store); only the public key is compiled in. Saves are never written by OTA.
 OTA files are served from this repository's own GitHub Releases (the Mote pattern), published by the publish workflow with GitHub's
@@ -63,6 +63,14 @@ GitHub can give. Rules:
 - Release safety is NOT traded for minutes: signing verification, runtime/OTA compatibility, the release gates, rollback protections and the full test suite on
   the exact OTA SHA (`ota-tests.yml`) stay mandatory. Do not publish a release/OTA/APK merely because workflows were audited or edited.
 - Prefer one verified run per SHA; push several commits together rather than one at a time; do not push to a branch with an open non-draft PR for every small edit.
+
+## Release cadence (standing owner philosophy)
+
+Develop locally -> accumulate related changes -> validate locally -> freeze a meaningful candidate -> one necessary CI/release gate -> one meaningful OTA/APK.
+Do not publish tiny OTAs for cosmetic or minor gameplay corrections, and consolidate native changes into worthwhile APK generations (do not build an APK to
+inspect one native tweak; validate assets/config locally first). Immediate small releases are justified only for urgent problems: crashes, save/data corruption,
+severe update failure, release-blocking defects, security/integrity problems, or a release that is substantially unusable. Otherwise batch. A finished, green
+candidate is HELD until the owner authorises publication (more playtest findings may arrive); never publish just because it is green.
 
 ## Studio splash (Hot Attic Games standing requirement — do not remove)
 
@@ -133,7 +141,7 @@ Exploration tracking is throttled to 0.5 s intervals (not every frame).
 ### Character System
 
 - `characters/brute/scripts/character_base.gd` — Abstract base for all characters. Handles health, buffs, animation blending with LOD, stun, physics. Caches animation map once (not per frame). Maintains a **static player LOD cache** shared across all enemy instances to avoid per-enemy tree scans.
-- `characters/brute/scripts/brute_player.gd` — Barbarian: 1st-person with head-bob, swing/rapid_attack/kick/AOE/block
+- `characters/brute/scripts/brute_player.gd` — Barbarian: 1st-person with head-bob, swing/kick/AOE/block
 - `characters/Lutsch Mage/scripts/mage_player.gd` — Mage: projectile firing, area spells
 - `*_ai.gd` variants implement enemy AI with **LOD tick intervals** (nominally 60/30/10 Hz; physics runs at 30 ticks/s so effective rates are 30/15/5 Hz): <12 m, 12–25 m, >25 m
 
@@ -143,7 +151,7 @@ Exploration tracking is throttled to 0.5 s intervals (not every frame).
 
 ### Data Files
 
-- `data/buffs.json` — 54 buffs with `effect_type`, `stat`, `tradeoff` fields; extensible. Percent-style stats (`BuffManager.PERCENT_OF_BASE_STATS`) are fractions of the player's base value; the pick pool only offers buffs whose stats exist on the current player (`tests/test_buffs.gd` enforces both)
+- `data/buffs.json` — 49 buffs with `effect_type`, `stat`, `tradeoff` fields; extensible. Percent-style stats (`BuffManager.PERCENT_OF_BASE_STATS`) are fractions of the player's base value; the pick pool only offers buffs whose stats exist on the current player (`tests/test_buffs.gd` enforces both)
 - `data/globe_effects.json` — Mystery sphere pickup effects
 - `data/codex_lore.txt` — Bestiary/lore entries
 

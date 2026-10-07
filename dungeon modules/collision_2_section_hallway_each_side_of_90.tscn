@@ -28,6 +28,12 @@ data = PackedVector3Array(-139.90019, 200, -90, -200, 200, -90, -147.9521, 169.9
 
 [node name="2 section hallway each side of 90" unique_id=1405448673 instance=ExtResource("1_8ux0n")]
 
+; Floor seam fix: the glb places the end tile 3 cm ABOVE the floor (y 0.030613), 2.6 cm into its neighbour and 4 mm off
+; the grid in x. At eye-level grazing angles the lower floor then ends under the lip and a hairline of void shows
+; across the corridor. Back on the floor plane, overlapping its neighbour by 5 mm.
+[node name="corridor-transition_002" parent="." index="7"]
+transform = Transform3D(0, -0.01, 0, 0, 0, -0.01, 0.01, 0, 0, 8, 0, -21.995)
+
 [node name="StaticBody3D" type="StaticBody3D" parent="corridor-wide-corner" parent_id_path=PackedInt32Array(984810858) index="0" unique_id=807654089]
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="corridor-wide-corner/StaticBody3D" index="0" unique_id=1285923835]

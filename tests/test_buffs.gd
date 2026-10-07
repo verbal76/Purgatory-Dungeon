@@ -5,9 +5,10 @@ extends Node
 
 const BRUTE_SCENE := "res://characters/brute/scenes/brute_player.tscn"
 const MAGE_SCENE := "res://characters/Lutsch Mage/scenes/Mage player.tscn"
-# Content the owner removed because it needed systems that do not exist (jump, torch duration).
+# Content the owner removed because it needed systems that do not exist (jump, torch duration, the Rapid Attack ability).
 # It must never come back: the "every stat exists on a player" check below also catches any new one.
-const REMOVED_CONTENT: Array[String] = ["jump_master", "torchbearer", "dimming_legend", "flickering_torment", "eternal_night"]
+const REMOVED_CONTENT: Array[String] = ["jump_master", "torchbearer", "dimming_legend", "flickering_torment", "eternal_night",
+		"rapid_attack_master", "rapid_attack_rage", "rapid_attack_curse"]
 # Zero-base opt-in stats: their consumers ignore values <= 0, so a negative curse on one only has an
 # effect on a player who already holds the matching buff (declared with requires_any_positive).
 const OPT_IN_STATS: Array[String] = ["spark_light_radius", "spark_brightness", "attack_speed_streak", "passive_regen", "poison_on_kill_chance", "currency_on_kill"]
@@ -71,7 +72,7 @@ func _ready() -> void:
 
 	var buffs: Array = _entries("res://data/buffs.json")
 	var curses: Array = _entries("res://data/globe_effects.json")
-	_check(buffs.size() >= 50, "loaded the buff data (%d entries)" % buffs.size())
+	_check(buffs.size() >= 49, "loaded the buff data (%d entries)" % buffs.size())
 
 	# --- Every stat exists on some class; removed content stays removed ----------------------------------
 	for entry in buffs + curses:
@@ -86,6 +87,13 @@ func _ready() -> void:
 				var needs: Array = entry.get("requires_any_positive", [])
 				_check(str(e["stat"]) in needs, "%s: curse on opt-in stat %s declares requires_any_positive (else it is a no-op)" % [entry["id"], e["stat"]])
 	other.free()
+	# An id or stat of the removed Rapid Attack (old data, an old OTA manifest) is ignored, never a crash or a stat change.
+	_check(not ("rapid_attack_duration" in player) and not ("rapid_attack_cooldown" in player), "the player has no Rapid Attack stats")
+	var hp_before: float = float(player.get("max_health"))
+	BuffManager._apply_single_stat("rapid_attack_duration", 3.0, true)
+	BuffManager._apply_single_stat("rapid_attack_cooldown", -0.2, false)
+	_check(float(player.get("max_health")) == hp_before and not ("rapid_attack_duration" in player), "applying a removed Rapid Attack stat is ignored gracefully")
+	_check(not BuffManager.PERCENT_OF_BASE_STATS.has("rapid_attack_cooldown"), "no percent-of-base list entry for the removed Rapid Attack cooldown")
 
 	# --- Apply / verify magnitude / remove, for every buff the player can use -------------------
 	var applied := 0

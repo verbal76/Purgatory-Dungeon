@@ -26,7 +26,7 @@ role → family map and the theme variations; `tests/test_typography.gd` asserts
 | `label` | `ShortLabel` (`ParchmentLabel`) | Cinzel SemiBold | 22 / 19 | **new**: a setting's name, a stat line (Master Volume, Screen Shake) |
 | `stat` | `StatLabel` (`ParchmentStat`) | Cinzel SemiBold, dim | 20 / 17 | **new**: quiet short lines (Runs 2, Barbarian · Slot 3, 1 / 2, rarity tag, Day 3) |
 | `hud_value` | `HudValue` | Cinzel Bold | 24 / 21 | **changed**: HUD numbers and short names (lining figures read well; outlined) |
-| `hud_label` | `HudLabel` | Cinzel SemiBold, dim | 20 / 17 | **changed**: wallet rows, ability caption, buff names |
+| `hud_label` | `HudLabel` | Cinzel SemiBold, dim | 20 / 17 | **changed**: wallet rows, buff names |
 | `body` | default `Label`, `RichTextLabel` | Source Sans Regular | 22 / 19 | reading text |
 | `body_secondary` | `SecondaryLabel` | Source Sans Regular | 20 / 17 | explanations, prompts that are sentences |
 | `metadata` | `MetaLabel` | Source Sans Regular | 18 / 15 | notes, column captions |
@@ -89,7 +89,7 @@ Cinzel's digit "1" resembles a capital I, so code-like strings with digits (key 
 | Key-binding buttons ("W", "LMB", "Pad Axis1-") | Source Sans | **Source Sans (`FieldButton`)** | would otherwise inherit Cinzel from `Button`; digit 1 ≈ I |
 | Quick-reference table, column captions | Source Sans | unchanged | reference data |
 | Back / Reset Controls to Default | Source Sans | **Cinzel** | |
-| Touch Controls sliders / "Show performance readout" rows | Source Sans | label **Cinzel** (row), hint Source Sans | same row component |
+| Touch Controls sliders / Options > About rows ("Show performance readout" is a developer-only row there) | Source Sans | label **Cinzel** (row), hint Source Sans | same row component |
 | Pause: title, Resume (primary), Options, Exit to Main Menu (danger) | mixed | all Cinzel | |
 | Pause: Master/Music/SFX Volume, Display Mode, Resolution labels | Source Sans | **Cinzel (`ShortLabel`)** | same names as Options |
 
@@ -112,7 +112,6 @@ Cinzel's digit "1" resembles a capital I, so code-like strings with digits (key 
 | Element | Before | Decided | Why |
 |---|---|---|---|
 | HUD health "77 / 150", kills, day "Day 1 / 30", wallet counts | Source Sans bold | **Cinzel Bold** | numbers; box widths measured (`HudVitals`, `COMPASS_W`) |
-| HUD ability caption (Charging…, Rapid attack 3.2s, Cooldown 5s) | Source Sans | **Cinzel dim** | ≤ 4 tokens; width verified |
 | HUD wallet names (Potions, Bronze key…) | Source Sans | **Cinzel dim** | short labels |
 | Heading plate (N, NE, …) | Source Sans | **Cinzel Bold**; plate 56 → 72 px | widest heading + margins measured |
 | Minimap cardinals N E S W | Cinzel | unchanged | intercardinals (NE…) stay metadata Source Sans |
@@ -141,7 +140,7 @@ Cinzel's digit "1" resembles a capital I, so code-like strings with digits (key 
 |---|---|---|---|
 | Touch button captions (OPEN, USE…) — `touch_button.gd` `PUI.font("body_semi")` | Source Sans | **Cinzel SemiBold**, ≥ 16 px | one-line change left to the touch owner (see report) |
 | Touch button badge (potion count) — `PUI.font("body_bold")` | Source Sans bold | Cinzel Bold | same patch |
-| Touch onboarding hints ("Tap to attack - hold to charge") | Source Sans | **stay Source Sans** | sentences |
+| Touch onboarding hints ("Tap to attack - drag the button to look") | Source Sans | **stay Source Sans** | sentences |
 | Performance overlay ("58 fps \| low 1%: 41 \| …") | default Label (Source Sans) | **stay Source Sans** | diagnostics |
 
 ## 3. Glyph audit
@@ -167,7 +166,7 @@ Nothing shipped used a forbidden glyph. Functional symbols are therefore never r
   `MobileUi` and still hold.
 * `test_typography` lays out the real screens at 1920×1080 and at the phone canvas (1602×720) and asserts: no label is
   trimmed, no button is narrower than its text + margins, nothing leaves the screen (scroll areas: horizontally), the five
-  Options tabs fit one row, the health read-out box fits "1000 / 1000", the ability caption fits beside its bar and the
+  Options tabs fit one row, the health read-out box fits "1000 / 1000" and the
   heading plate fits the widest heading ("NW").
 * Adjusted: `COMPASS_W` 56 → 72; the health read-out box is measured from the font instead of a fixed 120 px; world-space
   prompts/alerts (chest, globe) are set one step larger than the role size.

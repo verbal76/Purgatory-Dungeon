@@ -60,7 +60,7 @@ jobs:
     # A promote branch publishes an existing artifact; it must not rebuild anything. Draft pull requests never run.
     if: ${{ !startsWith(github.ref, 'refs/heads/promote/') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45   # typical: 15-17 minutes
     steps:
       - uses: actions/checkout@v4
 
@@ -116,7 +116,24 @@ jobs:
         env:
           # A release build must contain the canonical studio logo (docs/RELEASES.md).
           REQUIRE_STUDIO_LOGO: ${{ (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')) && '1' || '' }}
+          # OPT-IN (docs/RELEASES.md "CI cost", owner decision): the repository variable CI_TEST_JOBS (e.g. 3) runs that many Godot stages at once
+          # on the 4-vCPU runner. Unset/empty = strictly sequential, exactly as before.
+          TEST_JOBS: ${{ vars.CI_TEST_JOBS }}
         run: tests/run_tests.sh "$GODOT"
+
+      # What lets a later OTA publication REUSE this green suite instead of re-running it (tools/ota/proven_suite.py, docs/OTA.md 11a).
+      # A pull_request run tests a synthetic merge commit, so the suite result only speaks for SOURCE_SHA when the tested tree IS the tree of
+      # SOURCE_SHA; the attestation step runs (and so shows success through the API) only then. Names are constants of proven_suite.py.
+      - name: Exact-tree check (is the tested tree the tree of the commit named SOURCE_SHA?)
+        id: exacttree
+        run: |
+          same=false
+          if python3 tools/ota/proven_suite.py same-tree --sha "$SOURCE_SHA"; then same=true; fi
+          echo "same=$same" >> "$GITHUB_OUTPUT"
+
+      - name: Exact-SHA attestation (the suite above passed on the tree of the commit)
+        if: steps.exacttree.outputs.same == 'true'
+        run: echo "the full suite passed on the exact tree of commit $SOURCE_SHA"
 
       - name: Decide whether to build the Windows package (release, or requested by workflow_dispatch)
         id: winbuild
@@ -185,10 +202,12 @@ jobs:
   # Android APK: built, signed with the stable app key and qualified (identity, API 36 target, 16 KB
   # alignment, signature, game content) by the same scripts anyone can run (tools/android/).
   android:
-    # Built only for a release or when explicitly requested (it costs ~10 minutes of runner time and signs an APK).
+    # Built only for a release or when explicitly requested (it costs ~10 minutes of runner time and signs an APK), and only AFTER the full
+    # suite of validate-and-export is green: a red suite builds and signs nothing (it used to run in parallel and burn ~9 minutes anyway).
+    needs: validate-and-export
     if: ${{ startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v') || (github.event_name == 'workflow_dispatch' && inputs.build_android) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30   # typical: 4-5 minutes now that the duplicate test subset is gone
     concurrency:
       group: android-signing-key      # first run creates the key; never two at once
       cancel-in-progress: false
@@ -246,11 +265,8 @@ jobs:
       - name: Native runtime lock (docs/OTA.md section 3)
         run: python3 tools/ota_runtime.py --check
 
-      - name: Mobile input / splash / menu tests
-        env:
-          REQUIRE_STUDIO_LOGO: ${{ (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')) && '1' || '' }}
-          TEST_FILTER: touch_controls|mobile_ui|app_lifecycle|input_desktop|studio_splash|release_metadata|menu_scenes|misc_fixes|settings_controls|pause_options|pause_freeze|run_lifecycle|save_manager
-        run: tests/run_tests.sh "$GODOT"
+      # The former "Mobile input / splash / menu tests" step (a TEST_FILTER subset of tests/run_tests.sh, ~6 minutes) is gone: it ran the same
+      # stages, on the same runner type, commit and engine, that validate-and-export has just passed in full (this job needs it).
 
       - name: Write build_info.json (shipped inside the game)
         run: |
@@ -299,6 +315,7 @@ jobs:
     needs: [validate-and-export, android]
     if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
       actions: read
@@ -325,6 +342,7 @@ jobs:
   promote:
     if: startsWith(github.ref, 'refs/heads/promote/')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
       actions: read

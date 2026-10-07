@@ -82,12 +82,6 @@ extends BruteCharacter
 const DOME_COOLDOWN_TIME    : float = 2.5
 @export var dome_bolt_count : int   = 12   # Bolts fired radially; +2 per Magnitude perk level
 
-# ── Lightning Rapid Attack ────────────────────────────────────────────
-@export var rapid_attack_charge_time     : float = 1.5   # Seconds to fill the charge bar
-@export var rapid_attack_duration        : float = 4.0   # Seconds the rapid attack lasts
-@export var rapid_attack_cooldown        : float = 30.0  # Seconds before rapid attack can recharge
-@export var rapid_attack_attack_rate     : float = 0.12  # Seconds between bolts — ~8 Hz single-bolt machine gun
-
 # ── Hand spawn points (formerly from MageCharacter / mage_base.gd) ────────────
 # Assign Marker3D nodes in the Inspector — projectiles spawn from these.
 @export var right_hand_marker : Marker3D
@@ -110,15 +104,6 @@ var _slide_direction       : Vector3 = Vector3.ZERO
 var _slide_cam_lift        : float   = 0.0
 var _slide_knocked_enemies : Array   = []
 
-# ── Rapid Attack / storm state ──────────────────────────────────────
-var _attack_held             : bool    = false
-var _rapid_attack_charge          : float   = 0.0
-var _rapid_attack_active          : bool    = false
-var _rapid_attack_timer           : float   = 0.0
-var _rapid_attack_cooldown_remain : float   = 0.0
-var _rapid_attack_attack_timer    : float   = 0.0
-var _rapid_attack_bar_label       : Label     = null   # caption beside the ability bar (owned by _vitals)
-
 # ── Dome state ─────────────────────────────────────────────────
 var _dome_cooldown : float = 0.0
 
@@ -139,6 +124,7 @@ var _status_acid_dps          : float = 1.0   # Set by the trap (TrapManager.aci
 # Tracked timers (the brute's pattern) instead of fire-and-forget SceneTree timers: re-applying an
 # effect refreshes it, and the countdown pauses with the game.
 var _status_drunk_timer       : float = 0.0
+var _status_reversed_view_timer : float = 0.0   # Seconds remaining on Reversed View (same length as Intoxicated)
 # On-screen list of active trap effects (same panel the Barbarian has): the trap banner only
 # flashes at trigger time, and day-long effects (reversed view, heavy gravity) would otherwise be
 # invisible afterwards.
@@ -179,7 +165,7 @@ var _staff_tip             : Node3D     = null   # Marker3D on the staff end
 var _crosshair_layer       : CanvasLayer = null
 
 # ── Health bar HUD ─────────────────────────────────────────────
-var _vitals       : HudVitals = null   # health bar + value, ability bar + caption (scripts/ui/hud_vitals.gd)
+var _vitals       : HudVitals = null   # health bar + value (scripts/ui/hud_vitals.gd)
 var _health_label : Label     = null
 
 # ── Damage vignette ────────────────────────────────────────────
@@ -267,12 +253,11 @@ func _on_ready() -> void:
 	_crosshair_layer.name  = "CrosshairLayer"
 	add_child(_crosshair_layer)
 
-	# ── Health bar + rapid-attack (storm) bar ───────────────────────────────────
-	# One shared component with the Barbarian: PUIBar + value text, ember ability bar + caption.
+	# ── Health bar ──────────────────────────────────────────────────────────────
+	# One shared component with the Barbarian: PUIBar + value text.
 	_vitals = HudVitals.new()
 	_crosshair_layer.add_child(_vitals)
 	_health_label           = _vitals.health_label
-	_rapid_attack_bar_label = _vitals.ability_label
 	_refresh_health_bar(max_health, max_health)
 
 	# ── Active trap effects panel (bottom-centre, hidden until an effect is active) ──
@@ -289,8 +274,6 @@ func _on_ready() -> void:
 	_damage_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_damage_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_crosshair_layer.add_child(_damage_vignette)
-
-	_refresh_rapid_attack_bar()
 
 	# SURGICAL ADD: Apply hub-purchased perks from the save profile before the run starts.
 	_apply_hub_perks()
@@ -469,8 +452,6 @@ func take_damage(amount: float, source_node: Node3D = null) -> void:
 		return
 	if _is_sliding:
 		return  # Invincible during the evasive slide.
-	if _rapid_attack_active:
-		return  # Invincible during rapid attack frenzy.
 
 	if source_node != null:
 		var space : PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
@@ -548,6 +529,7 @@ func _on_buff_pick_finished() -> void:
 
 
 func _on_die() -> void:
+	clear_timed_statuses()
 	# SURGICAL FIX: Stop the day clock immediately on death so buff picks
 	# and day ticks cannot fire after the player is dead.
 	if has_node("/root/GameClock"):
@@ -587,18 +569,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		if not _is_dead:
 			_apply_yaw_now()
 
-	if event.is_action_pressed("attack") and not _is_attacking and not _is_blocking and not _is_sliding and not _is_dead and not _rapid_attack_active:
-		_attack_held = true
+	if event.is_action_pressed("attack") and not _is_attacking and not _is_blocking and not _is_sliding and not _is_dead:
 		_do_spell_attack()
-
-	if event.is_action_released("attack"):
-		_attack_held = false
-		if _rapid_attack_charge >= 1.0 and _rapid_attack_cooldown_remain <= 0.0 and not _rapid_attack_active:
-			_rapid_attack_charge = 0.0
-			_start_mage_rapid_attack()
-		else:
-			_rapid_attack_charge = 0.0
-			_refresh_rapid_attack_bar()
 
 	# AOE: lightning dome — fires bolts in all directions, costs 1 potion.
 	if event.is_action_pressed("AOE") and _dome_cooldown <= 0.0 and not _is_dead:
@@ -660,11 +632,17 @@ func _physics_tick(delta: float) -> void:
 		_status_drunk_timer -= delta
 		if _status_drunk_timer <= 0.0:
 			_status_drunk = false
+	if _status_reversed_view and _status_reversed_view_timer > 0.0:
+		_status_reversed_view_timer -= delta
+		if _status_reversed_view_timer <= 0.0:
+			_status_reversed_view = false
+			_reset_view_arm()
+			_refresh_status_label()
 	if _status_reversed_controls and _status_controls_timer > 0.0:
 		_status_controls_timer -= delta
 		if _status_controls_timer <= 0.0:
 			_status_reversed_controls = false
-	if _status_drunk or _status_reversed_controls or _status_acid or _status_panel != null and _status_panel.visible:
+	if _status_drunk or _status_reversed_view or _status_reversed_controls or _status_acid or _status_panel != null and _status_panel.visible:
 		_status_update_timer -= delta
 		if _status_update_timer <= 0.0:
 			_status_update_timer = STATUS_UPDATE_INTERVAL
@@ -673,38 +651,6 @@ func _physics_tick(delta: float) -> void:
 	# ── Dome cooldown ──────────────────────────────────────────────────────────
 	if _dome_cooldown > 0.0:
 		_dome_cooldown = maxf(_dome_cooldown - delta, 0.0)
-
-	# ── Rapid Attack: charge builds while attack is held ────────────────────────────
-	if _attack_held and not _rapid_attack_active:
-		_rapid_attack_charge = minf(_rapid_attack_charge + delta / rapid_attack_charge_time, 1.0)
-		_refresh_rapid_attack_bar()
-
-	if _rapid_attack_cooldown_remain > 0.0:
-		_rapid_attack_cooldown_remain = maxf(_rapid_attack_cooldown_remain - delta, 0.0)
-		_refresh_rapid_attack_bar()
-
-	# ── Rapid attack (bolt machine gun) active tick ───────────────────────────
-	if _rapid_attack_active:
-		# Normal first-person view + movement — player keeps full control.
-		# Damage immunity is gated in take_damage via _rapid_attack_active.
-		_handle_view_input(delta)
-		_apply_view_rotation()
-		_handle_movement(delta)
-		_update_footsteps(delta)
-		_apply_head_bob(delta)
-
-		_rapid_attack_timer        -= delta
-		_rapid_attack_attack_timer -= delta
-
-		if _rapid_attack_attack_timer <= 0.0:
-			_rapid_attack_attack_timer = rapid_attack_attack_rate
-			_fire_rapid_attack_bolts()
-
-		_refresh_rapid_attack_bar()
-
-		if _rapid_attack_timer <= 0.0 or _is_dead:
-			_end_mage_rapid_attack()
-		return
 
 	_handle_view_input(delta)
 	_apply_view_rotation()
@@ -1043,7 +989,7 @@ func _on_fireball_hit(body: Node3D, fb_name: String, damage_val: float, travel_d
 	if body == self:
 		return
 
-	# Wall-penetrating bolts (rapid_attack): skip destruction when hitting geometry
+	# Wall-penetrating bolts: skip destruction when hitting geometry
 	# that has no take_damage method (i.e. walls/floor/ceiling).
 	if penetrate_walls:
 		var t : Node3D = body
@@ -1453,30 +1399,6 @@ func _do_lightning_dome() -> void:
 		_launch_fireball(origin, dir)
 
 
-# ══════════════════════════════════════════════════════════════
-#  LIGHTNING RAPID ATTACK
-# ══════════════════════════════════════════════════════════════
-
-func _start_mage_rapid_attack() -> void:
-	if _is_dead:
-		return
-
-	_rapid_attack_active       = true
-	_rapid_attack_timer        = rapid_attack_duration
-	_rapid_attack_attack_timer = 0.0
-	_is_attacking              = true
-	anim_player.speed_scale    = attack_speed_scale * attack_speed * 1.5
-	_refresh_rapid_attack_bar()
-
-
-func _end_mage_rapid_attack() -> void:
-	_rapid_attack_active          = false
-	_is_attacking                 = false
-	_rapid_attack_cooldown_remain = rapid_attack_cooldown
-	anim_player.speed_scale       = 1.0
-	_refresh_rapid_attack_bar()
-
-
 # The crosshair position in the coordinates Camera3D.project_ray_*() expects: the centre of the VISIBLE
 # rectangle. This is NOT get_viewport().size / 2: with the Android stretch (canvas_items, expand) the
 # window is larger than the visible canvas (e.g. 2992x1344 vs 1602x720 on a Pixel), and halving the
@@ -1491,39 +1413,6 @@ func _get_camera_aim_dir() -> Vector3:
 	if camera_3d != null:
 		return camera_3d.project_ray_normal(_aim_screen_center()).normalized()
 	return Vector3(-sin(_yaw), 0.0, -cos(_yaw))
-
-
-# Fires a single lightning bolt parallel to the crosshair line-of-sight.
-# Origin stays on the staff tip so the bolt visually leaves the weapon,
-# but the flight direction comes from the camera — decoupled from whatever
-# the arm animation is doing at the moment of fire.
-func _fire_rapid_attack_bolts() -> void:
-	var origin : Vector3
-	if _staff_tip != null:
-		origin = _staff_tip.global_position
-	else:
-		origin = global_position + Vector3(0.0, 1.4, 0.0)
-
-	var aim : Vector3 = _get_camera_aim_dir()
-	# Tiny perpendicular cone jitter so repeat bolts aren't a perfect line.
-	aim = (aim + Vector3(randf_range(-0.03, 0.03), randf_range(-0.03, 0.03), 0.0)).normalized()
-	_launch_fireball(origin, aim, true, 8.0)
-
-
-func _refresh_rapid_attack_bar() -> void:
-	if _vitals == null:
-		return
-	if _rapid_attack_active:
-		_vitals.set_ability(clampf(_rapid_attack_timer / rapid_attack_duration, 0.0, 1.0),
-				HudVitals.Ability.ACTIVE, _rapid_attack_timer)
-	elif _rapid_attack_cooldown_remain > 0.0:
-		_vitals.set_ability(1.0 - clampf(_rapid_attack_cooldown_remain / rapid_attack_cooldown, 0.0, 1.0),
-				HudVitals.Ability.COOLDOWN, _rapid_attack_cooldown_remain)
-	elif _attack_held:
-		_vitals.set_ability(_rapid_attack_charge,
-				HudVitals.Ability.RELEASE if _rapid_attack_charge >= 1.0 else HudVitals.Ability.CHARGING)
-	else:
-		_vitals.set_ability(1.0, HudVitals.Ability.READY)
 
 
 # Plays the 2H shove animation and deals melee damage + knockback
@@ -1686,10 +1575,9 @@ func _do_block() -> void:
 func apply_status(effect_name: String, days_duration: int, strength: float = 0.0) -> void:
 	match effect_name:
 		"reversed_view":
-			_status_reversed_view    = true
-			_status_day_effects_days = maxi(_status_day_effects_days, days_duration)
-			if not GameClock.day_changed.is_connected(_on_day_changed):
-				GameClock.day_changed.connect(_on_day_changed)
+			# Timer-based like Intoxicated (and the same length); the day count argument is ignored. Re-applying refreshes it.
+			_status_reversed_view       = true
+			_status_reversed_view_timer = STATUS_REVERSED_VIEW_SECONDS
 		"heavy_gravity":
 			if not _status_heavy_gravity:
 				_status_heavy_gravity    = true
@@ -1699,7 +1587,7 @@ func apply_status(effect_name: String, days_duration: int, strength: float = 0.0
 				GameClock.day_changed.connect(_on_day_changed)
 		"drunk":
 			_status_drunk       = true
-			_status_drunk_timer = 30.0
+			_status_drunk_timer = STATUS_DRUNK_SECONDS
 		"reversed_controls":
 			_status_reversed_controls = true
 			_status_controls_timer    = 30.0
@@ -1717,7 +1605,7 @@ func _refresh_status_label() -> void:
 	var lines : Array[String] = []
 	var day_s : String = "s" if _status_day_effects_days != 1 else ""
 	if _status_reversed_view:
-		lines.append("Vision Reversed  (%d day%s)" % [_status_day_effects_days, day_s])
+		lines.append("Vision Reversed  (%.0fs)" % maxf(_status_reversed_view_timer, 0.0))
 	if _status_heavy_gravity:
 		lines.append("Heavy Gravity  (%d day%s)" % [_status_day_effects_days, day_s])
 	if _status_drunk:
@@ -1733,10 +1621,37 @@ func _refresh_status_label() -> void:
 		_status_panel.visible = true
 
 
+# Puts the camera arm back upright right now. _apply_view_rotation() normally does it every tick, but the blocking branch of
+# the physics tick returns before reaching it, so ending Reversed View (expiry or death) must not rely on that.
+func _reset_view_arm() -> void:
+	var arm : SpringArm3D = get_node_or_null("SpringArm3D") as SpringArm3D
+	if arm != null:
+		arm.rotation.x = 0.0
+
+# Ends every timed trap status at once (death: the screen must not stay upside-down / swaying behind the death overlay,
+# and nothing may carry into whatever comes next). Day-based Heavy Gravity is restored here too.
+func clear_timed_statuses() -> void:
+	_status_reversed_view       = false
+	_status_reversed_view_timer = 0.0
+	_reset_view_arm()
+	_status_drunk               = false
+	_status_drunk_timer         = 0.0
+	_status_reversed_controls   = false
+	_status_controls_timer      = 0.0
+	_status_acid                = false
+	_status_acid_timer          = 0.0
+	if _status_heavy_gravity:
+		_status_heavy_gravity = false
+		slide_power           *= 2.0
+	_status_day_effects_days = 0
+	if GameClock.day_changed.is_connected(_on_day_changed):
+		GameClock.day_changed.disconnect(_on_day_changed)
+	_refresh_status_label()
+
+
 func _on_day_changed(_day: int) -> void:
 	_status_day_effects_days -= 1
 	if _status_day_effects_days <= 0:
-		_status_reversed_view = false
 		if _status_heavy_gravity:
 			_status_heavy_gravity = false
 			slide_power           *= 2.0
