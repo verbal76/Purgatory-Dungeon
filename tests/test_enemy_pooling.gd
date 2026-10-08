@@ -63,7 +63,10 @@ func _exercise(label: String, e: CharacterBase, manager, player) -> void:
 		# pose stays applied, so check the assigned animation and that something is playing.
 		_check(e.anim_player.assigned_animation != death_name, tag + "not stuck on the death pose (assigned: %s)" % e.anim_player.assigned_animation)
 		_check(e.anim_player.is_playing(), tag + "an animation is playing after rebirth")
-		_check(is_equal_approx(e.anim_player.speed_scale, 1.0), tag + "animation speed reset (%.2f)" % e.anim_player.speed_scale)
+		# A reborn enemy that is already inside the player's attack range may legitimately begin ITS OWN attack within these
+		# frames (the attack plays at its own speed); what must never survive is the previous life's death / react speed.
+		var attacking: bool = "_is_attacking" in e and bool(e.get("_is_attacking"))
+		_check(attacking or is_equal_approx(e.anim_player.speed_scale, 1.0), tag + "animation speed reset (%.2f)" % e.anim_player.speed_scale)
 
 	# Leftover coroutine from a previous life must not touch a new life.
 	e._is_attacking = false
