@@ -15,10 +15,10 @@
 #     left thumb   floating move stick           -> move_left/right/forward/back (analog strength)
 #     right side   empty screen is inert: a finger that is not on a button does nothing
 #     lower right  big ATTACK button at the rim  -> attack, ONE attack per touch (see "ATTACK gesture" below). The
-#                  same finger is the look control: a finger that starts on ATTACK and drags aims (a continuous turn
-#                  RATE, deflection = speed, measured from the touch-down point, fed to the players as mouse-look
-#                  motion once per rendered frame). A drag NEVER attacks; a tap or a short rest attacks once; holding
-#                  never repeats or charges.
+#                  same finger is the look control: a finger that starts on ATTACK and drags looks through EXACTLY the
+#                  Classic swipe path (finger displacement -> mouse-look motion, see _look), multiplied by a fixed
+#                  compact-input gain that stands in for the smaller travel area (compact_gain). A drag NEVER attacks;
+#                  a tap or a short rest attacks once; holding never repeats or charges.
 #     arc around   slide, kick, block (hold), burst (cooldown ring + potion count): subordinate buttons on a
 #     ATTACK       semicircle on its upper/left side, plus the contextual USE one ring further out
 #     top right    pause, map (toggle)
@@ -45,12 +45,10 @@ const GROUP := "touch_controls"
 const KEY_OPACITY := "TouchOpacity"
 const KEY_SCALE   := "TouchScale"
 const KEY_LOOK    := "TouchLookSens"
-const KEY_AIM_SMOOTH := "TouchAimSmoothing"
 const KEY_SCHEME  := "TouchScheme"
 const DEFAULT_OPACITY := 70.0
 const DEFAULT_SCALE   := 100.0
 const DEFAULT_LOOK    := 100.0
-const DEFAULT_AIM_SMOOTH := 60.0
 const SCHEME_TWIN     := "twin"
 const SCHEME_CLASSIC  := "classic"
 const DEFAULT_SCHEME  := SCHEME_TWIN    # existing installs with no saved key get twin-stick
@@ -62,27 +60,16 @@ const MIN_PRESS_MS    := 70      # a press shorter than this is stretched so pol
 const MARGIN_X        := 36.0    # keep clear of rounded corners / gesture edges
 const MARGIN_Y        := 28.0
 
-# ── Twin-stick ATTACK-drag aiming (all numbers in virtual px at 100% size unless stated) ─────────────────────────
-# Response: offset from the drag origin / AIM_DRAG_RADIUS = deflection d in 0..1. The first AIM_SETTLE_PX of finger
-# travel after touch-down are ignored (the press itself moves the thumb; measured in distance, so a deliberate fast
-# drag is not delayed). Turning ENGAGES when d reaches AIM_ENGAGE and stays engaged until d falls below LOOK_DEADZONE
-# (hysteresis: a thumb hovering at the edge does not chatter). While engaged x = (d - dz) / (1 - dz) is stretched over
-# 0..1 from the exit threshold, so the rate is continuous (about 1% of full at the entry point, exactly 0 at the exit)
-# and shaped by x^LOOK_CURVE_EXP: a small push is a slow, precise aim, a full push is the maximum turn rate. The
-# command is then low-passed (exponential, frame-rate independent) by the Aim Smoothing setting, which removes the
-# hand's tremor. Rates are physical (radians per second at 100% Look Sensitivity), independent of the frame time.
-const AIM_DRAG_RADIUS   := 90.0   # drag travel for full deflection (the drag origin follows the thumb past it)
-const AIM_SETTLE_PX     := 6.0    # finger travel right after touch-down that is ignored
-const AIM_ENGAGE        := 0.20   # deflection that starts the turn (about 18 px)
-const LOOK_DEADZONE     := 0.12   # deflection below which an engaged turn stops (hysteresis exit); the response starts here
-const LOOK_CURVE_EXP    := 2.0    # >1: fine control near the centre, fast turn at the rim
-const AIM_SMOOTH_TAU_MAX := 0.12  # s: low-pass time constant at 100% Aim Smoothing (0% = off, linear in between)
-const LOOK_MAX_YAW_RATE := 4.2    # rad/s at full deflection and 100% sensitivity (~240 deg/s)
-const LOOK_PITCH_RATIO  := 0.55   # pitch rate / yaw rate (the players have no pitch today and ignore it)
-const LOOK_MAX_STEP     := 0.25   # s: one frame never integrates more than this (a pause / app resume must not jump the camera)
-# The players turn by `relative.x * mouse_sensitivity` (0.0025 rad per mouse px); the rate is expressed in
-# that unit so the same input path as the classic swipe is used.
-const LOOK_RAD_PER_MOUSE_PX := 0.0025
+# ── Twin-stick ATTACK-drag look ──────────────────────────────────────────────────────────────────────────────────
+# The ATTACK finger turns the players through the SAME path as the Classic swipe (_look): every pixel the finger
+# moves becomes LOOK_BASE_GAIN x Look Sensitivity mouse pixels, immediately, with no dead zone, curve, smoothing,
+# velocity or coasting (the camera moves exactly when and as far as the thumb does, and stops when it stops). The one
+# adaptation is the physical one: the ATTACK button is a small travel area, Classic is a whole screen half. The drag is
+# therefore multiplied by compact_gain(): (Classic's right-thumb travel) / (the ATTACK diameter), clamped. Look
+# Sensitivity (the player's slider) stays the only other factor, so nothing stacks.
+const COMPACT_CLASSIC_TRAVEL := 0.5   # Classic's right-thumb sweep, as a fraction of the canvas width (the right half)
+const COMPACT_GAIN_MIN := 1.5
+const COMPACT_GAIN_MAX := 3.0         # 180 degrees of turn = ~30 mm of thumb travel at 100% sensitivity
 
 # ── Twin-stick layout (virtual px at 100% size, before the shrink for short screens) ────────────────────
 const TWIN_ATTACK_R   := 100.0    # ATTACK radius: 200 px diameter (~19.8 mm at 480 dpi on a 720 px canvas)
@@ -108,16 +95,15 @@ const FALLBACK_SCREEN_H := 1344.0 # Pixel 10 Pro XL panel height, used only when
 # A finger that goes down on ATTACK is PENDING: nothing is pressed yet. Then exactly one of
 #   TAP    lifted again within ATTACK_INTENT_MS without leaving the slop circle  -> ONE attack, at the lift
 #   HOLD   still down, still inside the slop circle after ATTACK_INTENT_MS        -> ONE attack, at that moment
-#   LOOK   moved farther than the slop radius from the touch-down point (or the aim drag engaged)
+#   LOOK   moved farther than the slop radius from the touch-down point
 #                                                                                -> ZERO attacks, for the rest of the touch
 # LOOK is latched until the finger lifts: coming back over the button does not attack; the next attack needs a new
 # touch. A hold does not repeat, auto-fire or charge (nothing in the game charges): the attack is a fixed ATTACK_PULSE_MS press followed by a release that the layer itself guarantees.
 # Numbers (reasoned for real Android touch, not for the mouse):
 #   ATTACK_SLOP_MM        1.5 mm = ~9.5 dp: Android's own touch slop is 8 dp (ViewConfiguration), a resting thumb rolls and
 #                         tremors a few mm-tenths, a deliberate look drag covers it in a few ms. In virtual px via the
-#                         panel dpi (Pixel: ~15 px), clamped so it stays below the aim engage distance
-#                         (AIM_SETTLE_PX + AIM_ENGAGE x AIM_DRAG_RADIUS = 24 px at 100% size): the camera cannot start
-#                         turning while the gesture is still undecided, so classifying costs the camera NO latency.
+#                         panel dpi (Pixel: ~15 px). The camera does not turn while the gesture is undecided; the movement beyond
+#                         the circle is then applied in full (see _attack_move), so the slop is the only travel the look needs.
 #   ATTACK_INTENT_MS      150: a tap is ~60-150 ms (Android's tap timeout is 100-ish and long-press 400-500), and a
 #                         thumb that goes down to look starts moving within ~100 ms; 150 ms separates "put the thumb down
 #                         and drag" from "put the thumb down and stay" without making a held attack feel late.
@@ -142,7 +128,7 @@ var touch_enabled : bool = true
 var ui_scale      : float = 1.0
 var opacity       : float = 0.7
 var look_gain     : float = 1.0
-var aim_smoothing : float = 0.6     # 0..1 (the Aim Smoothing slider / 100): 0 = off
+var attack_look_gain : float = 1.0   # compact-input gain of the twin ATTACK drag (compact_gain; set by the layout)
 var scheme        : String = DEFAULT_SCHEME
 var dpi_override  : float = 0.0                                    # tests: pretend the panel has this dpi
 var screen_override : Vector2 = Vector2.ZERO                       # tests: pretend the panel has this many physical px
@@ -159,23 +145,17 @@ var _stick_base : Vector2 = Vector2.ZERO
 var _stick_vec  : Vector2 = Vector2.ZERO
 var _stick_active : bool = false
 var _stick_draw : Control = null
-var _overlay_draw : Control = null       # above the buttons: the drag ring of an ATTACK drag
 var _atk_index : int = -1                # finger that went down on ATTACK (-1: none)
-var _atk_origin : Vector2 = Vector2.ZERO # where that finger touched down (the drag is measured from here)
-var _atk_vec : Vector2 = Vector2.ZERO
-var _atk_settled : bool = false          # the finger has moved past AIM_SETTLE_PX since touch-down
-var _atk_engaged : bool = false          # hysteresis state: the drag is past AIM_ENGAGE and still above LOOK_DEADZONE
+var _atk_moved : bool = false            # the ATTACK finger turned the camera since the last rendered frame (onboarding clock)
 var _atk_gesture : int = Gesture.NONE    # twin ATTACK gesture state (see above)
 var _atk_down_ms : int = 0
-var _atk_down_pos : Vector2 = Vector2.ZERO   # touch-down point: the slop circle is centred here (_atk_origin moves with the drag)
+var _atk_down_pos : Vector2 = Vector2.ZERO   # touch-down point: the slop circle is centred here
 var _atk_slop_px : float = ATTACK_SLOP_MAX_PX
 var _stale : Array[String] = []          # scratch for _enforce_inputs (reused: no per-frame allocation)
 var _attack_release_ms : int = 0         # when we last released attack (for the engine-state watch), 0 = nothing to watch
 var attack_pulses : int = 0              # attacks sent through the twin gesture (diagnostics / tests)
 var attack_failsafe_releases : int = 0   # times the fail-safe had to force a release (should stay 0)
 var now_override_ms : int = -1           # tests: a controllable clock (>= 0), real time otherwise
-var _look_cmd : Vector2 = Vector2.ZERO   # curved aim command of the ATTACK drag (length <= 1): the target of the smoothing
-var _aim_smoothed : Vector2 = Vector2.ZERO   # the low-passed command that look_step actually applies
 var _owners : Dictionary = {}            # finger index -> {"kind": Owner, "button": String}
 var _held : Dictionary = {}              # action -> strength currently pressed through us
 var _press_ms : Dictionary = {}          # action -> time pressed (for MIN_PRESS_MS)
@@ -187,7 +167,7 @@ var _status_poll : float = 0.0
 var _last_view : Vector2 = Vector2.ZERO
 var look_total : float = 0.0             # cumulative virtual px swiped (onboarding)
 var move_time : float = 0.0              # seconds the stick has been held out (onboarding)
-var look_time : float = 0.0              # seconds the ATTACK drag has been held out (onboarding)
+var look_time : float = 0.0              # seconds the ATTACK finger has been turning the camera (onboarding)
 
 
 ## True on phones (and when forced for desktop testing with PURGATORY_FORCE_TOUCH=1).
@@ -236,19 +216,13 @@ static func px_per_mm(view: Vector2, screen: Vector2, dpi: float) -> float:
 	return d / 25.4 * (view.y / sh)
 
 
-## Aim response for a drag offset (offset / AIM_DRAG_RADIUS, any length): dead zone, then x^LOOK_CURVE_EXP
-## over the remaining travel. Returns a vector in the same direction with length 0..1 (1 = full rate).
-static func look_response(v: Vector2) -> Vector2:
-	var mag: float = v.length()
-	if mag <= LOOK_DEADZONE:
-		return Vector2.ZERO
-	var x: float = (minf(mag, 1.0) - LOOK_DEADZONE) / (1.0 - LOOK_DEADZONE)
-	return v / mag * pow(x, LOOK_CURVE_EXP)
-
-
-## Turn rates (yaw, pitch) in rad/s for a look command (output of look_response) at a sensitivity factor.
-static func look_rates(cmd: Vector2, sensitivity: float) -> Vector2:
-	return Vector2(cmd.x * LOOK_MAX_YAW_RATE, cmd.y * LOOK_MAX_YAW_RATE * LOOK_PITCH_RATIO) * sensitivity
+## Compact-input gain of the twin ATTACK drag: how much further the camera turns per pixel of thumb travel than in Classic,
+## to make up for the smaller travel area. = Classic's right-thumb sweep (COMPACT_CLASSIC_TRAVEL x the canvas width) divided
+## by the ATTACK diameter, clamped to COMPACT_GAIN_MIN..MAX. 1280x720 canvas, 100% size: 640 / 200 = 3.2 -> 3.0.
+static func compact_gain(view_width: float, attack_radius: float) -> float:
+	if attack_radius <= 0.0:
+		return COMPACT_GAIN_MIN
+	return clampf(COMPACT_CLASSIC_TRAVEL * view_width / (2.0 * attack_radius), COMPACT_GAIN_MIN, COMPACT_GAIN_MAX)
 
 
 ## Button centres/radii and touch zones for a view size, safe insets (l,t,r,b) and UI scale.
@@ -363,12 +337,6 @@ func _ready() -> void:
 	_make_button("minimap", "map", "", TouchButton.Mode.TOGGLE)
 	buttons["equip"].visible = false
 
-	_overlay_draw = Control.new()
-	_overlay_draw.name = "DragRing"
-	_overlay_draw.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_overlay_draw.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_overlay_draw.draw.connect(_draw_overlay)
-	_root.add_child(_overlay_draw)
 
 	var ob_script := load("res://scripts/touch/touch_onboarding.gd")
 	if ob_script != null:
@@ -441,7 +409,6 @@ func _apply_settings() -> void:
 	opacity = clampf(_setting(KEY_OPACITY, DEFAULT_OPACITY) / 100.0, 0.15, 1.0)
 	ui_scale = clampf(_setting(KEY_SCALE, DEFAULT_SCALE) / 100.0, 0.6, 1.6)
 	look_gain = clampf(_setting(KEY_LOOK, DEFAULT_LOOK) / 100.0, 0.2, 3.0)
-	aim_smoothing = clampf(_setting(KEY_AIM_SMOOTH, DEFAULT_AIM_SMOOTH) / 100.0, 0.0, 1.0)
 
 
 func _stored_scheme() -> String:
@@ -509,11 +476,10 @@ func _relayout() -> void:
 			(buttons[action] as TouchButton).place(spec[0], spec[1])
 	stick_default = lay["stick_default"]
 	stick_zone = lay["stick_zone"]
+	attack_look_gain = compact_gain(view.x, (buttons["attack"] as TouchButton).radius) if scheme == SCHEME_TWIN and buttons.has("attack") else 1.0
 	_root.modulate.a = opacity
 	if _stick_draw != null:
 		_stick_draw.queue_redraw()
-	if _overlay_draw != null:
-		_overlay_draw.queue_redraw()
 
 
 # ── Per-frame housekeeping ────────────────────────────────────────────────────
@@ -540,8 +506,9 @@ func _process(delta: float) -> void:
 	if _stick_active and _stick_vec.length() > STICK_DEADZONE:
 		move_time += delta
 	_poll_settings(delta)
-	if touch_enabled:
-		_aim_frame(delta)
+	if _atk_moved:
+		_atk_moved = false
+		look_time += delta   # the ATTACK finger turned the camera this frame (onboarding)
 	_status_poll += delta
 	if _status_poll >= 0.1:
 		_status_poll = 0.0
@@ -562,42 +529,6 @@ func _poll_settings(delta: float) -> void:
 		set_scheme(_stored_scheme())   # releases, re-lays out
 	elif not is_equal_approx(o, opacity) or not is_equal_approx(sc, ui_scale) or view_size() != _last_view:
 		_relayout()
-
-
-## Twin ATTACK drag: the aim is integrated in _process, on the RENDERED frame with its REAL delta, not in the 30 Hz
-## physics tick. This is camera input, not simulation: at 20-40 fps a physics-tick cadence meant 0, 1 or several
-## back-to-back ticks per rendered frame, so the camera stood still, then caught up; with the real frame delta the same
-## finger movement turns the same angle per second at any frame rate (a long frame turns proportionally more in one
-## step instead of being split into bursts). One event per rendered frame, only while turning, delivered the same frame.
-func _aim_frame(delta: float) -> void:
-	if _look_cmd == Vector2.ZERO and _aim_smoothed == Vector2.ZERO:
-		return
-	if look_step(delta) != Vector2.ZERO:
-		# Deliver the motion now. Left buffered it would reach the player at the START of the next frame, so a long
-		# frame would show no turn at all and the following (short) one would show all of it: hesitate, then catch up.
-		Input.flush_buffered_events()
-
-
-## Applies one look step of `delta` real seconds: the aim command is low-passed (time constant AIM_SMOOTH_TAU_MAX x the
-## Aim Smoothing setting; alpha = 1 - exp(-dt / tau), exact for any dt) and turned into mouse-motion px = rate x dt.
-## Returns the px sent.
-func look_step(delta: float) -> Vector2:
-	if _look_cmd == Vector2.ZERO and _aim_smoothed == Vector2.ZERO:
-		return Vector2.ZERO
-	var dt: float = minf(delta, LOOK_MAX_STEP)
-	var tau: float = AIM_SMOOTH_TAU_MAX * aim_smoothing
-	if tau <= 0.0:
-		_aim_smoothed = _look_cmd
-	else:
-		_aim_smoothed += (_look_cmd - _aim_smoothed) * (1.0 - exp(-dt / tau))
-		if _look_cmd == Vector2.ZERO and _aim_smoothed.length() < 0.002:
-			_aim_smoothed = Vector2.ZERO   # the tail is below one pixel per second: stop exactly
-	if _aim_smoothed == Vector2.ZERO:
-		return Vector2.ZERO
-	look_time += dt
-	var px: Vector2 = look_rates(_aim_smoothed, look_gain) / LOOK_RAD_PER_MOUSE_PX * dt
-	_emit_mouse_motion(px)
-	return px
 
 
 # Burst cooldown ring + potion count from the live player and wallet.
@@ -736,42 +667,7 @@ func _touch_move(index: int, p: Vector2, rel: Vector2) -> void:
 			_look(rel)   # Classic only: twin-stick never creates a LOOK owner
 		Owner.BUTTON:
 			if index == _atk_index:
-				_attack_move(p)
-
-
-## The ATTACK finger moved to `p`: ignore the thumb settling, then follow the drag.
-func _aim_drag(p: Vector2) -> void:
-	if not _atk_settled:
-		var d: Vector2 = p - _atk_origin
-		var settle: float = AIM_SETTLE_PX * ui_scale
-		if d.length() <= settle:
-			return   # still settling on the button (a press and tremor wobble it a few px)
-		_atk_settled = true
-		_atk_origin += d.normalized() * settle   # measure from where it settled, so the rate does not jump
-	_atk_origin = _follow(_atk_origin, p)
-	_atk_vec = (p - _atk_origin) / (AIM_DRAG_RADIUS * ui_scale)
-	_update_look_cmd()
-	_overlay_draw.queue_redraw()
-
-
-## Floating drag origin: stays put while the finger is within AIM_DRAG_RADIUS, then trails it at exactly that radius
-## (the finger can leave the button and wander anywhere; it keeps aiming until it is lifted).
-func _follow(base: Vector2, p: Vector2) -> Vector2:
-	var radius: float = AIM_DRAG_RADIUS * ui_scale
-	var d: Vector2 = p - base
-	if d.length() > radius:
-		return p - d.normalized() * radius
-	return base
-
-
-## The ATTACK drag's curved aim command (the smoothing target), with the engage / exit hysteresis.
-func _update_look_cmd() -> void:
-	var mag: float = _atk_vec.length()
-	if _atk_engaged:
-		_atk_engaged = mag >= LOOK_DEADZONE
-	else:
-		_atk_engaged = mag >= AIM_ENGAGE
-	_look_cmd = look_response(_atk_vec) if _atk_engaged else Vector2.ZERO
+				_attack_move(p, rel)
 
 
 ## A finger lifted (or the engine cancelled it: `canceled`, which can never attack). `up_pos` is where it lifted
@@ -822,14 +718,9 @@ func _drop_owner(index: int, takeover: bool = false) -> void:
 
 func _begin_attack_gesture(index: int, p: Vector2, b: TouchButton) -> void:
 	_atk_index = index
-	_atk_origin = p
 	_atk_down_pos = p
 	_atk_down_ms = _now()
-	_atk_vec = Vector2.ZERO
-	_atk_settled = false
-	_atk_engaged = false
-	_aim_smoothed = Vector2.ZERO
-	_look_cmd = Vector2.ZERO
+	_atk_moved = false
 	_atk_gesture = Gesture.PENDING
 	_atk_slop_px = clampf(ATTACK_SLOP_MM * device_px_per_mm(), ATTACK_SLOP_MIN_PX, ATTACK_SLOP_MAX_PX)
 	b.pressed_visual = true   # the touch is registered (the visual does not claim an attack)
@@ -838,24 +729,25 @@ func _begin_attack_gesture(index: int, p: Vector2, b: TouchButton) -> void:
 
 func _reset_attack_gesture() -> void:
 	_atk_index = -1
-	_atk_vec = Vector2.ZERO
-	_atk_engaged = false
-	_atk_settled = false
-	_look_cmd = Vector2.ZERO
-	_aim_smoothed = Vector2.ZERO
+	_atk_moved = false
 	_atk_gesture = Gesture.NONE
-	if _overlay_draw != null:
-		_overlay_draw.queue_redraw()
 
 
-## The ATTACK finger moved to `p`. Past the slop circle (or once the aim drag engages) the gesture is LOOK for good; the aim
-## itself is exactly what it was (same call, same frame: classification adds no latency to the camera).
-func _attack_move(p: Vector2) -> void:
-	if _atk_gesture != Gesture.LOOK and p.distance_to(_atk_down_pos) > _atk_slop_px:
+## The ATTACK finger moved to `p` by `rel`. Inside the slop circle the gesture is still undecided and the camera stays put (a
+## tap's tremor must not turn it). The event that leaves the circle makes the gesture LOOK for good and contributes only the
+## part of the movement beyond the circle (nothing jumps, nothing already inside is replayed); from then on every movement goes
+## through the Classic path (_look) times the compact gain.
+func _attack_move(p: Vector2, rel: Vector2) -> void:
+	if _atk_gesture != Gesture.LOOK:
+		var off: Vector2 = p - _atk_down_pos
+		var dist: float = off.length()
+		if dist <= _atk_slop_px:
+			return
 		_enter_look()
-	_aim_drag(p)
-	if _atk_engaged and _atk_gesture != Gesture.LOOK:
-		_enter_look()
+		rel = off / dist * (dist - _atk_slop_px)
+	if rel != Vector2.ZERO:
+		_atk_moved = true
+		_look(rel, attack_look_gain)
 
 
 func _enter_look() -> void:
@@ -985,9 +877,11 @@ func _send_axis(action: String, strength: float) -> void:
 	_send(action, strength > 0.0, strength)
 
 
-func _look(rel: Vector2) -> void:
+## The Classic look path: finger displacement -> mouse-look motion. The twin ATTACK drag uses it too, with `gain` = its
+## compact-input gain (1.0 = Classic).
+func _look(rel: Vector2, gain: float = 1.0) -> void:
 	look_total += rel.length()
-	_emit_mouse_motion(rel * LOOK_BASE_GAIN * look_gain)
+	_emit_mouse_motion(rel * LOOK_BASE_GAIN * look_gain * gain)
 
 
 ## One mouse-look motion event: the single path both schemes use to turn the players.
@@ -1050,8 +944,6 @@ func release_all() -> void:
 		b.queue_redraw()
 	if _stick_draw != null:
 		_stick_draw.queue_redraw()
-	if _overlay_draw != null:
-		_overlay_draw.queue_redraw()
 	released_all.emit()
 
 
@@ -1089,19 +981,3 @@ func _draw_one_stick(base: Vector2, vec: Vector2, radius: float, active: bool) -
 	d.draw_texture_rect(TouchButton.stick_knob_texture(), Rect2(knob - Vector2(ir, ir), Vector2(ir, ir) * 2.0), false, tint)
 	var hl: Color = PUI.EMBER_BRIGHT if active else PUI.EDGE_BRASS.lightened(0.25)
 	d.draw_arc(knob, ir, 0.0, TAU, 40, Color(hl.r, hl.g, hl.b, 0.8 * a), 1.5, true)
-
-
-## Drag ring of a finger that went down on ATTACK and is aiming: a faint ember ring around the touch-down
-## point and a small thumb dot (above the buttons, so ATTACK does not hide it). Nothing while it is not dragging.
-func _draw_overlay() -> void:
-	if _atk_index < 0 or _atk_vec.length() <= LOOK_DEADZONE * 0.5:
-		return
-	var radius: float = AIM_DRAG_RADIUS * ui_scale
-	var ring := PUI.EMBER
-	var dot: Vector2 = _atk_origin + _atk_vec.limit_length(1.0) * radius
-	_overlay_draw.draw_arc(_atk_origin, radius, 0.0, TAU, 48, Color(0, 0, 0, 0.35), 5.0, true)
-	_overlay_draw.draw_arc(_atk_origin, radius, 0.0, TAU, 48, Color(ring.r, ring.g, ring.b, 0.6), 3.0, true)
-	_overlay_draw.draw_line(_atk_origin, dot, Color(ring.r, ring.g, ring.b, 0.5), 3.0, true)
-	_overlay_draw.draw_circle(_atk_origin, 5.0 * ui_scale, Color(ring.r, ring.g, ring.b, 0.6))
-	_overlay_draw.draw_circle(dot, 13.0 * ui_scale, Color(ring.r, ring.g, ring.b, 0.65))
-	_overlay_draw.draw_arc(dot, 13.0 * ui_scale, 0.0, TAU, 20, Color(PUI.EMBER_BRIGHT.r, PUI.EMBER_BRIGHT.g, PUI.EMBER_BRIGHT.b, 0.95), 2.5, true)

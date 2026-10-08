@@ -69,7 +69,7 @@ func _ready() -> void:
 	_check(Input.is_action_pressed("attack"), "attack held before the lock")
 	tc._touch_move(6, atk_btn.center + Vector2(-90, 0), Vector2.ZERO)
 	await _frames(3)
-	_check(tc._look_cmd != Vector2.ZERO and tc._atk_index == 6 and tc._owners[5]["kind"] == TouchControls.Owner.NONE, "the attack drag is live before the lock")
+	_check(tc._atk_gesture == TouchControls.Gesture.LOOK and tc._atk_index == 6 and tc._owners[5]["kind"] == TouchControls.Owner.NONE, "the attack drag is live before the lock")
 	var yaw_live: float = player_node.rotation.y if player_node != null else 0.0
 
 	# Progress made in the run, not yet saved: potions stashed, a perk bought, a touch setting changed.
@@ -87,7 +87,7 @@ func _ready() -> void:
 	_check(not Input.is_action_pressed("attack"), "held attack released on background")
 	_check(tc._owners.is_empty() and tc._held.is_empty(), "touch layer holds no fingers/actions after background")
 	_check(not Input.is_action_pressed("move_right") and not tc._stick_active, "movement is released by the background too")
-	_check(tc._look_cmd == Vector2.ZERO and tc._atk_index == -1, "look velocity and the attack drag are reset by the background")
+	_check(tc._atk_gesture == TouchControls.Gesture.NONE and tc._atk_index == -1, "the attack drag is reset by the background")
 	_check(get_tree().paused and menu.is_menu_open(), "the run is paused behind the pause menu")
 	_check(SaveManager.save_count == saves_before + 1, "profile written on background (%d -> %d)" % [saves_before, SaveManager.save_count])
 	var clock_day: int = GameClock.current_day if "current_day" in GameClock else -1

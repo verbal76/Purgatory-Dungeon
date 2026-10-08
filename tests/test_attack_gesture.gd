@@ -43,7 +43,11 @@ func _flush() -> void:
 	Input.flush_buffered_events()
 
 
+var _last_pos: Dictionary = {}   # finger index -> last reported position (a real drag event carries the movement since the previous one)
+
+
 func _touch(index: int, pos: Vector2, pressed: bool, canceled: bool = false) -> void:
+	_last_pos[index] = pos
 	var e := InputEventScreenTouch.new()
 	e.index = index
 	e.position = pos
@@ -57,7 +61,8 @@ func _drag(index: int, pos: Vector2) -> void:
 	var e := InputEventScreenDrag.new()
 	e.index = index
 	e.position = pos
-	e.relative = Vector2.ZERO
+	e.relative = pos - Vector2(_last_pos.get(index, pos))
+	_last_pos[index] = pos
 	Input.parse_input_event(e)
 	_flush()
 
@@ -146,9 +151,7 @@ func _constants_tests(tc: TouchControls) -> void:
 	_check(TouchControls.ATTACK_PULSE_MAX_MS > TouchControls.ATTACK_PULSE_MS and TouchControls.ATTACK_PULSE_MAX_MS <= 300, "the hard cap on a scheduled release is %d ms" % TouchControls.ATTACK_PULSE_MAX_MS)
 	var c: Vector2 = (tc.buttons["attack"] as TouchButton).center
 	_touch(0, c, true)
-	var engage_px: float = TouchControls.AIM_SETTLE_PX * tc.ui_scale + TouchControls.AIM_ENGAGE * TouchControls.AIM_DRAG_RADIUS * tc.ui_scale
 	_check(tc._atk_slop_px >= TouchControls.ATTACK_SLOP_MIN_PX and tc._atk_slop_px <= TouchControls.ATTACK_SLOP_MAX_PX, "the slop radius (%.1f px) is inside its clamp" % tc._atk_slop_px)
-	_check(tc._atk_slop_px < engage_px, "the slop radius (%.1f px) is below the camera's engage distance (%.1f px): the camera cannot turn while the gesture is undecided" % [tc._atk_slop_px, engage_px])
 	var mm: float = tc._atk_slop_px / tc.device_px_per_mm()
 	_check(mm > 1.0 and mm < 2.2, "on the Pixel-class panel the slop is %.2f mm (~%.1f dp; Android's own touch slop is 8 dp)" % [mm, mm / 25.4 * 160.0])
 	_touch(0, c, false)
@@ -192,7 +195,7 @@ func _tap_hold_tests(tc: TouchControls) -> void:
 		_drag(0, c + Vector2(rng.randf_range(-4.0, 4.0), rng.randf_range(-4.0, 4.0)))
 	_check(_presses() == 1 and _attack_events == [true, false], "holding 5 s still never repeats (presses %d, events %s)" % [_presses(), _attack_events])
 	_check(not Input.is_action_pressed("attack") and tc._held.is_empty(), "...and nothing is left pressed")
-	_check(tc._look_cmd == Vector2.ZERO and _real_motion().is_empty(), "...and the resting thumb did not turn the camera")
+	_check(_real_motion().is_empty(), "...and the resting thumb did not turn the camera")
 	_touch(0, c, false)
 	await _adv(tc, 300)
 	_check(_presses() == 1, "lifting after a hold sends no second attack")
@@ -221,17 +224,14 @@ func _drag_tests(tc: TouchControls) -> void:
 	await _adv(tc, 20)
 	_drag(0, c + Vector2(40, 0))
 	_check(tc._atk_gesture == TouchControls.Gesture.LOOK, "a drag past the slop circle is a look gesture on the very event")
-	_check(tc._look_cmd != Vector2.ZERO and tc._look_cmd.distance_to(TouchControls.look_response(tc._atk_vec)) < 0.001, "...and the aim command is the unchanged aim response (no classification latency): %s" % tc._look_cmd)
-	_motion.clear()
-	await get_tree().process_frame   # this frame's _process integrates the aim and delivers it at once
-	_flush()
-	_check(not _real_motion().is_empty(), "...the camera turns in the first rendered frame (%d look events)" % _real_motion().size())
+	var want_px: float = (40.0 - tc._atk_slop_px) * TouchControls.LOOK_BASE_GAIN * tc.look_gain * tc.attack_look_gain
+	_check(_real_motion().size() == 1 and absf(float(_real_motion()[0][0]) - want_px) < 0.01, "...and the camera turns on that very event by the Classic path: the movement beyond the slop circle x gain (%s vs %.2f px)" % [_real_motion(), want_px])
 	_check(_real_motion().all(func(m): return m[0] > 0.0), "...in the dragged direction")
 	await _adv(tc, 3000)
 	_check(_presses() == 0 and not Input.is_action_pressed("attack"), "dragging for 3 s: zero attacks")
 	_touch(0, c + Vector2(40, 0), false)
 	await _adv(tc, 400)
-	_check(_presses() == 0 and tc._look_cmd == Vector2.ZERO, "lifting after a drag: zero attacks, the turn stops")
+	_check(_presses() == 0 and tc._atk_gesture == TouchControls.Gesture.NONE, "lifting after a drag: zero attacks, the gesture is over")
 
 	# DRAG then back to the centre: look once, look until the lift
 	for back_after in [30, 400]:
@@ -313,7 +313,7 @@ func _end_of_touch_tests(tc: TouchControls) -> void:
 		await _adv(tc, 60)
 		_touch(0, c, false, true)
 		await _adv(tc, 400)
-		_check(_presses() == 0 and tc._owners.is_empty() and tc._atk_index == -1 and tc._look_cmd == Vector2.ZERO, "[%s] a cancelled pointer attacks nothing and clears the gesture" % phase)
+		_check(_presses() == 0 and tc._owners.is_empty() and tc._atk_index == -1 and tc._atk_gesture == TouchControls.Gesture.NONE, "[%s] a cancelled pointer attacks nothing and clears the gesture" % phase)
 	_reset_counts()
 	_touch(0, c, true)
 	await _adv(tc, 60)
@@ -408,7 +408,7 @@ func _lifecycle_tests() -> void:
 			await get_tree().process_frame
 			_flush()
 			_check(not Input.is_action_pressed("attack"), "[%s/%s] nothing is attacking after it" % [mode, phase])
-			_check(tc._owners.is_empty() and tc._atk_index == -1 and tc._held.is_empty() and tc._pending_release.is_empty() and tc._look_cmd == Vector2.ZERO, "[%s/%s] every finger and state is forgotten" % [mode, phase])
+			_check(tc._owners.is_empty() and tc._atk_index == -1 and tc._held.is_empty() and tc._pending_release.is_empty() and tc._atk_gesture == TouchControls.Gesture.NONE, "[%s/%s] every finger and state is forgotten" % [mode, phase])
 			var before: int = _presses()
 			if mode != "freed":
 				await _adv(tc, 1200)   # the finger is still down on the screen
@@ -504,22 +504,21 @@ func _failsafe_tests() -> void:
 	await get_tree().process_frame
 
 
-## At the smallest UI size the camera engages sooner (distances scale with the size setting): the gesture must already be
-## look by then, so the camera never turns under a still-undecided (or attacking) gesture.
+## At the smallest UI size the camera must still never turn under a still-undecided (or attacking) gesture.
 func _small_ui_tests() -> void:
 	SettingsManager.gameplay_settings[TouchControls.KEY_SCALE] = 60.0
 	var tc: TouchControls = _new_layer()
 	await get_tree().process_frame
 	_check(is_equal_approx(tc.ui_scale, 0.6), "UI size 60%")
 	var c: Vector2 = (tc.buttons["attack"] as TouchButton).center
-	var engage_px: float = TouchControls.AIM_SETTLE_PX * tc.ui_scale + TouchControls.AIM_ENGAGE * TouchControls.AIM_DRAG_RADIUS * tc.ui_scale
 	_reset_counts()
 	_touch(0, c, true)
 	for step in 40:   # a slow drag, 1 px at a time
 		_drag(0, c + Vector2(float(step + 1), 0.0))
-		if tc._look_cmd != Vector2.ZERO:
-			_check(tc._atk_gesture == TouchControls.Gesture.LOOK, "the camera only ever turns under a look gesture (at %d px, engage %.1f px)" % [step + 1, engage_px])
+		if not _real_motion().is_empty():
+			_check(tc._atk_gesture == TouchControls.Gesture.LOOK, "the camera only ever turns under a look gesture (at %d px, slop %.1f px)" % [step + 1, tc._atk_slop_px])
 			break
+		_check(tc._atk_gesture != TouchControls.Gesture.LOOK, "no camera turn and no look gesture inside the slop circle (%d px)" % (step + 1))
 	await _adv(tc, 1500)
 	_touch(0, c + Vector2(40, 0), false)
 	await _adv(tc, 300)

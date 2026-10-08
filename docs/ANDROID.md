@@ -68,7 +68,7 @@ sensitivity apply to both.
 ### Twin-stick design notes
 - **Why**: Classic needs repeated swipes to turn while moving. In twin-stick the Attack button is the aim control, as
   in Brawl Stars (drag from the attack button to aim, abilities in an arc around it): the right thumb rests on Attack
-  and turning is a drag from it, at a turn rate, while attacking. There is no separate right stick.
+  and turning is a drag from it (the Classic swipe path times a compact-input gain), while attacking. There is no separate right stick.
 - **Ownership**: every finger is owned by exactly one thing from touch-down to touch-up (`Owner`:
   `BUTTON` > `STICK` (left lower 40%) > `NONE`; Classic also has `LOOK` for its swipe). A touch on a button is that
   button. **A finger that starts on empty screen outside the move zone is ignored** in twin-stick (there is no look
@@ -91,37 +91,28 @@ sensitivity apply to both.
   Every gesture is at most one attack. The attack itself is a **pulse**: the layer presses `attack` and releases it
   itself `ATTACK_PULSE_MS` (80 ms, at least two 30 Hz physics ticks so polling and event gameplay both see it) later, so
   a finger never "holds" attack. There is no hold-to-charge or auto-repeat on any control scheme (the Rapid Attack
-  ability was removed everywhere). Camera cost: none. Classification only adds a
-  flag; the aim path is the unchanged per-rendered-frame integration, and the slop circle is smaller than the aim's
-  engage distance, so the camera cannot start turning under an undecided gesture (the gesture is also forced to look the
-  moment the aim engages).
+  ability was removed everywhere). Camera cost: none. The camera does not turn while the
+  gesture is undecided (inside the slop circle); the event that leaves the circle contributes the movement beyond the
+  circle, so nothing jumps and nothing is lost.
   Tuning (`ATTACK_*` in `touch_controls.gd`): `ATTACK_SLOP_MM` 1.5 mm = ~9.5 dp (Android's own touch slop is 8 dp), converted to
   virtual px with the panel dpi (Pixel: ~15 px) and clamped to 8-20 px; `ATTACK_INTENT_MS` 150 (a tap is ~60-150 ms,
   a look drag starts moving within ~100 ms); `ATTACK_PULSE_MAX_MS` 250 hard cap on any scheduled release. These are
   starting values reasoned from Android touch behaviour; only a real phone can say whether they feel right.
-- **Input path and frame pacing**: the look command is turned into one `InputEventMouseMotion` (device 0) per
-  **rendered frame** by `TouchControls._process` (`_aim_frame`) with the REAL frame delta (px = rate x dt, dt capped at
-  `LOOK_MAX_STEP` = 0.25 s so a pause or resume cannot jump the camera) and delivered the same frame
-  (`Input.flush_buffered_events()`). It is the same mouse-look path the Classic swipe uses. The players show the turn when
-  it arrives: `brute_player.gd` / `mage_player.gd` call `_apply_yaw_now()` in their mouse-motion branch (the view is still
-  locked while blocking / dead, exactly as the tick always did) instead of waiting for the next 30 Hz physics tick.
-  Why: the aim used to be applied from the physics tick and shown at the next tick, so at 20-40 fps rendered frames saw
-  0, 1 or several back-to-back ticks: the camera stood still, then caught up (measured in the real engine loop with
-  `tools/aim_pacing_probe.gd`, modelled in `tests/test_aim_pacing.gd`). Now the same finger turns the same angle per
-  second at any frame rate. Rates are physical (rad/s). The players have no pitch today and ignore `relative.y`; it is
-  sent at `LOOK_PITCH_RATIO` for when they get one.
-- **Response** (`look_response`, then the filter): d = offset / radius, measured from the touch-down point after the
-  first `AIM_SETTLE_PX` (6 px) of finger travel is ignored (the press itself wobbles the thumb; distance, not time, so a
-  fast deliberate drag is not delayed). Turning **engages** at d >= `AIM_ENGAGE` (0.20, about 18 px) and stays engaged
-  until d < `LOOK_DEADZONE` (0.12): a thumb hovering at the edge does not chatter. While engaged
-  x = (d - 0.12) / 0.88 and rate = `LOOK_MAX_YAW_RATE` * x^`LOOK_CURVE_EXP` * Look Sensitivity, continuous (about 1% of
-  full at the entry point, exactly 0 at the exit). The drag origin follows a thumb dragged past the radius (never runs out
-  of travel, reversing is immediate).
-- **Aim Smoothing** (Options slider, `TouchAimSmoothing`, 0-100%, default 60%): an exponential low-pass on the command,
-  tau = `AIM_SMOOTH_TAU_MAX` (120 ms) x slider (0% = off = the raw path, 60% = 72 ms, 100% = 120 ms), alpha = 1 - exp(-dt / tau)
-  so it is frame-rate independent (dt capped by `LOOK_MAX_STEP`). It removes tremor so the aim is not loose or wavy. Lifting
-  the finger, a touch cancel, background, lock or pause zero the filtered command at once (no coasting). Applies live;
-  Classic is unaffected.
+- **Look path**: the ATTACK finger turns the players through **exactly the Classic swipe path**
+  (`TouchControls._look`): each drag event's `relative` movement becomes `relative * LOOK_BASE_GAIN * Look Sensitivity`
+  mouse px (device 0 `InputEventMouseMotion`), which the players turn on at once (`_apply_yaw_now()`; the view is still
+  locked while blocking / dead). The only difference from Classic is a fixed **compact-input gain**
+  (`compact_gain(view width, ATTACK radius)` = Classic's right-thumb sweep, `COMPACT_CLASSIC_TRAVEL` 0.5 of the canvas
+  width, divided by the ATTACK diameter, clamped to `COMPACT_GAIN_MIN` 1.5 .. `COMPACT_GAIN_MAX` 3.0; 1280 px canvas at
+  100% size: 640 / 200 = 3.2, so 3.0). It stands in for the smaller travel area: 180 degrees take about 30 mm of thumb
+  travel (the Classic swipe needs about 90 mm). Look Sensitivity (the slider) multiplies the same product once; nothing
+  else scales it. Displacement-based: no dead zone, curve, smoothing, velocity, deflection-rate or coasting; a still
+  thumb turns nothing, lifting it stops the camera at once, and the finger may leave the button and keep turning
+  (retouching starts a new gesture). The players have no pitch today and ignore `relative.y`.
+  History: v7.1-v8.2 used a joystick-style *rate* model for the ATTACK drag (deflection from the touch-down point ->
+  turn rate through a dead zone, hysteresis, x^2 curve and an exponential low-pass "Aim Smoothing"). Physical testing
+  found it wavy/squishy compared to Classic: the camera kept turning while the thumb stopped, lagged behind it, and
+  its response was non-linear. That path (and the Aim Smoothing slider, the drag ring and `look_step`) was removed.
 - **Lifecycle**: `release_all()` (background AND coming back, lock, call, shade, window focus lost / gained, pause menu,
   layer disabled or hidden, scheme change, node exit) and an engine touch cancel clear every finger, the stick, the
   drag, the attack gesture and the look command, so nothing keeps moving, turning or attacking after returning;
@@ -135,26 +126,19 @@ sensitivity apply to both.
   release = 4 s of automatic fire) was reachable by resting the look thumb on ATTACK, and by a release lost to a pause.
   The Rapid Attack ability has since been removed from the game entirely (owner decision), so the players no longer
   have any hold/charge state: one press = one attack on every control scheme.
-- **Visuals**: the move stick has a faint idle marker at rest (`STICK_IDLE_ALPHA`) and an ember rim when held; a
-  faint ember drag ring (drawn above the buttons) shows while dragging from ATTACK. No other marker exists on the right.
-  No shaders, nothing redrawn per frame.
+- **Visuals**: the move stick has a faint idle marker at rest (`STICK_IDLE_ALPHA`) and an ember rim when held. The ATTACK
+  drag draws nothing (it is a displacement control, there is no deflection to show). No shaders, nothing redrawn per frame.
 - **Onboarding** teaches the active scheme: move ("Drag the left side to move"), aim ("Drag from Attack to look and
-  aim", pulses ATTACK, done once the drag has been held out `AIM_DONE_SECONDS`), attack, use, block, burst. Same
+  aim", pulses ATTACK, done once the drag has turned the camera for `AIM_DONE_SECONDS`), attack, use, block, burst. Same
   persistence and 3-showing retirement; a saved `look_stick` flag from the removed right-stick hint is ignored (it never
   replays and teaches nothing now); hints are placed on the first spot that touches no control.
 
 ### Twin-stick tuning constants (`scripts/touch/touch_controls.gd`)
 | Constant | Value | Meaning |
 |---|---|---|
-| `AIM_DRAG_RADIUS` | 90 px | drag travel from the touch-down point for full deflection (x Control Size) |
-| `AIM_SETTLE_PX` | 6 px | finger travel after touch-down that is ignored |
-| `AIM_ENGAGE` | 0.20 | deflection that starts the turn (hysteresis entry) |
-| `LOOK_DEADZONE` | 0.12 | deflection below which an engaged turn stops (hysteresis exit; the response starts here) |
-| `AIM_SMOOTH_TAU_MAX` | 0.12 s | low-pass time constant at 100% Aim Smoothing (default slider 60% = 72 ms) |
-| `LOOK_CURVE_EXP` | 2.0 (was 1.7) | response exponent (fine aim near centre, fast at the rim) |
-| `LOOK_MAX_YAW_RATE` | 4.2 rad/s (~240 deg/s) | full deflection at 100% sensitivity |
-| `LOOK_PITCH_RATIO` | 0.55 | pitch rate / yaw rate |
-| `LOOK_MAX_STEP` | 0.1 s | cap on one look step |
+| `COMPACT_CLASSIC_TRAVEL` | 0.5 | Classic's right-thumb sweep as a fraction of the canvas width (numerator of the compact gain) |
+| `COMPACT_GAIN_MIN` / `COMPACT_GAIN_MAX` | 1.5 / 3.0 | clamp of the compact-input gain (ATTACK drag displacement x gain = Classic displacement) |
+| `LOOK_BASE_GAIN` | 1.4 | virtual px of swipe -> mouse px; shared by Classic and the ATTACK drag (x Look Sensitivity) |
 | `TWIN_ATTACK_R` / `TWIN_SUB_R` / `TWIN_USE_R` | 100 / 56 / 60 px | radii at 100% size |
 | `TWIN_ARC_R`, `TWIN_ARC_START`, `TWIN_ARC_STEP` | 178 px, 165 deg, 40 deg | slide 165, kick 205, block 245, burst 285 deg (screen angles, 0 = right, 90 = down) around Attack |
 | `TWIN_USE_ANGLE` | 225 deg on a second ring | USE between kick and block |
@@ -195,7 +179,7 @@ densities clean. Imports are lossless (`compress/mode=0`, mipmaps on): crisp alp
 Geometry (art units, disc radius 1.0): rim 0.80-1.00 (10% of the diameter, two bevel planes per block), inner bevel
 0.715-0.80, slate face radius 0.715; the canvas half-size is 1.12 so the pressed glow fits (the game draws the base at half-size
 r x 1.12). The code-drawn pieces that carry meaning stay on top: charge fill (ember arc on the rim), flask cooldown arc and dark
-wedge, count badge, USE caption (Cinzel, `PUI.MIN_DISPLAY_SIZE`), the onboarding pulse, the drag ring, and for USE a thin ember ring.
+wedge, count badge, USE caption (Cinzel, `PUI.MIN_DISPLAY_SIZE`), the onboarding pulse, and for USE a thin ember ring.
 
 | State | When | Base | Icon |
 |---|---|---|---|
@@ -214,7 +198,7 @@ offset 0.07 r down), bezel 0.22 r (Pause/Map 0.18 r) with a hairline and inner s
 bezel when held. The move stick uses this language: a recessed well in a 0.10 r aged-brass bezel with a bone thumb in its
 own bezel; resting sticks keep the idle alpha (`STICK_IDLE_ALPHA` 0.62); the Control Opacity setting scales everything.
 
-Options > Gameplay > Touch Controls: control scheme, opacity, size, look sensitivity, aim smoothing. Buttons are laid out inside the
+Options > Gameplay > Touch Controls: control scheme, opacity, size, look sensitivity. Buttons are laid out inside the
 system safe area (cutouts, rounded corners, gesture bar). Onboarding shows one contextual hint at a
 time, fades when the player does the thing, is saved, and is retired after 3 ignored showings.
 
@@ -251,8 +235,8 @@ Developer tools off also turns it off). Real-device numbers are still to be gath
 ## Testing
 `tests/run_tests.sh` includes `test_touch_controls` (the Classic scheme, run with `PURGATORY_FORCE_TOUCH=1`),
 `test_attack_gesture` (tap / hold = exactly one attack, drag and drag-back = zero, a new touch for a new attack, cancel / lost pointer / background / focus / pause / hide / free clear everything, the fail-safe on injected stuck states, no classification latency on the camera, Classic unchanged; plus the real Barbarian and Mage counting attacks and bolts over seconds, including the lost-release field scenario),
-`test_aim_pacing` (frame-time independence of the aim across steady and spiky pacing, bounded bursts, zeroing on release/cancel/background, pause/resume), `test_twin_stick` (default/persisted scheme, layout at five canvas shapes with and without cutouts, mm minimums,
-ownership of simultaneous fingers, look response and frame-rate independence, attack drag, lifecycle,
+`test_twin_stick` (default/persisted scheme, layout at five canvas shapes with and without cutouts, mm minimums,
+ownership of simultaneous fingers, the compact-gain displacement look path, attack drag, lifecycle,
 Options selector, onboarding, plus the real Barbarian and Mage turned by the ATTACK drag, empty right-side screen inert),
 `test_mobile_ui`, `test_app_lifecycle` and `test_input_desktop` (proves keyboard/controller bindings
 are unchanged). Procedural generation is untouched by the Android work.
