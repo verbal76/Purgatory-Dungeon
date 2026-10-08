@@ -122,16 +122,48 @@ var _live_count           : int   = 0    # Live (not dead) enemy count
 # loading_screen.gd polls this as a race-condition safety check.
 var _initial_spawn_done   : bool  = false
 
+# ── Pool pre-warm (entry stage worker) ─────────────────────────────────────────
+# Instantiating an enemy (scene instance, its _ready, a mage's six pooled fireballs) costs about 5-10 ms on a desktop
+# core and several times that on a phone. During play that landed as a spike whenever the pool was empty: the first
+# top-ups after the opening wave, every pressure spawn, and every enemy that was freed (not recycled) and replaced.
+# So a few spare enemies are built here, behind the loading screen, one per frame, and parked in the pools; the
+# main game file waits for stage_near_done before it hands control over (same protocol as the other stage workers).
+const PREWARM_MAX   : int     = 12                       # upper bound on parked spares built at entry
+const PREWARM_SPARE : int     = 2                        # spares beyond the opening wave's shortfall
+const PARK_POSITION : Vector3 = Vector3(0.0, -400.0, 0.0)  # far under the dungeon: no AoE / distance query reaches a parked enemy
+var stage_near_done : bool = false
+var stage_done      : bool = false
+var _prewarmed      : int  = 0
+
 # Set true when the run ends (day 30) — stops all reinforcement spawning.
 # The live population drains naturally as the player kills enemies.
 var _spawning_locked      : bool  = false
 
 # ── Timers — all updated in _physics_process ──────────────────────────────────
 var _cull_timer       : float = 0.0
+var _paused_since_msec : int  = 0     # wall-clock start of the current pause (0 = not paused)
 var _respawn_timer    : float = 0.0
 var _diff_timer       : float = 0.0
 var _pressure_timer   : float = 0.0   # Tracks seconds since player last took damage
+# ── Opening: keep the live population NEAR the player (see _recycle_far_sleepers) ──────────────────────────────────────
+# An enemy that is off-camera and more than 20 m away is frozen in place (character_base, off-screen freeze) and still
+# counts against the population cap, so the cap used to fill with sleepers left behind at the spawn points (the first
+# ones are placed up to 40 m out, and the player walks away from them) and nothing new was placed near the player until
+# the day-3 stale cull (CULL_START_DAY) recycled a quarter of them: minutes of empty dungeon, then everyone at once.
+# Now, when the cap is full, a growing share of it is kept within NEAR_RADIUS (the freeze distance) of the player: far,
+# off-screen sleepers go back to the pool (silently, they are not in view) and the top-up re-places them, nearest
+# spawn points first, close to the player and out of sight.
+const ZONE_MIN_POINTS      : int   = 4      # a zone with fewer spawn points than this is widened (see _refresh_active_zone)
+const ZONE_WIDEN_MAX       : float = 1.75   # ... up to 1.75 x active_zone_radius (40 m -> 70 m)
+const NEAR_RADIUS         : float = 20.0   # metres: awake distance, = character_base OFF_SCREEN_FREEZE_DIST_SQ (20 m)
+const RECYCLE_PER_TICK    : int   = 2      # far sleepers sent back per top-up tick (every ~4 s): the ramp is gradual
+const OPENING_RAMP_SECONDS: float = 120.0  # game time over which the near share grows from START to FULL
+const NEAR_FRACTION_START : float = 0.25   # share of the population cap wanted near the player at the start (cap 15 -> 4)
+const NEAR_FRACTION_FULL  : float = 0.60   # ... and once the ramp is over (cap 15 -> 9)
+var _run_time : float = 0.0                # game seconds the manager has been running (stops while paused)
+var _last_near_count : int = 0               # enemies within NEAR_RADIUS at the last _recycle_far_sleepers() count
 const DIFF_CHECK_INTERVAL    : float = 10.0
+const KILL_PLANE_Y            : float = -15.0  # Same floor the player uses (brute_player.gd)
 const PRESSURE_THRESHOLD     : float = 30.0  # Seconds of no damage before pressure spawn
 const PRESSURE_CHECK_INTERVAL: float = 5.0   # How often to check pressure condition
 const BASE_RESPAWN_INTERVAL  : float = 4.0   # Baseline interval — compressed by day in _check_difficulty_escalation
@@ -182,6 +214,11 @@ func boot_up(
 	print("Player valid: ", player_node != null)
 	print("Brute scene: ", brute_scene != null, "  Mage scene: ", mage_scene != null)
 
+	# GLOBAL_PLAYER_LAST_DAMAGE_TIME is static and starts at 0 (or holds the last
+	# run's value), which made the "no damage for 30s" pressure spawn fire the
+	# moment a run began. Treat run start as the last "damage" moment.
+	CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME = Time.get_ticks_msec() * 0.001
+
 	_player            = player_node
 	_brute_scene       = brute_scene
 	_mage_scene        = mage_scene
@@ -228,10 +265,14 @@ func boot_up(
 
 	if typed_spawns.is_empty():
 		push_warning("EnemyManager: no spawn points registered. No enemies will spawn.")
+		stage_near_done = true
+		stage_done = true
 		return
 
 	if _brute_scene == null and _mage_scene == null:
 		push_warning("EnemyManager: no enemy scenes assigned. No enemies will spawn.")
+		stage_near_done = true
+		stage_done = true
 		return
 
 	_all_spawns = typed_spawns.duplicate()
@@ -289,6 +330,59 @@ func _dist_sq_to_nearest(pos: Vector3, positions: Array) -> float:
 	return 0.0 if best == INF else best
 
 
+# Same answer as _dist_sq_to_nearest() for a torch list bucketed by _bucket_positions(): scans square
+# rings of cells outward from the point and stops as soon as no farther ring can hold a closer torch.
+# The boot used to compare every candidate spawn with every torch (~150 x ~760 distances).
+const _BUCKET : float = 10.0
+
+func _bucket_positions(positions: Array) -> Dictionary:
+	var grid : Dictionary = {}
+	var lo := Vector2i(1 << 30, 1 << 30)
+	var hi := Vector2i(-(1 << 30), -(1 << 30))
+	for p in positions:
+		var c := Vector2i(int(floorf(p.x / _BUCKET)), int(floorf(p.z / _BUCKET)))
+		if grid.has(c):
+			(grid[c] as Array).append(p)
+		else:
+			grid[c] = [p]
+		lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
+		hi = Vector2i(maxi(hi.x, c.x), maxi(hi.y, c.y))
+	if not positions.is_empty():
+		grid["_lo"] = lo
+		grid["_hi"] = hi
+	return grid
+
+
+func _dist_sq_to_nearest_bucketed(pos: Vector3, grid: Dictionary) -> float:
+	if not grid.has("_lo"):
+		return 0.0
+	var lo : Vector2i = grid["_lo"]
+	var hi : Vector2i = grid["_hi"]
+	var cx : int = int(floorf(pos.x / _BUCKET))
+	var cz : int = int(floorf(pos.z / _BUCKET))
+	var best : float = INF
+	var ring : int = 0
+	# Rings reach every torch once they span the whole bucketed area from the point's own cell.
+	var max_ring : int = maxi(maxi(absi(cx - lo.x), absi(cx - hi.x)), maxi(absi(cz - lo.y), absi(cz - hi.y)))
+	while ring <= max_ring:
+		# Rings from `ring` outward are at least (ring - 1) cells away horizontally.
+		if ring > 1 and best <= (float(ring - 1) * _BUCKET) * (float(ring - 1) * _BUCKET):
+			break
+		for dx in range(-ring, ring + 1):
+			for dz in range(-ring, ring + 1):
+				if maxi(absi(dx), absi(dz)) != ring:
+					continue
+				var cell = grid.get(Vector2i(cx + dx, cz + dz))
+				if cell == null:
+					continue
+				for p in cell:
+					var d : float = pos.distance_squared_to(p)
+					if d < best:
+						best = d
+		ring += 1
+	return 0.0 if best == INF else best
+
+
 # Delegates to dungeon_generation_function.is_position_inside_dungeon() which
 # uses the already-cached AABBs — zero additional raycasts needed.
 # This replaces the downward raycast which was hitting the safety floor and
@@ -321,13 +415,13 @@ func _refresh_active_zone() -> void:
 		return
 
 	var player_pos   : Vector3 = _player.global_position
-	var max_sq       : float   = active_zone_radius * active_zone_radius
+	var max_sq       : float   = pow(active_zone_radius * ZONE_WIDEN_MAX, 2.0)   # widest radius a sparse start may use
 	var min_sq       : float   = min_spawn_distance * min_spawn_distance
 	var sep_sq       : float   = min_separation_distance * min_separation_distance
 
 	# Cache the torch list once up-front — iterating it per-candidate would be
 	# O(candidates × torches) which is still fine at 50 × 300 but this saves it.
-	var torches : Array = _collect_torch_positions()
+	var torches : Dictionary = _bucket_positions(_collect_torch_positions())
 
 	# Collect and sort all candidates within the doughnut zone (min to max distance).
 	var candidates : Array = []
@@ -339,7 +433,7 @@ func _refresh_active_zone() -> void:
 				"data": entry,
 				"pos": pos,
 				"dist_sq": dist_sq,
-				"torch_dist_sq": _dist_sq_to_nearest(pos, torches),
+				"torch_dist_sq": _dist_sq_to_nearest_bucketed(pos, torches),
 			})
 
 	# Sort by composite score: mostly nearest-to-player, with a soft nudge
@@ -355,21 +449,29 @@ func _refresh_active_zone() -> void:
 
 	# Greedy selection: accept each candidate only if it is far enough from every
 	# already-accepted point. Builds spread from the inside out automatically.
-	_active_zone.clear()
-	var accepted_positions : Array = []   # Vector3 list — no per-frame allocation
+	# A start with no spawn point inside active_zone_radius (zone empty: no enemy at all until the player walks into some)
+	# or only one or two gets a wider radius, up to ZONE_WIDEN_MAX x, until it has ZONE_MIN_POINTS.
+	for widen in [1.0, 1.4, ZONE_WIDEN_MAX]:
+		var radius_sq : float = pow(active_zone_radius * float(widen), 2.0)
+		_active_zone.clear()
+		var accepted_positions : Array = []   # Vector3 list — no per-frame allocation
 
-	for candidate in candidates:
-		if _active_zone.size() >= initial_zone_size:
-			break
-		var pos      : Vector3 = candidate.pos
-		var too_close : bool   = false
-		for accepted_pos in accepted_positions:
-			if pos.distance_squared_to(accepted_pos) < sep_sq:
-				too_close = true
+		for candidate in candidates:
+			if _active_zone.size() >= initial_zone_size:
 				break
-		if not too_close:
-			_active_zone.append(candidate.data)
-			accepted_positions.append(pos)
+			if candidate.dist_sq > radius_sq:
+				continue   # the list is sorted by distance with a mild darkness nudge, so test every entry
+			var pos      : Vector3 = candidate.pos
+			var too_close : bool   = false
+			for accepted_pos in accepted_positions:
+				if pos.distance_squared_to(accepted_pos) < sep_sq:
+					too_close = true
+					break
+			if not too_close:
+				_active_zone.append(candidate.data)
+				accepted_positions.append(pos)
+		if _active_zone.size() >= ZONE_MIN_POINTS:
+			break
 
 
 # Fills the initial spawn queue from the active zone, capped at population_cap.
@@ -403,8 +505,12 @@ func _spawn_next_batch() -> void:
 	else:
 		print("✅ Initial spawn complete. Live enemies: ", _live_count)
 		_initial_spawn_done = true
+		var main : Node = get_parent()
+		if main != null and main.has_method("entry_mark"):
+			main.entry_mark("initial_spawn_done")
 		emit_signal("spawn_complete")
 		set_physics_process(true)
+		_prewarm_pool()   # coroutine: one spare per frame, flags stage_near_done / stage_done when finished
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -595,8 +701,10 @@ func _snap_to_floor(pos: Vector3) -> Vector3:
 	var from  := pos + Vector3(0.0, 1.5, 0.0)   # 1.5 m up — stays below the 3.5 m ceiling
 	var to    := pos + Vector3(0.0, -6.0, 0.0)
 	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.collision_mask = 1   # Static geometry only — ignore enemy capsules
-	var result := space.intersect_ray(query)
+	query.collision_mask = 1
+	# mask 1 also contains props/enemies/chests; ray_world skips those so a prop at the
+	# spawn point cannot lift the enemy onto its top.
+	var result := PhysicsUtil.ray_world(space, query)
 	if not result.is_empty():
 		return result.position + Vector3(0.0, 0.15, 0.0)
 	return pos + Vector3(0.0, 0.1, 0.0)
@@ -617,9 +725,10 @@ func _player_can_see_spawn(pos: Vector3) -> bool:
 	var from  := _player.global_position + Vector3(0.0, 1.6, 0.0)  # Eye height
 	var to    := pos + Vector3(0.0, 1.0, 0.0)
 	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.collision_mask = 1   # Static geometry only
+	query.collision_mask = 1
 	query.exclude        = [_player.get_rid()]
-	var result := space.intersect_ray(query)
+	# Only level geometry hides a spawn point; an enemy or prop in the line must not.
+	var result := PhysicsUtil.ray_world(space, query)
 	return result.is_empty()   # Empty = nothing blocking = player can see it
 
 
@@ -680,9 +789,14 @@ func _on_enemy_returned_to_pool(enemy: Node3D, is_brute: bool) -> void:
 	if not is_instance_valid(enemy):
 		return
 
-	enemy.visible = false
-	enemy.set_physics_process(false)
-	enemy.set_process(false)
+	# An enemy retired alive (stuck for 12 s, see brute_ai._retire_stuck) is still in the live list: take it out now
+	# so the pool and the live list never both hold it (a corpse was already dropped by the 1 s sweep).
+	var live_idx : int = _active_enemies.find(enemy)
+	if live_idx >= 0:
+		_active_enemies.remove_at(live_idx)
+		_live_count = maxi(_live_count - 1, 0)
+
+	_park(enemy)
 
 	var pool : Array = _brute_pool if is_brute else _mage_pool
 	if pool.size() < _current_pop_cap:
@@ -690,6 +804,64 @@ func _on_enemy_returned_to_pool(enemy: Node3D, is_brute: bool) -> void:
 	else:
 		# Pool full — just free. Keeps memory bounded on very long runs.
 		enemy.queue_free()
+
+
+# Parks an enemy: hidden, no processing, its animation stopped (an AnimationPlayer keeps evaluating a ~100-650 bone
+# skeleton every frame whatever is visible), and out of the "enemy" / "enemies" groups so the many loops over them
+# (area attacks, kill flashes, room locks, the touch tutorial) never see it. reset_for_pool() puts it back.
+func _park(enemy: Node3D) -> void:
+	enemy.visible = false
+	enemy.set_physics_process(false)
+	enemy.set_process(false)
+	var ap : Variant = enemy.get("anim_player")
+	if ap is AnimationPlayer:
+		(ap as AnimationPlayer).stop()
+		(ap as AnimationPlayer).active = false   # an inactive mixer is skipped by the engine's per-frame animation pass
+	enemy.remove_from_group("enemy")
+	enemy.remove_from_group("enemies")
+
+
+# Builds one spare enemy and parks it in the pool (see PREWARM_MAX). Dead + collision-less + far below the level
+# until reset_for_pool() revives it, so it can neither be hit, counted nor seen while parked.
+func _park_new_enemy(scene: PackedScene, is_brute: bool) -> bool:
+	if scene == null or _main_root == null:
+		return false
+	var enemy : Node3D = scene.instantiate() as Node3D
+	if enemy == null:
+		return false
+	enemy.visible = false
+	_main_root.add_child(enemy)   # _ready() runs here (the expensive part)
+	enemy.set("_is_dead", true)
+	enemy.set("collision_layer", 0)
+	enemy.global_position = PARK_POSITION
+	_park(enemy)
+	(_brute_pool if is_brute else _mage_pool).append(enemy)
+	_prewarmed += 1
+	return true
+
+
+# Entry stage: parks enough spares to cover the opening wave's shortfall (cap - live) plus PREWARM_SPARE, in the
+# type mix the spawner uses (mage_spawn_chance). One build per frame: the loading screen keeps animating.
+func _prewarm_pool() -> void:
+	var want : int = clampi(_current_pop_cap - _live_count + PREWARM_SPARE, PREWARM_SPARE, PREWARM_MAX)
+	var mages : int = int(round(float(want) * mage_spawn_chance)) if _mage_scene != null else 0
+	if _brute_scene == null:
+		mages = want
+	# The pressure spawn (_check_pressure_spawn) ignores the cap and always wants a MAGE: with the opening wave at the
+	# cap `want` is only PREWARM_SPARE and 20 % of that rounds to 0, so without this the first pressure spawn would
+	# instantiate a mage plus its six-fireball pool in the middle of play. Always park at least one.
+	if _mage_scene != null and not GlobalRunData.debug_no_mages:
+		mages = maxi(mages, 1)
+	if GlobalRunData.debug_no_mages:
+		mages = 0
+	if GlobalRunData.debug_no_brutes:
+		mages = want
+	for i in want:
+		var as_mage : bool = i < mages
+		_park_new_enemy(_mage_scene if as_mage else _brute_scene, not as_mage)
+		await get_tree().process_frame
+	stage_near_done = true
+	stage_done = true
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -700,6 +872,22 @@ func _physics_process(delta: float) -> void:
 	if not is_instance_valid(_player):
 		return
 
+	# This node is PROCESS_MODE_ALWAYS only so it can build enemies during the loading
+	# screen (that work is coroutine-driven, not timer-driven). Gameplay timers must
+	# freeze while the game is paused (pause menu, buff pick), otherwise enemies spawn
+	# behind the menu and the pressure-spawn timeout runs down while the player is away.
+	if get_tree().paused:
+		if _paused_since_msec == 0:
+			_paused_since_msec = Time.get_ticks_msec()
+		return
+	if _paused_since_msec != 0:
+		var paused_sec : float = (Time.get_ticks_msec() - _paused_since_msec) * 0.001
+		_paused_since_msec = 0
+		CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME = minf(
+			CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME + paused_sec,
+			Time.get_ticks_msec() * 0.001)
+
+	_run_time      += delta
 	_cull_timer    += delta
 	_respawn_timer += delta
 	_diff_timer    += delta
@@ -736,6 +924,10 @@ func _physics_process(delta: float) -> void:
 # turtling by force-spawning a type-3 buffed enemy from the closest type-3
 # spawn point. This runs independently of the normal population cap.
 func _check_pressure_spawn() -> void:
+	# After Day 30 the dungeon must drain to zero (stop_spawning); a careful player who stays
+	# undamaged would otherwise be sent a fresh enemy every 5 s and could never clear the portal.
+	if _spawning_locked:
+		return
 	if _player == null or not is_instance_valid(_player):
 		return
 	# Only trigger if enough time has passed since the last damage event.
@@ -841,6 +1033,39 @@ func _run_cull_sweep() -> void:
 			_live_count = maxi(_live_count - 1, 0)
 
 
+# Enemies that are alive right now. `_live_count` lags a kill by up to cull_check_interval and is
+# not refreshed while paused, so the Day-30 portal asks this instead.
+func count_live_enemies() -> int:
+	var n : int = 0
+	for e in _active_enemies:
+		if is_instance_valid(e) and e.get("_is_dead") != true:
+			n += 1
+	return n
+
+
+# World positions of every enemy that is alive right now (the last-stand minimap markers).
+func live_enemy_positions() -> Array:
+	var out : Array = []
+	for e in _active_enemies:
+		if is_instance_valid(e) and e.get("_is_dead") != true:
+			out.append((e as Node3D).global_position)
+	return out
+
+
+# Enemies have no kill plane (the player does): one that fell out of the world stays "alive"
+# forever and would keep the Day-30 portal shut. Kill any alive enemy below KILL_PLANE_Y.
+# Returns how many were rescued. take_damage(.., null) credits no kill to the player.
+func rescue_stranded_enemies() -> int:
+	var rescued : int = 0
+	for e in _active_enemies:
+		if not is_instance_valid(e) or e.get("_is_dead") == true:
+			continue
+		if (e as Node3D).global_position.y < KILL_PLANE_Y and e.has_method("take_damage"):
+			e.take_damage(1.0e6, null)
+			rescued += 1
+	return rescued
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  POPULATION TOP-UP
 # ══════════════════════════════════════════════════════════════════════════════
@@ -852,9 +1077,55 @@ func stop_spawning() -> void:
 	_spawning_locked = true
 
 
+# Legendary Mode: the run continues past Day 30, so reinforcements must come back.
+func resume_spawning() -> void:
+	_spawning_locked = false
+
+
+# How many of the live enemies should be within NEAR_RADIUS of the player right now: a quarter of the cap at the start,
+# growing to 60 % over OPENING_RAMP_SECONDS, so the opening neither starts empty nor floods.
+func _near_target() -> int:
+	var k : float = clampf(_run_time / OPENING_RAMP_SECONDS, 0.0, 1.0)
+	return int(roundf(float(_current_pop_cap) * lerpf(NEAR_FRACTION_START, NEAR_FRACTION_FULL, k)))
+
+
+# When fewer enemies than _near_target() are near the player, sends up to RECYCLE_PER_TICK far, off-screen enemies back to
+# the pool through their own _retire_stuck() (no death, no drops, nobody sees it) so the top-up that follows re-places them
+# close to the player. `allow_recycle` false only counts. Never touches an enemy within NEAR_RADIUS or one that is on screen. Returns how many were recycled.
+func _recycle_far_sleepers(allow_recycle: bool = true) -> int:
+	if _player == null or not is_instance_valid(_player):
+		return 0
+	var want_near : int = _near_target()
+	var near      : int = 0
+	var far       : Array = []
+	var near_sq   : float = NEAR_RADIUS * NEAR_RADIUS
+	var player_pos : Vector3 = _player.global_position
+	for node in _active_enemies:
+		if not is_instance_valid(node) or not (node is Node3D):
+			continue
+		var enemy : Node3D = node as Node3D
+		if enemy.get("_is_dead") == true:
+			continue
+		if player_pos.distance_squared_to(enemy.global_position) <= near_sq:
+			near += 1
+		elif enemy.get("_is_on_screen") != true and enemy.has_method("_retire_stuck"):
+			far.append(enemy)
+	_last_near_count = near
+	if not allow_recycle or near >= want_near or far.is_empty():
+		return 0
+	far.shuffle()
+	var count : int = mini(mini(RECYCLE_PER_TICK, want_near - near), far.size())
+	for i in count:
+		(far[i] as Node3D).call("_retire_stuck")
+	return count
+
+
 func _top_up_population() -> void:
 	if _spawning_locked:
 		return
+	# The cap is full: if that is mostly sleepers left far behind, trade a few for enemies near the player.
+	_recycle_far_sleepers(_current_pop_cap - _live_count <= 0)   # always refreshes _last_near_count; recycles only when the cap is full
+	var awake_short : bool = _last_near_count < _near_target()
 	var deficit : int = _current_pop_cap - _live_count
 	if deficit <= 0:
 		return
@@ -870,6 +1141,11 @@ func _top_up_population() -> void:
 	# Pick random entries from the active zone to keep spawning unpredictable
 	var zone_copy : Array = _active_zone.duplicate()
 	zone_copy.shuffle()
+	if awake_short and _player != null and is_instance_valid(_player):
+		# Too few enemies within reach of the player: fill the closest spawn points first (a spot 30 m away only makes
+		# another sleeper). Distances are squared, the zone is at most initial_zone_size entries, once per top-up tick.
+		var pp : Vector3 = _player.global_position
+		zone_copy.sort_custom(func(a, b): return pp.distance_squared_to(a.get("position", Vector3.ZERO)) < pp.distance_squared_to(b.get("position", Vector3.ZERO)))
 
 	# SURGICAL FIX: Run the heavy spawning in an async coroutine
 	_staggered_spawn_wave(zone_copy, limit)
@@ -885,6 +1161,11 @@ func _staggered_spawn_wave(zone_copy: Array, limit: int) -> void:
 		if spawned >= limit:
 			break
 		
+		# A top-up wave that was mid-flight when the game paused (or the Day-30 lock engaged)
+		# must not keep spawning.
+		if get_tree().paused or _spawning_locked:
+			break
+
 		# Build the heavy enemy hierarchy
 		if _spawn_enemy_from_data(entry):
 			spawned += 1

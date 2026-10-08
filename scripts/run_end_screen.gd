@@ -24,7 +24,9 @@ const ALCHEMIST_SCENE   : String = "res://scenes/AlchemistStore.tscn"
 var _portal_manager : Node  = null
 var _fade_rect      : ColorRect = null
 var _choice_root    : Control   = null
+var _first_button   : Button    = null
 var _fade_done      : bool  = false
+var _exiting        : bool  = false   # one-shot guard: a second button press must do nothing
 
 
 func _ready() -> void:
@@ -41,91 +43,78 @@ func setup(portal_mgr: Node) -> void:
 # ── UI construction ───────────────────────────────────────────────────────────
 
 func _build_ui() -> void:
-	# Full-screen black fade rect — starts transparent.
+	# Full-screen fade rect - starts transparent, ends opaque near-black.
 	_fade_rect           = ColorRect.new()
-	_fade_rect.color     = Color(0.0, 0.0, 0.0, 0.0)
+	_fade_rect.color     = Color(PUI.VOID, 0.0)
 	_fade_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_fade_rect)
 
-	# Choice panel — hidden until fade completes.
+	# Choice panel - hidden until fade completes.
 	_choice_root = Control.new()
 	_choice_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_choice_root.visible = false
+	PUI.adopt(_choice_root)   # a CanvasLayer child does not inherit the root theme
 	add_child(_choice_root)
 
-	# Dark semi-transparent background behind text.
-	var bg := ColorRect.new()
-	bg.color = Color(0.0, 0.0, 0.0, 0.75)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_choice_root.add_child(bg)
+	_choice_root.add_child(PUI.background("void"))
 
-	# Centre container.
+	var touch: bool = TouchControls.is_touch_platform()
+	if touch:
+		# The touch layer must not sit over the two choices.
+		get_tree().call_group(TouchControls.GROUP, "set_enabled", false)
+
+	var centre := CenterContainer.new()
+	centre.set_anchors_preset(Control.PRESET_FULL_RECT)
+	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_choice_root.add_child(centre)
+
+	var panel := PUI.panel("veil")
+	panel.name = "ChoicePanel"
+	panel.custom_minimum_size = Vector2(680.0, 0.0)
+	centre.add_child(panel)
+
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 30)
-	vbox.set_anchors_preset(Control.PRESET_CENTER)
-	vbox.offset_left   = -360.0
-	vbox.offset_right  =  360.0
-	vbox.offset_top    = -200.0
-	vbox.offset_bottom =  200.0
-	_choice_root.add_child(vbox)
+	vbox.add_theme_constant_override("separation", PUI.S3 if touch else PUI.S4)
+	panel.add_child(vbox)
 
 	# Title.
-	var title := Label.new()
-	title.text = "You have survived the Purgatory."
-	title.add_theme_font_size_override("font_size", 34)
-	title.add_theme_color_override("font_color", Color(1.0, 0.9, 0.6, 1.0))
+	var title := PUI.label("You have survived the Purgatory.", "ScreenTitle")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(title)
 
 	# Flavour text.
-	var flavour := Label.new()
-	flavour.text = "The way out stands before you — a tear in the dark.\nBut the depths below whisper of greater power yet."
-	flavour.add_theme_font_size_override("font_size", 18)
-	flavour.add_theme_color_override("font_color", Color(0.75, 0.7, 0.65, 1.0))
+	var flavour := PUI.label("The way out stands before you \u2014 a tear in the dark.\nBut the depths below whisper of greater power yet.", "SecondaryLabel")
 	flavour.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	flavour.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(flavour)
 
-	# Spacer.
-	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0.0, 20.0)
-	vbox.add_child(spacer)
+	vbox.add_child(PUI.divider())
 
-	# Leave button.
-	var leave_btn := Button.new()
-	leave_btn.text = "Return to your old life"
-	leave_btn.add_theme_font_size_override("font_size", 22)
-	leave_btn.custom_minimum_size = Vector2(320.0, 60.0)
+	# Leave: the main action.
+	var leave_btn := PUI.button("Return to your old life", "primary")
+	leave_btn.name = "LeaveButton"
 	leave_btn.pressed.connect(_on_leave_pressed)
 	vbox.add_child(leave_btn)
+	vbox.add_child(_desc_label("Complete this run and return to the Alchemist's Lab."))
 
-	# Legendary button.
-	var legend_btn := Button.new()
-	legend_btn.text = "Stay Below — Legendary Mode"
-	legend_btn.add_theme_font_size_override("font_size", 22)
-	legend_btn.custom_minimum_size = Vector2(320.0, 60.0)
+	# Legendary: the alternative.
+	var legend_btn := PUI.button("Stay Below \u2014 Legendary Mode")
+	legend_btn.name = "LegendaryButton"
 	legend_btn.pressed.connect(_on_legendary_pressed)
 	vbox.add_child(legend_btn)
+	vbox.add_child(_desc_label("No more portals. Farm deeper. Survive as long as you can."))
 
-	# Description labels under each button.
-	var leave_desc := Label.new()
-	leave_desc.text = "Complete this run and return to the Alchemist's Lab."
-	leave_desc.add_theme_font_size_override("font_size", 13)
-	leave_desc.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6, 1.0))
-	leave_desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(leave_desc)
-
-	var legend_desc := Label.new()
-	legend_desc.text = "No more portals. Farm deeper. Survive as long as you can."
-	legend_desc.add_theme_font_size_override("font_size", 13)
-	legend_desc.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6, 1.0))
-	legend_desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(legend_desc)
-
+	_first_button = leave_btn
 	_wire_button_clicks()
+
+
+func _desc_label(text: String) -> Label:
+	var l := PUI.label(text, "MetaLabel")
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	return l
 
 
 func _wire_button_clicks() -> void:
@@ -145,18 +134,16 @@ func _run_fade() -> void:
 	_fade_done = true
 	_choice_root.visible = true
 	# Give focus to the first button so gamepad A / Enter works immediately.
-	for child in _choice_root.get_children():
-		if child is VBoxContainer:
-			for node in child.get_children():
-				if node is Button:
-					node.grab_focus()
-					break
-			break
+	if is_instance_valid(_first_button):
+		_first_button.grab_focus()
 
 
 # ── Button callbacks ──────────────────────────────────────────────────────────
 
 func _on_leave_pressed() -> void:
+	if _exiting:
+		return
+	_exiting = true
 	# Record the completion.
 	if SaveManager.current_profile_is_valid():
 		var prev : int = int(SaveManager.current_profile.get("dungeon_completions", 0))
@@ -166,20 +153,28 @@ func _on_leave_pressed() -> void:
 	if has_node("/root/CodexManager"):
 		CodexManager.increment_completions()
 
-	# Clean up run systems.
-	if has_node("/root/GameClock"):
-		GameClock.hide_hud()
-	if has_node("/root/BuffManager"):
-		BuffManager.reset()
-	PlayerWallet.hide_hud()
+	# Clean up run systems (including globes, which used to keep ticking in the Alchemist).
+	RunLifecycle.end_run_cleanup()
 
 	get_tree().change_scene_to_file(ALCHEMIST_SCENE)
+	# This screen is a child of the root, so it survives the scene change; without this it
+	# stayed on top of the Alchemist with live buttons (double-counting completions and, via
+	# "Stay Below", restarting the day clock inside a menu).
+	queue_free()
 
 
 func _on_legendary_pressed() -> void:
+	if _exiting:
+		return
+	_exiting = true
 	# Enter legendary mode — run continues indefinitely.
 	if has_node("/root/GameClock"):
 		GameClock.enter_legendary_mode()
+
+	# Reinforcements were stopped when the run ended; Legendary Mode needs them back.
+	for spawner in get_tree().get_nodes_in_group("enemy_spawner"):
+		if spawner.has_method("resume_spawning"):
+			spawner.resume_spawning()
 
 	# Disable the portal so it can't be re-entered.
 	if is_instance_valid(_portal_manager) and _portal_manager.has_method("disable_portal"):

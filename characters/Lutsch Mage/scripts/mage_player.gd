@@ -82,12 +82,6 @@ extends BruteCharacter
 const DOME_COOLDOWN_TIME    : float = 2.5
 @export var dome_bolt_count : int   = 12   # Bolts fired radially; +2 per Magnitude perk level
 
-# ── Lightning Rapid Attack ────────────────────────────────────────────
-@export var rapid_attack_charge_time     : float = 1.5   # Seconds to fill the charge bar
-@export var rapid_attack_duration        : float = 4.0   # Seconds the rapid attack lasts
-@export var rapid_attack_cooldown        : float = 30.0  # Seconds before rapid attack can recharge
-@export var rapid_attack_attack_rate     : float = 0.12  # Seconds between bolts — ~8 Hz single-bolt machine gun
-
 # ── Hand spawn points (formerly from MageCharacter / mage_base.gd) ────────────
 # Assign Marker3D nodes in the Inspector — projectiles spawn from these.
 @export var right_hand_marker : Marker3D
@@ -108,18 +102,7 @@ var _slide_timer           : float   = 0.0
 var _slide_duration        : float   = 0.0
 var _slide_direction       : Vector3 = Vector3.ZERO
 var _slide_cam_lift        : float   = 0.0
-var _slide_knocked_enemies : Array   = []
-
-# ── Rapid Attack / storm state ──────────────────────────────────────
-var _attack_held             : bool    = false
-var _rapid_attack_charge          : float   = 0.0
-var _rapid_attack_active          : bool    = false
-var _rapid_attack_timer           : float   = 0.0
-var _rapid_attack_cooldown_remain : float   = 0.0
-var _rapid_attack_attack_timer    : float   = 0.0
-var _rapid_attack_bar_bg          : ColorRect = null
-var _rapid_attack_bar_fill        : ColorRect = null
-var _rapid_attack_bar_label       : Label     = null
+var _repulse_cooldown       : float   = 0.0
 
 # ── Dome state ─────────────────────────────────────────────────
 var _dome_cooldown : float = 0.0
@@ -137,6 +120,19 @@ var _status_drunk             : bool  = false
 var _status_reversed_controls : bool  = false
 var _status_acid              : bool  = false
 var _status_acid_timer        : float = 0.0
+var _status_acid_dps          : float = 1.0   # Set by the trap (TrapManager.acid_damage_per_sec)
+# Tracked timers (the brute's pattern) instead of fire-and-forget SceneTree timers: re-applying an
+# effect refreshes it, and the countdown pauses with the game.
+var _status_drunk_timer       : float = 0.0
+var _status_reversed_view_timer : float = 0.0   # Seconds remaining on Reversed View (same length as Intoxicated)
+# On-screen list of active trap effects (same panel the Barbarian has): the trap banner only
+# flashes at trigger time, and day-long effects (reversed view, heavy gravity) would otherwise be
+# invisible afterwards.
+var _status_label             : Label   = null
+var _status_panel             : Control = null
+var _status_update_timer      : float   = 0.0
+const STATUS_UPDATE_INTERVAL  : float   = 0.5
+var _status_controls_timer    : float = 0.0
 var _status_day_effects_days  : int   = 0
 var passive_regen             : float = 0.0   # HP/sec from Regeneration perk
 
@@ -169,9 +165,8 @@ var _staff_tip             : Node3D     = null   # Marker3D on the staff end
 var _crosshair_layer       : CanvasLayer = null
 
 # ── Health bar HUD ─────────────────────────────────────────────
-var _health_bar_bg   : ColorRect = null
-var _health_bar_fill : ColorRect = null
-var _health_label    : Label     = null
+var _vitals       : HudVitals = null   # health bar + value (scripts/ui/hud_vitals.gd)
+var _health_label : Label     = null
 
 # ── Damage vignette ────────────────────────────────────────────
 # Full-screen red overlay that pulses on damage and fades out over ~0.8 s.
@@ -258,56 +253,27 @@ func _on_ready() -> void:
 	_crosshair_layer.name  = "CrosshairLayer"
 	add_child(_crosshair_layer)
 
-	# ── Health bar ─────────────────────────────────────────────────────────────
-	_health_bar_bg          = ColorRect.new()
-	_health_bar_bg.color    = Color(0.15, 0.0, 0.0, 0.8)
-	_health_bar_bg.size     = Vector2(220.0, 22.0)
-	_health_bar_bg.position = Vector2(20.0, 20.0)
-	_crosshair_layer.add_child(_health_bar_bg)
-
-	_health_bar_fill          = ColorRect.new()
-	_health_bar_fill.color    = Color(0.85, 0.1, 0.1, 1.0)
-	_health_bar_fill.size     = Vector2(220.0, 22.0)
-	_health_bar_fill.position = Vector2(20.0, 20.0)
-	_crosshair_layer.add_child(_health_bar_fill)
-
-	_health_label          = Label.new()
-	_health_label.position = Vector2(24.0, 20.0)
-	_health_label.add_theme_font_size_override("font_size", 14)
-	_health_label.add_theme_color_override("font_color", Color.WHITE)
-	_crosshair_layer.add_child(_health_label)
-
+	# ── Health bar ──────────────────────────────────────────────────────────────
+	# One shared component with the Barbarian: PUIBar + value text.
+	_vitals = HudVitals.new()
+	_crosshair_layer.add_child(_vitals)
+	_health_label           = _vitals.health_label
 	_refresh_health_bar(max_health, max_health)
+
+	# ── Active trap effects panel (bottom-centre, hidden until an effect is active) ──
+	var status := HudStatusPanel.new()
+	_crosshair_layer.add_child(status)
+	_status_panel = status
+	_status_label = status.label
 	connect("health_changed", _on_health_changed)
 
 	# ── Damage vignette ────────────────────────────────────────────────────────
 	# Sits on top of the health bar and fills the screen on hit.
 	_damage_vignette = ColorRect.new()
-	_damage_vignette.color = Color(0.85, 0.0, 0.0, 0.0)
+	_damage_vignette.color = Color(PUI.BLOOD, 0.0)
 	_damage_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_damage_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_crosshair_layer.add_child(_damage_vignette)
-
-
-	# ── Storm charge / duration bar ─────────────────────────────────────────────
-	_rapid_attack_bar_bg          = ColorRect.new()
-	_rapid_attack_bar_bg.color    = Color(0.08, 0.08, 0.08, 0.8)
-	_rapid_attack_bar_bg.size     = Vector2(220.0, 8.0)
-	_rapid_attack_bar_bg.position = Vector2(20.0, 46.0)
-	_crosshair_layer.add_child(_rapid_attack_bar_bg)
-
-	_rapid_attack_bar_fill          = ColorRect.new()
-	_rapid_attack_bar_fill.color    = Color(0.15, 0.5, 0.85, 0.7)
-	_rapid_attack_bar_fill.size     = Vector2(0.0, 8.0)
-	_rapid_attack_bar_fill.position = Vector2(20.0, 46.0)
-	_crosshair_layer.add_child(_rapid_attack_bar_fill)
-
-	_rapid_attack_bar_label          = Label.new()
-	_rapid_attack_bar_label.position = Vector2(20.0, 55.0)
-	_rapid_attack_bar_label.add_theme_font_size_override("font_size", 11)
-	_rapid_attack_bar_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9, 0.7))
-	_crosshair_layer.add_child(_rapid_attack_bar_label)
-	_refresh_rapid_attack_bar()
 
 	# SURGICAL ADD: Apply hub-purchased perks from the save profile before the run starts.
 	_apply_hub_perks()
@@ -395,6 +361,7 @@ func _process(delta: float) -> void:
 		receive_heal(passive_regen * delta)
 
 	_check_kill_stats()
+	_tick_kill_haste(delta)
 
 
 # Mirrors brute_player._check_kill_streak() for stat effects only.
@@ -407,6 +374,13 @@ func _check_kill_stats() -> void:
 	_last_kill_count   = current
 	_kill_streak      += new_kills
 
+	_on_kill_haste_trigger()
+	var kill_curse : float = 0.0
+	if health_on_kill < 0.0:
+		kill_curse += -health_on_kill
+	if spark_damage < 0.0:
+		kill_curse += -spark_damage
+	_take_curse_damage(kill_curse * float(new_kills))
 	if health_on_kill > 0.0:
 		receive_heal(health_on_kill * float(new_kills))
 
@@ -451,13 +425,9 @@ func _on_health_changed(new_health: float, max_val: float) -> void:
 
 
 func _refresh_health_bar(current: float, max_val: float) -> void:
-	if _health_bar_fill == null:
+	if _vitals == null:
 		return
-	var pct : float = clampf(current / max_val, 0.0, 1.0)
-	_health_bar_fill.size.x = 220.0 * pct
-	_health_bar_fill.color  = Color(0.85, 0.1 + 0.6 * pct, 0.1, 1.0)
-	if _health_label != null:
-		_health_label.text = "%d / %d" % [int(current), int(max_val)]
+	_vitals.set_health(current, max_val)
 
 
 # Returns the world-space position of the mixamorigRightHand bone at the current
@@ -482,8 +452,6 @@ func take_damage(amount: float, source_node: Node3D = null) -> void:
 		return
 	if _is_sliding:
 		return  # Invincible during the evasive slide.
-	if _rapid_attack_active:
-		return  # Invincible during rapid attack frenzy.
 
 	if source_node != null:
 		var space : PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
@@ -492,7 +460,9 @@ func take_damage(amount: float, source_node: Node3D = null) -> void:
 		var q     : PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(from, to)
 		q.collision_mask = 1   # World geometry only
 		q.exclude         = [source_node.get_rid(), get_rid()]
-		if not space.intersect_ray(q).is_empty():
+		# Only level geometry blocks damage; an ally, prop or chest in the line must not
+		# make the mage invulnerable.
+		if not PhysicsUtil.ray_world(space, q).is_empty():
 			return  # Wall between attacker and mage — damage blocked
 
 	# SURGICAL FIX: Apply front block validation identical to the Brute 
@@ -559,6 +529,7 @@ func _on_buff_pick_finished() -> void:
 
 
 func _on_die() -> void:
+	clear_timed_statuses()
 	# SURGICAL FIX: Stop the day clock immediately on death so buff picks
 	# and day ticks cannot fire after the player is dead.
 	if has_node("/root/GameClock"):
@@ -591,21 +562,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	if get_tree().paused:
 		return
 
-	if event is InputEventMouseMotion:
+	# See brute_player.gd: ignore the emulated mouse motion a finger produces (touch look is fed separately).
+	if event is InputEventMouseMotion and (event as InputEventMouseMotion).device != InputEvent.DEVICE_ID_EMULATION:
 		_yaw -= (event as InputEventMouseMotion).relative.x * mouse_sensitivity
+		# Show the turn on the frame it arrives, not at the next 30 Hz physics tick (see brute_player.gd).
+		if not _is_dead:
+			_apply_yaw_now()
 
-	if event.is_action_pressed("attack") and not _is_attacking and not _is_blocking and not _is_sliding and not _is_dead and not _rapid_attack_active:
-		_attack_held = true
+	if event.is_action_pressed("attack") and not _is_attacking and not _is_blocking and not _is_sliding and not _is_dead:
 		_do_spell_attack()
-
-	if event.is_action_released("attack"):
-		_attack_held = false
-		if _rapid_attack_charge >= 1.0 and _rapid_attack_cooldown_remain <= 0.0 and not _rapid_attack_active:
-			_rapid_attack_charge = 0.0
-			_start_mage_rapid_attack()
-		else:
-			_rapid_attack_charge = 0.0
-			_refresh_rapid_attack_bar()
 
 	# AOE: lightning dome — fires bolts in all directions, costs 1 potion.
 	if event.is_action_pressed("AOE") and _dome_cooldown <= 0.0 and not _is_dead:
@@ -660,45 +625,32 @@ func _physics_tick(delta: float) -> void:
 	# ── Status effect ticks ────────────────────────────────────────────────────
 	if _status_acid and not _is_dead:
 		_status_acid_timer -= delta
-		take_damage(1.0 * delta)
+		take_damage(_status_acid_dps * delta)
 		if _status_acid_timer <= 0.0:
 			_status_acid = false
+	if _status_drunk and _status_drunk_timer > 0.0:
+		_status_drunk_timer -= delta
+		if _status_drunk_timer <= 0.0:
+			_status_drunk = false
+	if _status_reversed_view and _status_reversed_view_timer > 0.0:
+		_status_reversed_view_timer -= delta
+		if _status_reversed_view_timer <= 0.0:
+			_status_reversed_view = false
+			_reset_view_arm()
+			_refresh_status_label()
+	if _status_reversed_controls and _status_controls_timer > 0.0:
+		_status_controls_timer -= delta
+		if _status_controls_timer <= 0.0:
+			_status_reversed_controls = false
+	if _status_drunk or _status_reversed_view or _status_reversed_controls or _status_acid or _status_panel != null and _status_panel.visible:
+		_status_update_timer -= delta
+		if _status_update_timer <= 0.0:
+			_status_update_timer = STATUS_UPDATE_INTERVAL
+			_refresh_status_label()
 
 	# ── Dome cooldown ──────────────────────────────────────────────────────────
 	if _dome_cooldown > 0.0:
 		_dome_cooldown = maxf(_dome_cooldown - delta, 0.0)
-
-	# ── Rapid Attack: charge builds while attack is held ────────────────────────────
-	if _attack_held and not _rapid_attack_active:
-		_rapid_attack_charge = minf(_rapid_attack_charge + delta / rapid_attack_charge_time, 1.0)
-		_refresh_rapid_attack_bar()
-
-	if _rapid_attack_cooldown_remain > 0.0:
-		_rapid_attack_cooldown_remain = maxf(_rapid_attack_cooldown_remain - delta, 0.0)
-		_refresh_rapid_attack_bar()
-
-	# ── Rapid attack (bolt machine gun) active tick ───────────────────────────
-	if _rapid_attack_active:
-		# Normal first-person view + movement — player keeps full control.
-		# Damage immunity is gated in take_damage via _rapid_attack_active.
-		_handle_view_input(delta)
-		_apply_view_rotation()
-		_handle_movement(delta)
-		_update_footsteps(delta)
-		_apply_head_bob(delta)
-
-		_rapid_attack_timer        -= delta
-		_rapid_attack_attack_timer -= delta
-
-		if _rapid_attack_attack_timer <= 0.0:
-			_rapid_attack_attack_timer = rapid_attack_attack_rate
-			_fire_rapid_attack_bolts()
-
-		_refresh_rapid_attack_bar()
-
-		if _rapid_attack_timer <= 0.0 or _is_dead:
-			_end_mage_rapid_attack()
-		return
 
 	_handle_view_input(delta)
 	_apply_view_rotation()
@@ -720,11 +672,21 @@ func _handle_view_input(delta: float) -> void:
 		_yaw -= look_x * gamepad_turn_speed * delta
 
 
-func _apply_view_rotation() -> void:
+## Starts the run facing `yaw` (the dungeon entry orients the player into the open space; see the main game file).
+func set_facing_yaw(yaw: float) -> void:
+	_yaw = yaw
+	_apply_yaw_now()
+
+
+func _apply_yaw_now() -> void:
 	var yaw_out : float = _yaw
 	if _status_drunk:
 		yaw_out += sin(Time.get_ticks_msec() * 0.002) * 0.18
 	rotation.y = yaw_out
+
+
+func _apply_view_rotation() -> void:
+	_apply_yaw_now()
 	var arm : SpringArm3D = get_node_or_null("SpringArm3D") as SpringArm3D
 	if arm != null:
 		arm.rotation.x = PI if _status_reversed_view else 0.0
@@ -751,8 +713,9 @@ func _handle_movement(delta: float) -> void:
 		var right   : Vector3 = Vector3( cos(_yaw), 0.0, -sin(_yaw))
 		var dir     : Vector3 = (forward * -input_dir.y + right * input_dir.x).normalized()
 
-		var target_velocity_x : float = dir.x * move_speed
-		var target_velocity_z : float = dir.z * move_speed
+		var haste : float = kill_haste_multiplier()
+		var target_velocity_x : float = dir.x * move_speed * haste
+		var target_velocity_z : float = dir.z * move_speed * haste
 
 		velocity.x = move_toward(velocity.x, target_velocity_x, move_acceleration * delta)
 		velocity.z = move_toward(velocity.z, target_velocity_z, move_acceleration * delta)
@@ -782,35 +745,32 @@ func _handle_movement(delta: float) -> void:
 				_change_state(_get_idle_state())
 
 
+# The jump / Slide button now performs REPULSE (it used to slide backwards). `_is_sliding` is kept as the "repulse in
+# progress" flag: it already makes take_damage() ignore hits, lifts the camera and gates the other actions, which is exactly
+# the short protected, rooted window the emergency push needs.
 func _handle_slide(delta: float) -> void:
 	if not InputMap.has_action("jump"):
 		return
 
-	if Input.is_action_just_pressed("jump") and not _is_sliding \
+	if _repulse_cooldown > 0.0:
+		_repulse_cooldown -= delta
+
+	if Input.is_action_just_pressed("jump") and not _is_sliding and _repulse_cooldown <= 0.0 \
 			and not _is_dead and not _is_blocking and is_on_floor():
 		_start_slide()
 
 	if _is_sliding:
 		_slide_timer += delta
-		var progress : float = clampf(_slide_timer / _slide_duration, 0.0, 1.0)
+		velocity.x = 0.0
+		velocity.z = 0.0
 
-		# Quadratic deceleration: fast lunge at the start, smooth halt at the end.
-		var spd : float = slide_power * (1.0 - progress) * (1.0 - progress)
-		velocity.x = _slide_direction.x * spd
-		velocity.z = _slide_direction.z * spd
-
-		# Camera lunge lift — rises quickly at the start then fades.
-		if progress < 0.2:
+		# Camera lift — rises quickly at the start then fades.
+		if _slide_timer / _slide_duration < 0.2:
 			_slide_cam_lift = lerpf(_slide_cam_lift, 0.08, delta * 20.0)
 
-		_check_slide_knockback()
-
-		if progress >= 1.0:
+		if _slide_timer >= _slide_duration:
 			_is_sliding = false
 			_slide_timer = 0.0
-			velocity.x   = 0.0
-			velocity.z   = 0.0
-			_slide_knocked_enemies.clear()
 			_change_state(_get_idle_state())
 
 
@@ -822,51 +782,14 @@ func _start_slide() -> void:
 		_is_blocking = false
 		anim_player.speed_scale = 1.0
 
-	# Slide backward — opposite of the look direction (+Z in Godot's coordinate system).
-	_slide_direction = Vector3(sin(_yaw), 0.0, cos(_yaw))
-	_is_sliding      = true
-	_slide_timer     = 0.0
-	# Duration so total distance ≈ slide_distance_clear. With quadratic decel the
-	# integral of (1-t)^2 over [0,1] is 1/3, so: distance = power * duration / 3.
-	_slide_duration  = 3.0 * slide_distance_clear / maxf(slide_power, 0.1)
-	_slide_cam_lift  = 0.0
-	_slide_knocked_enemies.clear()
-
-
-func _check_slide_knockback() -> void:
-	# Only knock one enemy per slide so the player doesn't chain-stun an entire room.
-	if _slide_knocked_enemies.size() >= 1:
-		return
-
-	var my_pos : Vector3 = global_position
-	for node in get_tree().get_nodes_in_group("enemies"):
-		if not (node is Node3D) or not is_instance_valid(node):
-			continue
-		var enemy : Node3D = node as Node3D
-		if enemy.get("_is_dead"):
-			continue
-		if my_pos.distance_to(enemy.global_position) > slide_knock_radius:
-			continue
-		if _slide_knocked_enemies.has(enemy):
-			continue
-
-		if enemy.has_method("take_knockback"):
-			enemy.take_knockback(_slide_direction, 8.0, 1.0)
-		_slide_knocked_enemies.append(enemy)
-
-		# Shorten remaining travel to slide_distance_hit after the bump.
-		_slide_duration = _slide_timer + 3.0 * slide_distance_hit / maxf(slide_power, 0.1)
-		break
-
-	# Kickable props in the slide radius — no per-slide cap, kick each one.
-	for prop in get_tree().get_nodes_in_group("kickable_prop"):
-		if not (prop is Node3D) or not is_instance_valid(prop):
-			continue
-		var prop_node : Node3D = prop as Node3D
-		if my_pos.distance_to(prop_node.global_position) > slide_knock_radius:
-			continue
-		if prop_node.has_method("apply_kick"):
-			prop_node.apply_kick(_slide_direction, shove_force * 10.0)
+	_is_sliding       = true
+	_slide_timer      = 0.0
+	_slide_duration   = REPULSE_DURATION
+	_slide_cam_lift   = 0.0
+	_repulse_cooldown = REPULSE_COOLDOWN
+	velocity.x = 0.0
+	velocity.z = 0.0
+	_repulse_burst(slide_power / 20.0)   # Heavy Gravity halves slide_power, so it halves the push too
 
 
 # ══════════════════════════════════════════════════════════════
@@ -903,7 +826,7 @@ func _do_spell_attack() -> void:
 		# so it always appears to go straight out from the crosshair.
 		var aim_dir : Vector3
 		if camera_3d != null:
-			aim_dir = camera_3d.project_ray_normal(get_viewport().size / 2.0)
+			aim_dir = camera_3d.project_ray_normal(_aim_screen_center())
 		else:
 			aim_dir = Vector3(-sin(_yaw), 0.0, -cos(_yaw))
 
@@ -998,7 +921,7 @@ func _launch_fireball(origin: Vector3, direction: Vector3, penetrate_walls: bool
 
 	# ── Hit detection — passing unique string to avoid Lambda capture bugs ─────
 	# attack_damage is the flat bonus/penalty applied by buffs (Berserker, Blunted, etc.)
-	var damage_val : float = maxf(0.0, spell_damage + attack_damage)
+	var damage_val : float = maxf(0.0, spell_damage + attack_damage + get_low_health_attack_bonus())
 	# direction is bound so _on_fireball_hit can place a scorch mark at the impact surface.
 	fireball.body_entered.connect(_on_fireball_hit.bind(fb_name, damage_val, direction, penetrate_walls))
 
@@ -1032,7 +955,7 @@ func _on_fireball_hit(body: Node3D, fb_name: String, damage_val: float, travel_d
 	if body == self:
 		return
 
-	# Wall-penetrating bolts (rapid_attack): skip destruction when hitting geometry
+	# Wall-penetrating bolts: skip destruction when hitting geometry
 	# that has no take_damage method (i.e. walls/floor/ceiling).
 	if penetrate_walls:
 		var t : Node3D = body
@@ -1165,7 +1088,7 @@ func _spawn_scorch_mark(impact_pos: Vector3, travel_dir: Vector3) -> void:
 func _raycast_aim_target(range: float) -> Vector3:
 	if camera_3d == null:
 		return global_position + Vector3(-sin(_yaw), 0.0, -cos(_yaw)) * range
-	var screen_center : Vector2 = get_viewport().size / 2.0
+	var screen_center : Vector2 = _aim_screen_center()
 	var ray_origin    : Vector3 = camera_3d.project_ray_origin(screen_center)
 	var ray_dir       : Vector3 = camera_3d.project_ray_normal(screen_center)
 	var ray_end       : Vector3 = ray_origin + ray_dir * range
@@ -1442,81 +1365,20 @@ func _do_lightning_dome() -> void:
 		_launch_fireball(origin, dir)
 
 
-# ══════════════════════════════════════════════════════════════
-#  LIGHTNING RAPID ATTACK
-# ══════════════════════════════════════════════════════════════
-
-func _start_mage_rapid_attack() -> void:
-	if _is_dead:
-		return
-
-	_rapid_attack_active       = true
-	_rapid_attack_timer        = rapid_attack_duration
-	_rapid_attack_attack_timer = 0.0
-	_is_attacking              = true
-	anim_player.speed_scale    = attack_speed_scale * attack_speed * 1.5
-	_refresh_rapid_attack_bar()
+# The crosshair position in the coordinates Camera3D.project_ray_*() expects: the centre of the VISIBLE
+# rectangle. This is NOT get_viewport().size / 2: with the Android stretch (canvas_items, expand) the
+# window is larger than the visible canvas (e.g. 2992x1344 vs 1602x720 on a Pixel), and halving the
+# window size aims ~58 degrees right and down of the crosshair (tests/test_mage_aim.gd).
+func _aim_screen_center() -> Vector2:
+	return get_viewport().get_visible_rect().size * 0.5
 
 
-func _end_mage_rapid_attack() -> void:
-	_rapid_attack_active          = false
-	_is_attacking                 = false
-	_rapid_attack_cooldown_remain = rapid_attack_cooldown
-	anim_player.speed_scale       = 1.0
-	_refresh_rapid_attack_bar()
-
-
-# Returns the world-space direction the crosshair is pointing. Using
-# viewport * 0.5 keeps aim at the exact screen center at any resolution,
-# FOV, or aspect ratio. Falls back to yaw if the camera is missing.
+# Returns the world-space direction the crosshair is pointing. Using the visible-rect centre keeps aim on
+# the exact screen centre at any resolution, FOV, aspect ratio or stretch. Falls back to yaw without a camera.
 func _get_camera_aim_dir() -> Vector3:
 	if camera_3d != null:
-		return camera_3d.project_ray_normal(get_viewport().size * 0.5).normalized()
+		return camera_3d.project_ray_normal(_aim_screen_center()).normalized()
 	return Vector3(-sin(_yaw), 0.0, -cos(_yaw))
-
-
-# Fires a single lightning bolt parallel to the crosshair line-of-sight.
-# Origin stays on the staff tip so the bolt visually leaves the weapon,
-# but the flight direction comes from the camera — decoupled from whatever
-# the arm animation is doing at the moment of fire.
-func _fire_rapid_attack_bolts() -> void:
-	var origin : Vector3
-	if _staff_tip != null:
-		origin = _staff_tip.global_position
-	else:
-		origin = global_position + Vector3(0.0, 1.4, 0.0)
-
-	var aim : Vector3 = _get_camera_aim_dir()
-	# Tiny perpendicular cone jitter so repeat bolts aren't a perfect line.
-	aim = (aim + Vector3(randf_range(-0.03, 0.03), randf_range(-0.03, 0.03), 0.0)).normalized()
-	_launch_fireball(origin, aim, true, 8.0)
-
-
-func _refresh_rapid_attack_bar() -> void:
-	if _rapid_attack_bar_fill == null:
-		return
-	if _rapid_attack_active:
-		var pct : float = clampf(_rapid_attack_timer / rapid_attack_duration, 0.0, 1.0)
-		_rapid_attack_bar_fill.size.x = 220.0 * pct
-		_rapid_attack_bar_fill.color  = Color(0.1, 0.6, 1.0, 1.0)
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = "RAPID ATTACK  %.1fs" % _rapid_attack_timer
-	elif _rapid_attack_cooldown_remain > 0.0:
-		var pct : float = 1.0 - clampf(_rapid_attack_cooldown_remain / rapid_attack_cooldown, 0.0, 1.0)
-		_rapid_attack_bar_fill.size.x = 220.0 * pct
-		_rapid_attack_bar_fill.color  = Color(0.2, 0.2, 0.65, 0.85)
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = "Cooldown  %.0fs" % _rapid_attack_cooldown_remain
-	elif _attack_held:
-		_rapid_attack_bar_fill.size.x = 220.0 * _rapid_attack_charge
-		_rapid_attack_bar_fill.color  = Color(0.35, 0.8, 1.0, 1.0) if _rapid_attack_charge < 1.0 \
-				else Color(0.1, 0.6, 1.0, 1.0)
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = "RELEASE!" if _rapid_attack_charge >= 1.0 else "Charging…"
-	else:
-		_rapid_attack_bar_fill.size.x = 0.0
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = ""
 
 
 # Plays the 2H shove animation and deals melee damage + knockback
@@ -1580,7 +1442,7 @@ func _apply_shove() -> void:
 		if to_enemy.normalized().dot(forward) <= 0.0:
 			continue
 		if enemy.has_method("take_damage"):
-			enemy.take_damage(shove_damage + maxf(0.0, attack_damage), self)
+			enemy.take_damage(shove_damage + maxf(0.0, attack_damage + get_low_health_attack_bonus()), self)
 		if enemy.has_method("take_knockback"):
 			enemy.take_knockback(forward, shove_force, shove_stun_time)
 
@@ -1674,13 +1536,14 @@ func _do_block() -> void:
 #  STATUS EFFECTS (TRAP SYSTEM)
 # ══════════════════════════════════════════════════════════════
 
-func apply_status(effect_name: String, days_duration: int) -> void:
+# days_duration: for the day-based effects it is the number of in-game days; for "acid_pool" it is
+# the duration in SECONDS (0 = default 15). strength: acid damage per second (0 = default 1.0).
+func apply_status(effect_name: String, days_duration: int, strength: float = 0.0) -> void:
 	match effect_name:
 		"reversed_view":
-			_status_reversed_view    = true
-			_status_day_effects_days = maxi(_status_day_effects_days, days_duration)
-			if not GameClock.day_changed.is_connected(_on_day_changed):
-				GameClock.day_changed.connect(_on_day_changed)
+			# Timer-based like Intoxicated (and the same length); the day count argument is ignored. Re-applying refreshes it.
+			_status_reversed_view       = true
+			_status_reversed_view_timer = STATUS_REVERSED_VIEW_SECONDS
 		"heavy_gravity":
 			if not _status_heavy_gravity:
 				_status_heavy_gravity    = true
@@ -1689,30 +1552,83 @@ func apply_status(effect_name: String, days_duration: int) -> void:
 			if not GameClock.day_changed.is_connected(_on_day_changed):
 				GameClock.day_changed.connect(_on_day_changed)
 		"drunk":
-			_status_drunk = true
-			get_tree().create_timer(30.0).timeout.connect(func(): _status_drunk = false)
+			_status_drunk       = true
+			_status_drunk_timer = STATUS_DRUNK_SECONDS
 		"reversed_controls":
 			_status_reversed_controls = true
-			get_tree().create_timer(30.0).timeout.connect(func(): _status_reversed_controls = false)
+			_status_controls_timer    = 30.0
 		"acid_pool":
 			_status_acid       = true
-			_status_acid_timer = 15.0
+			_status_acid_timer = float(days_duration) if days_duration > 0 else 15.0
+			_status_acid_dps   = strength if strength > 0.0 else 1.0
+	_refresh_status_label()   # show the new effect immediately
+
+
+# Builds the active trap effects text and shows/hides the panel (mirrors the Barbarian's).
+func _refresh_status_label() -> void:
+	if _status_label == null or _status_panel == null:
+		return
+	var lines : Array[String] = []
+	var day_s : String = "s" if _status_day_effects_days != 1 else ""
+	if _status_reversed_view:
+		lines.append("Vision Reversed  (%.0fs)" % maxf(_status_reversed_view_timer, 0.0))
+	if _status_heavy_gravity:
+		lines.append("Heavy Gravity  (%d day%s)" % [_status_day_effects_days, day_s])
+	if _status_drunk:
+		lines.append("Disoriented  (%.0fs)" % _status_drunk_timer)
+	if _status_reversed_controls:
+		lines.append("Controls Reversed  (%.0fs)" % _status_controls_timer)
+	if _status_acid:
+		lines.append("Acid Burn  (%.0fs)" % _status_acid_timer)
+	if lines.is_empty():
+		_status_panel.visible = false
+	else:
+		_status_label.text    = "\n".join(lines)
+		_status_panel.visible = true
+
+
+# Puts the camera arm back upright right now. _apply_view_rotation() normally does it every tick, but the blocking branch of
+# the physics tick returns before reaching it, so ending Reversed View (expiry or death) must not rely on that.
+func _reset_view_arm() -> void:
+	var arm : SpringArm3D = get_node_or_null("SpringArm3D") as SpringArm3D
+	if arm != null:
+		arm.rotation.x = 0.0
+
+# Ends every timed trap status at once (death: the screen must not stay upside-down / swaying behind the death overlay,
+# and nothing may carry into whatever comes next). Day-based Heavy Gravity is restored here too.
+func clear_timed_statuses() -> void:
+	_status_reversed_view       = false
+	_status_reversed_view_timer = 0.0
+	_reset_view_arm()
+	_status_drunk               = false
+	_status_drunk_timer         = 0.0
+	_status_reversed_controls   = false
+	_status_controls_timer      = 0.0
+	_status_acid                = false
+	_status_acid_timer          = 0.0
+	if _status_heavy_gravity:
+		_status_heavy_gravity = false
+		slide_power           *= 2.0
+	_status_day_effects_days = 0
+	if GameClock.day_changed.is_connected(_on_day_changed):
+		GameClock.day_changed.disconnect(_on_day_changed)
+	_refresh_status_label()
 
 
 func _on_day_changed(_day: int) -> void:
 	_status_day_effects_days -= 1
 	if _status_day_effects_days <= 0:
-		_status_reversed_view = false
 		if _status_heavy_gravity:
 			_status_heavy_gravity = false
 			slide_power           *= 2.0
 		_status_day_effects_days = 0
 		if GameClock.day_changed.is_connected(_on_day_changed):
 			GameClock.day_changed.disconnect(_on_day_changed)
+	_refresh_status_label()   # keep the on-screen effect list in step with the day count
 
 
 func _get_effective_move_speed() -> float:
-	return maxf(move_speed, 0.001)
+	return maxf(move_speed * kill_haste_multiplier(), 0.001)
 
 
 # ── MageCharacter overrides (moved here now that we extend BruteCharacter) ────

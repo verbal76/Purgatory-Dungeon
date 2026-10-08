@@ -33,7 +33,6 @@
 #    massive console spam and resulting lag.
 #  - SURGICAL FIX: Increased strafe_switch_interval to 4.0 and added missing _update_strafe_timer() call to _physics_tick.
 #  - SURGICAL FIX: Enforced mesh_root.look_at() unconditionally at the end of _physics_tick so mage always faces player while moving/strafing.
-#  - SURGICAL ADD: Added Rapid Attack check to _physics_tick. Mages will now stop casting and walk blindly toward the player if _rapid_attack_active is true.
 #  - SURGICAL FIX: Added _smooth_turn() override (no-op pass). CharacterBase runs
 #    _smooth_turn AFTER _physics_tick, which was rotating mesh_root toward the
 #    strafe/velocity direction and overwriting the look_at. Disabling it here so
@@ -309,6 +308,15 @@ func _on_ready() -> void:
 
 # ── Fireball pool management ──────────────────────────────────────────────────
 
+# The pool is parented to the scene root, not to this enemy, so it must be freed with
+# the enemy or every freed mage (pool full, frustration timeout, run end) leaks 6 nodes.
+func _exit_tree() -> void:
+	for fb in _fireball_pool:
+		if is_instance_valid(fb) and not fb.is_queued_for_deletion():
+			fb.queue_free()
+	_fireball_pool.clear()
+
+
 func _init_fireball_pool() -> void:
 	if fireball_scene == null:
 		return
@@ -510,6 +518,7 @@ func take_damage(amount: float, _source: Node = null) -> void:
 
 
 func _play_hit_react() -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	if anim_player == null: return
 	_is_reacting  = true
 	_is_attacking = false
@@ -533,6 +542,7 @@ func _play_hit_react() -> void:
 	anim_player.speed_scale = react_anim_speed
 	_play_anim(anim_to_play)
 	await anim_player.animation_finished
+	if _life != _life_id: return
 	anim_player.speed_scale = 1.0
 	_is_reacting            = false
 	if not _is_dead: _change_state(_get_idle_state())
@@ -566,6 +576,7 @@ func pick_death_direction() -> String:
 
 
 func _on_die() -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	var main = get_tree().current_scene
 	if main and main.has_method("register_enemy_kill"):
 		main.register_enemy_kill()
@@ -612,6 +623,7 @@ func _on_die() -> void:
 	if _hp_bar_root != null: _hp_bar_root.visible = false
 	await get_tree().create_timer(_current_anim_length()).timeout
 	if not is_instance_valid(self): return
+	if _life != _life_id: return
 
 	if _pool_return.is_valid():
 		_pool_return.call()
@@ -626,6 +638,10 @@ func set_pool_return(cb: Callable) -> void:
 
 
 func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -> void:
+	_life_id += 1                      # invalidate any delayed work from the previous life
+	_state = ""                        # force the idle transition below to actually play
+	if anim_player != null:
+		anim_player.speed_scale = 1.0  # death/react/attack speed must not leak into the new life
 	# ── CharacterBase state ──────────────────────────────────────────────────
 	_buff_multiplier = 1.0
 	max_health       = _base_max_health
@@ -679,12 +695,29 @@ func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -
 		_hp_bar_root.visible = true
 
 	# ── Re-enable ─────────────────────────────────────────────────────────────
+	if anim_player != null:
+		anim_player.active = true   # EnemyManager._park() deactivates the mixer of a parked enemy
+	add_to_group("enemy")    # a parked enemy sits outside the groups (see EnemyManager._park)
+	add_to_group("enemies")
 	visible = true
 	set_physics_process(true)
 	set_process(true)
 
 	_change_state(_get_idle_state())
 	health_changed.emit(_current_health, max_health)
+
+
+# A mage that has chased for 12 s without ever seeing the player is retired. It used to be freed (with its six
+# pooled fireballs) and the next top-up instantiated a replacement, a multi-millisecond hitch (many times that on a
+# phone). It now goes back to EnemyManager's pool exactly like a corpse does and is reborn by reset_for_pool().
+func _retire_stuck() -> void:
+	if not _pool_return.is_valid():
+		queue_free()
+		return
+	_is_dead        = true    # EnemyManager's sweep drops dead enemies from its live list; reset_for_pool() revives
+	collision_layer = 0
+	velocity        = Vector3.ZERO
+	_pool_return.call()
 
 
 func _spawn_potion_pickup() -> void:
@@ -847,7 +880,7 @@ func _physics_tick(delta: float) -> void:
 		if _frustration_timer >= 12.0:
 			_frustration_timer = 0.0
 			if not _has_los:
-				queue_free()
+				_retire_stuck()
 				return
 	else:
 		_frustration_timer = 0.0
@@ -857,19 +890,15 @@ func _physics_tick(delta: float) -> void:
 		_change_state(_get_idle_state())
 		return
 
-	var player_is_rapid_attack : bool = false
-	if is_instance_valid(player) and player.get("_rapid_attack_active") != null:
-		player_is_rapid_attack = player.get("_rapid_attack_active") == true
-
 	# Shove: higher priority than ranged attack — interrupts when player is very close.
 	# Random chance gate prevents shove from triggering every available tick.
 	if not _is_attacking and not _is_shoving and _shove_cooldown_timer <= 0.0 \
-			and distance <= enemy_shove_range and not player_is_rapid_attack \
+			and distance <= enemy_shove_range \
 			and randf() < enemy_shove_chance:
 		_do_ai_shove(player)
 		return
 
-	if distance <= attack_range and _attack_cooldown_timer <= 0.0 and not player_is_rapid_attack:
+	if distance <= attack_range and _attack_cooldown_timer <= 0.0:
 		_do_spell_attack(player)
 		return
 
@@ -888,9 +917,7 @@ func _physics_tick(delta: float) -> void:
 	var chase_mult        : float = 1.5 if distance > 22.0 else 1.0
 	var speed_multiplier  : float = player_mod * _cached_speed_mult * chase_mult
 
-	if player_is_rapid_attack:
-		_move_mode = MoveMode.APPROACH
-	elif distance < min_range: 
+	if distance < min_range: 
 		_move_mode = MoveMode.RETREAT
 	elif distance > run_range: 
 		_move_mode = MoveMode.APPROACH
@@ -972,6 +999,7 @@ func _physics_tick(delta: float) -> void:
 
 
 func _do_spell_attack(player: Node3D) -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	_is_attacking = true
 	var player_mod : float = float(player.enemy_speed_modifier) if "enemy_speed_modifier" in player else 1.0
 	_play_anim(pick_attack())
@@ -979,6 +1007,7 @@ func _do_spell_attack(player: Node3D) -> void:
 	var anim_len : float = _current_anim_length() / (attack_speed_scale * player_mod)
 
 	await get_tree().create_timer(anim_len * 0.85).timeout
+	if _life != _life_id: return
 
 	if not _is_stunned and not _is_dead and is_instance_valid(player):
 		var flat_to_player := Vector3(player.global_position.x - global_position.x, 0.0, player.global_position.z - global_position.z)
@@ -1012,10 +1041,12 @@ func _do_spell_attack(player: Node3D) -> void:
 					fireball.setup(final_damage, true_aim_dir)
 
 	await get_tree().create_timer(anim_len * 0.15).timeout
+	if _life != _life_id: return
 	_is_attacking = false; _attack_cooldown_timer = attack_cooldown
 
 
 func _do_ai_shove(player: Node3D) -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	_is_shoving   = true
 	_is_attacking = true
 
@@ -1035,6 +1066,7 @@ func _do_ai_shove(player: Node3D) -> void:
 	var anim_len : float = _current_anim_length()
 
 	await get_tree().create_timer(anim_len * 0.55).timeout
+	if _life != _life_id: return
 
 	if not _is_dead and is_instance_valid(player):
 		var dist : float = global_position.distance_to(player.global_position)
@@ -1051,6 +1083,7 @@ func _do_ai_shove(player: Node3D) -> void:
 				player.take_knockback(push_dir, enemy_shove_force, enemy_shove_stun)
 
 	await get_tree().create_timer(anim_len * 0.45).timeout
+	if _life != _life_id: return
 	_is_shoving          = false
 	_is_attacking        = false
 	_shove_cooldown_timer = enemy_shove_cooldown

@@ -12,27 +12,21 @@
 
 extends CanvasLayer
 
-const ACCENT_COLORS : Dictionary = {
-	"reversed_view"     : Color(0.55, 0.20, 0.90),  # purple
-	"heavy_gravity"     : Color(0.20, 0.45, 0.95),  # blue
-	"drunk"             : Color(0.95, 0.70, 0.10),  # amber
-	"reversed_controls" : Color(1.00, 0.40, 0.05),  # orange
-	"acid_pool"         : Color(0.25, 0.90, 0.15),  # green
-	"fireball_mine"     : Color(1.00, 0.12, 0.05),  # red
-	"schizophrenia"     : Color(0.60, 0.00, 0.85),  # violet
-	"jumpscare"         : Color(1.00, 0.10, 0.10),  # bright red
+# Traps are hostile, so every banner shares one semantic look (blood-edged iron plate, bone name, ember
+# duration) instead of a colour per trap. The name is what tells traps apart.
+const DISPLAY_NAMES : Dictionary = {
+	"reversed_view"     : "Reversed view",
+	"heavy_gravity"     : "Heavy gravity",
+	"drunk"             : "Intoxicated",
+	"reversed_controls" : "Controls reversed",
+	"acid_pool"         : "Acid burns",
+	"fireball_mine"     : "Fireball mine",
+	"schizophrenia"     : "Hallucinations",
+	"jumpscare"         : "Jumpscare",
 }
 
-const DISPLAY_NAMES : Dictionary = {
-	"reversed_view"     : "REVERSED VIEW",
-	"heavy_gravity"     : "HEAVY GRAVITY",
-	"drunk"             : "INTOXICATED",
-	"reversed_controls" : "CONTROLS REVERSED",
-	"acid_pool"         : "ACID BURNS",
-	"fireball_mine"     : "FIREBALL MINE",
-	"schizophrenia"     : "HALLUCINATIONS",
-	"jumpscare"         : "JUMPSCARE",
-}
+const BANNER_WIDTH  : float = 420.0
+const BANNER_HEIGHT : float = 48.0
 
 # { banner_node : { "timer": float, "countdown": bool, "dur_label": Label } }
 var _banners   : Dictionary = {}
@@ -45,14 +39,20 @@ func _ready() -> void:
 	var root_ctrl := Control.new()
 	root_ctrl.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root_ctrl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	PUI.adopt(root_ctrl)   # a CanvasLayer child does not inherit the root theme
 	add_child(root_ctrl)
 
 	_vbox = VBoxContainer.new()
-	# Anchor the VBox to the bottom of the screen, full width.
+	# Anchor the VBox to the bottom centre of the screen: compact plates, never a full-width bar.
 	# GROW_DIRECTION_BEGIN makes it grow UPWARD as children are added.
-	_vbox.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	_vbox.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_vbox.offset_left     = -BANNER_WIDTH * 0.5
+	_vbox.offset_right    = BANNER_WIDTH * 0.5
+	_vbox.offset_top      = -float(PUI.S6)
+	_vbox.offset_bottom   = -float(PUI.S6)
 	_vbox.grow_vertical   = Control.GROW_DIRECTION_BEGIN
 	_vbox.mouse_filter    = Control.MOUSE_FILTER_IGNORE
+	_vbox.add_theme_constant_override("separation", PUI.S2)
 	root_ctrl.add_child(_vbox)
 
 
@@ -64,7 +64,6 @@ func _ready() -> void:
 
 func show_trap(effect: String, dur_secs: float, day_count: int = 1) -> void:
 	var display : String = DISPLAY_NAMES.get(effect, effect.to_upper().replace("_", " "))
-	var accent  : Color  = ACCENT_COLORS.get(effect, Color(0.9, 0.2, 0.1))
 
 	var dur_text    : String = ""
 	var display_dur : float  = 0.0
@@ -84,7 +83,7 @@ func show_trap(effect: String, dur_secs: float, day_count: int = 1) -> void:
 		display_dur = 4.0
 		countdown   = false
 
-	var banner    := _build_banner(display, dur_text, accent)
+	var banner    := _build_banner(display, dur_text)
 	_vbox.add_child(banner)
 
 	var dur_label : Label = banner.get_node_or_null("HBox/DurLabel")
@@ -128,60 +127,44 @@ func _dismiss(banner : Node) -> void:
 
 # ── Banner builder ────────────────────────────────────────────────────────────
 
-func _build_banner(title: String, dur_text: String, accent: Color) -> PanelContainer:
-	# ── Outer panel ───────────────────────────────────────────────────────────
+func _build_banner(title: String, dur_text: String) -> PanelContainer:
+	# A tiny iron plate (translucent, blood edge); the dungeon stays visible around it.
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(0.0, 54.0)
+	panel.custom_minimum_size = Vector2(0.0, BANNER_HEIGHT)
 	panel.mouse_filter        = Control.MOUSE_FILTER_IGNORE
+	panel.add_theme_stylebox_override("panel", _plate_style())
 
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.05, 0.02, 0.02, 0.90)
-	style.set_border_width_all(1)
-	style.border_color = accent.darkened(0.35)
-	style.set_corner_radius_all(0)
-	panel.add_theme_stylebox_override("panel", style)
-
-	# ── Inner HBox ────────────────────────────────────────────────────────────
 	var hbox := HBoxContainer.new()
 	hbox.name             = "HBox"
-	hbox.alignment        = BoxContainer.ALIGNMENT_BEGIN
 	hbox.mouse_filter     = Control.MOUSE_FILTER_IGNORE
+	hbox.add_theme_constant_override("separation", PUI.S4)
 	panel.add_child(hbox)
 
-	# Left accent stripe
-	var bar := ColorRect.new()
-	bar.color                    = accent
-	bar.custom_minimum_size      = Vector2(7.0, 0.0)
-	bar.size_flags_vertical      = Control.SIZE_FILL
-	hbox.add_child(bar)
-
-	# Left inner padding
-	var pad_l := Control.new()
-	pad_l.custom_minimum_size = Vector2(12.0, 0.0)
-	hbox.add_child(pad_l)
-
-	# Title label (⚠ + trap name)
-	var title_lbl := Label.new()
-	title_lbl.text               = "  ⚠   " + title
+	var title_lbl := PUI.label(title, "HudValue")
 	title_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title_lbl.add_theme_font_size_override("font_size", 16)
-	title_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.82, 1.0))
+	title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hbox.add_child(title_lbl)
 
-	# Duration label (right side)
-	var dur_lbl := Label.new()
+	var dur_lbl := PUI.label(dur_text, "HudValue")
 	dur_lbl.name                  = "DurLabel"
-	dur_lbl.text                  = dur_text
 	dur_lbl.vertical_alignment    = VERTICAL_ALIGNMENT_CENTER
 	dur_lbl.horizontal_alignment  = HORIZONTAL_ALIGNMENT_RIGHT
-	dur_lbl.add_theme_font_size_override("font_size", 15)
-	dur_lbl.add_theme_color_override("font_color", accent.lightened(0.25))
+	dur_lbl.add_theme_color_override("font_color", PUI.EMBER_BRIGHT)
+	dur_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hbox.add_child(dur_lbl)
 
-	# Right padding
-	var pad_r := Control.new()
-	pad_r.custom_minimum_size = Vector2(18.0, 0.0)
-	hbox.add_child(pad_r)
-
 	return panel
+
+
+# Built once; the iron material is cached in PUI, only the margins are tightened for a compact plate.
+var _plate: StyleBoxTexture = null
+
+func _plate_style() -> StyleBoxTexture:
+	if _plate == null:
+		_plate = PUI.box(Color(0.06, 0.04, 0.035, 0.80), PUI.BLOOD, Color(0.04, 0.03, 0.025, 0.86), 0.04, 0.25, 0.02)
+		_plate.content_margin_left = PUI.S4
+		_plate.content_margin_right = PUI.S4
+		_plate.content_margin_top = PUI.S2
+		_plate.content_margin_bottom = PUI.S2
+	return _plate

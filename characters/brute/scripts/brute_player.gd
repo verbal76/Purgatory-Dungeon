@@ -12,7 +12,7 @@
 #  - SURGICAL ADD: Camera head bob system based on horizontal speed, with tunable export variables.
 #  - SURGICAL FIX: Modified _do_block to hold at half animation until released, then finish fast.
 #  - SURGICAL FIX: Added block knockback physics and hit grunt sound to take_damage override.
-#  - SURGICAL PIVOT: Implemented "Zelda Method" attack input. Normal swings fire instantly on press. Holding the button charges the Rapid Attack in the background.
+#  - SURGICAL PIVOT: Implemented "Zelda Method" attack input. Normal swings fire instantly on press: one press = one attack; holding never charges or repeats.
 #  - SURGICAL FIX: Block hold uses speed_scale=0.0 to freeze animation in place.
 #    anim_player.pause() + play() restarts from frame 0 — wrong behaviour.
 #    speed_scale=0.0 then speed_scale=2.5 freezes and resumes from the same frame.
@@ -53,12 +53,6 @@ extends BruteCharacter
 @export var kick_force      : float = 9.0 # Knockback force applied by kick
 @export var kick_stun_time : float = 3.0 # Duration target is stunned after kick
 @export var block_knockback_force : float = 18.0 # Speed player slides back when blocking a hit
-
-# ── Rapid Attack Attack ──────────────────────────────────────────────────────────
-@export var rapid_attack_charge_time  : float = 1.5   # Seconds to fill the charge bar
-@export var rapid_attack_duration     : float = 4.0   # Seconds the rapid attack lasts
-@export var rapid_attack_cooldown     : float = 30.0  # Seconds before rapid attack can recharge
-@export var rapid_attack_attack_rate  : float = 0.2   # Seconds between auto-hits (5 hits/sec)
 
 # ── AOE (Potion Blast) ────────────────────────────────────────
 @export var aoe_base_radius : float = 3.5 # Base size of the potion blast dome
@@ -107,7 +101,7 @@ var _slide_timer           : float   = 0.0
 var _slide_duration        : float   = 0.0
 var _slide_direction       : Vector3 = Vector3.ZERO
 var _slide_cam_lift        : float   = 0.0
-var _slide_knocked_enemies : Array   = []
+var _repulse_cooldown       : float   = 0.0
 
 # ── Status effects (from booby traps) ──────────────────────────────────────
 var _status_reversed_view     : bool  = false
@@ -116,11 +110,13 @@ var _status_drunk             : bool  = false
 var _status_reversed_controls : bool  = false
 var _status_acid              : bool  = false
 var _status_acid_timer        : float = 0.0
+var _status_acid_dps          : float = 1.0   # Set by the trap (TrapManager.acid_damage_per_sec)
 var _status_day_effects_days  : int   = 0
 
 # Tracked timers for timed effects (replacing fire-and-forget create_timer
 # calls so the status label can display a live countdown).
 var _status_drunk_timer    : float = 0.0   # Seconds remaining on drunk effect
+var _status_reversed_view_timer : float = 0.0   # Seconds remaining on Reversed View (same length as Intoxicated)
 var _status_controls_timer : float = 0.0   # Seconds remaining on reversed controls
 
 # ── Status label ───────────────────────────────────────────────────────────────
@@ -131,18 +127,6 @@ var _status_panel        : Control  = null
 var _status_update_timer : float    = 0.0
 const STATUS_UPDATE_INTERVAL : float = 0.5
 
-# ── Rapid Attack state ──────────────────────────────────────────────────────────
-var _attack_held              : bool  = false
-var _rapid_attack_charge           : float = 0.0
-var _rapid_attack_active           : bool  = false
-var _rapid_attack_timer            : float = 0.0
-var _rapid_attack_cooldown_remain  : float = 0.0
-var _rapid_attack_attack_timer     : float = 0.0
-
-# ── Rapid Attack HUD ────────────────────────────────────────────────────────────
-var _rapid_attack_bar_bg   : ColorRect = null
-var _rapid_attack_bar_fill : ColorRect = null
-var _rapid_attack_bar_label: Label     = null
 var _hit_targets     : Dictionary = {}
 
 # ── Buff System Hooks ──────────────────────────────────────────
@@ -152,8 +136,6 @@ var health_on_kill         : float = 0.0
 var passive_regen          : float = 0.0
 var move_speed_modifier    : float = 0.0
 var turn_speed_modifier    : float = 1.0
-var enemy_speed_modifier   : float = 1.0
-var enemy_damage_modifier  : float = 1.0
 var attack_speed           : float = 1.0
 # ── New buff stats ─────────────────────────────────────────────
 var currency_on_kill       : float = 0.0  # Soul Harvester: potions gained per kill
@@ -176,8 +158,7 @@ var _streak_fire   : GPUParticles3D = null
 
 # ── HUD ────────────────────────────────────────────────────────
 var _hud_layer       : CanvasLayer = null
-var _health_bar_bg    : ColorRect   = null
-var _health_bar_fill : ColorRect   = null
+var _vitals          : HudVitals   = null   # health bar + value (scripts/ui/hud_vitals.gd)
 var _health_label    : Label       = null
 
 # ── Damage vignette ────────────────────────────────────────────
@@ -314,46 +295,6 @@ func _do_block() -> void:
 
 
 # ══════════════════════════════════════════════════════════════
-#  RAPID ATTACK
-#  Berserker frenzy: auto-swings at attack_rate for `duration` seconds,
-#  player takes zero damage, first-person view and movement unchanged.
-# ══════════════════════════════════════════════════════════════
-
-func _start_rapid_attack() -> void:
-	if _is_dead:
-		return
-	# Cancel any in-flight single-swing / kick — we own the hitbox now.
-	if _is_attacking:
-		_is_attacking = false
-		_set_weapon_hitbox_active(false)
-		_hit_targets.clear()
-	if _is_kicking:
-		_is_kicking = false
-		_set_kick_hitbox_active(false)
-		_hit_targets.clear()
-
-	_rapid_attack_active       = true
-	_rapid_attack_timer        = rapid_attack_duration
-	_rapid_attack_attack_timer = 0.0
-	_is_attacking              = true
-	anim_player.speed_scale    = attack_speed_scale * attack_speed * 1.5
-	_refresh_rapid_attack_bar()
-
-
-func _end_rapid_attack() -> void:
-	_rapid_attack_active  = false
-	_is_attacking    = false
-	_set_weapon_hitbox_active(false)
-	_hit_targets.clear()
-	_rapid_attack_cooldown_remain = rapid_attack_cooldown
-	anim_player.speed_scale  = 1.0
-	_refresh_rapid_attack_bar()
-
-	if not _is_dead:
-		_change_state(_get_idle_state())
-
-
-# ══════════════════════════════════════════════════════════════
 #  HUB PERK APPLICATION
 # ══════════════════════════════════════════════════════════════
 
@@ -389,11 +330,6 @@ func _apply_hub_perks() -> void:
 	var health_regen_lv : int = int(perk_levels.get("health_regen", 0))
 	if health_regen_lv > 0:
 		passive_regen += 0.5 * float(health_regen_lv)
-
-	var cyclone_lv : int = int(perk_levels.get("cyclone", 0))
-	if cyclone_lv > 0:
-		rapid_attack_duration += 0.5 * float(cyclone_lv)
-		rapid_attack_cooldown  = maxf(rapid_attack_cooldown - 3.0 * float(cyclone_lv), 10.0)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -496,6 +432,13 @@ func _check_kill_streak() -> void:
 	_kill_streak        += new_kills
 
 	# ── Stat-based on-kill effects ─────────────────────────────────────────────
+	_on_kill_haste_trigger()
+	var kill_curse : float = 0.0
+	if health_on_kill < 0.0:
+		kill_curse += -health_on_kill
+	if spark_damage < 0.0:
+		kill_curse += -spark_damage
+	_take_curse_damage(kill_curse * float(new_kills))
 	if health_on_kill > 0.0:
 		receive_heal(health_on_kill * float(new_kills))
 
@@ -627,7 +570,6 @@ func _fire_swing_sparks() -> void:
 func take_damage(amount: float, source_node: Node3D = null) -> void:
 	if _is_dead: return
 	if _is_sliding: return  # Invincible during the evasive slide.
-	if _rapid_attack_active: return  # Invincible during rapid attack frenzy.
 
 	if _is_blocking and source_node != null:
 		var to_source : Vector3 = (source_node.global_position - global_position).normalized()
@@ -700,7 +642,7 @@ func _on_weapon_hit(collider: Node3D) -> void:
 		return
 
 	if target.has_method("take_damage"):
-		var swing_dmg : float = attack_damage
+		var swing_dmg : float = attack_damage + get_low_health_attack_bonus()
 		# Executioner: +bonus% damage when target is below 30% health.
 		if low_health_damage > 0.0:
 			var cur_hp := float(target.get("_current_health") if "_current_health" in target else max_health)
@@ -751,80 +693,28 @@ func _build_hud() -> void:
 	_hud_layer.name = "HUD"
 	add_child(_hud_layer)
 
-	_health_bar_bg          = ColorRect.new()
-	_health_bar_bg.color    = Color(0.15, 0.0, 0.0, 0.8)
-	_health_bar_bg.size     = Vector2(220.0, 22.0)
-	_health_bar_bg.position = Vector2(20.0, 20.0)
-	_hud_layer.add_child(_health_bar_bg)
-
-	_health_bar_fill          = ColorRect.new()
-	_health_bar_fill.color    = Color(0.85, 0.1, 0.1, 1.0)
-	_health_bar_fill.size     = Vector2(220.0, 22.0)
-	_health_bar_fill.position = Vector2(20.0, 20.0)
-	_hud_layer.add_child(_health_bar_fill)
-
-	_health_label          = Label.new()
-	_health_label.position = Vector2(24.0, 20.0)
-	_health_label.add_theme_font_size_override("font_size", 14)
-	_health_label.add_theme_color_override("font_color", Color.WHITE)
-	_hud_layer.add_child(_health_label)
-
+	# Health bar + value: one shared component (the Mage uses the same).
+	_vitals = HudVitals.new()
+	_hud_layer.add_child(_vitals)
+	_health_label            = _vitals.health_label
 	_refresh_health_bar(max_health, max_health)
-
-	_rapid_attack_bar_bg          = ColorRect.new()
-	_rapid_attack_bar_bg.color    = Color(0.08, 0.08, 0.08, 0.8)
-	_rapid_attack_bar_bg.size     = Vector2(220.0, 8.0)
-	_rapid_attack_bar_bg.position = Vector2(20.0, 46.0)
-	_hud_layer.add_child(_rapid_attack_bar_bg)
-
-	_rapid_attack_bar_fill          = ColorRect.new()
-	_rapid_attack_bar_fill.color    = Color(0.15, 0.5, 0.15, 0.7)
-	_rapid_attack_bar_fill.size     = Vector2(220.0, 8.0)
-	_rapid_attack_bar_fill.position = Vector2(20.0, 46.0)
-	_hud_layer.add_child(_rapid_attack_bar_fill)
-
-	_rapid_attack_bar_label          = Label.new()
-	_rapid_attack_bar_label.position = Vector2(20.0, 55.0)
-	_rapid_attack_bar_label.add_theme_font_size_override("font_size", 11)
-	_rapid_attack_bar_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9, 0.7))
-	_hud_layer.add_child(_rapid_attack_bar_label)
-
-	_refresh_rapid_attack_bar()
 
 	# Damage vignette — sits above all other HUD elements so it bleeds over
 	# the health bar and fills the whole screen. mouse_filter IGNORE so it
 	# doesn't block any UI clicks on menus that appear while paused.
 	_damage_vignette = ColorRect.new()
-	_damage_vignette.color = Color(0.85, 0.0, 0.0, 0.0)
+	_damage_vignette.color = Color(PUI.BLOOD, 0.0)
 	_damage_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_damage_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud_layer.add_child(_damage_vignette)
 
-	# ── Active trap effects label ──────────────────────────────────────────────
-	# Semi-transparent dark panel sits at the bottom-centre of the screen.
-	# Visible only when at least one trap effect is active. Updates every 0.5s.
-	_status_panel = ColorRect.new()
-	_status_panel.color         = Color(0.0, 0.0, 0.0, 0.65)
-	_status_panel.anchor_left   = 0.5
-	_status_panel.anchor_top    = 1.0
-	_status_panel.anchor_right  = 0.5
-	_status_panel.anchor_bottom = 1.0
-	_status_panel.offset_left   = -200.0
-	_status_panel.offset_top    = -130.0
-	_status_panel.offset_right  =  200.0
-	_status_panel.offset_bottom = -80.0
-	_status_panel.visible       = false
-	_status_panel.mouse_filter  = Control.MOUSE_FILTER_IGNORE
-	_hud_layer.add_child(_status_panel)
-
-	_status_label = Label.new()
-	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_status_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_status_label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_status_label.add_theme_font_size_override("font_size", 14)
-	_status_label.add_theme_color_override("font_color", Color(1.0, 0.55, 0.1, 1.0))
-	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_status_panel.add_child(_status_label)
+	# ── Active trap effects list ───────────────────────────────────────────────
+	# Small plate at the bottom-centre of the screen, sized to its text. Visible only when at
+	# least one trap effect is active. Updates every 0.5s.
+	var status := HudStatusPanel.new()
+	_hud_layer.add_child(status)
+	_status_panel = status
+	_status_label = status.label
 
 
 func _on_health_changed(new_health: float, max_val: float) -> void:
@@ -832,44 +722,8 @@ func _on_health_changed(new_health: float, max_val: float) -> void:
 
 
 func _refresh_health_bar(current: float, max_val: float) -> void:
-	if _health_bar_fill == null: return
-	var pct : float = clampf(current / max_val, 0.0, 1.0)
-	_health_bar_fill.size.x = 220.0 * pct
-	_health_bar_fill.color  = Color(0.85, 0.1 + 0.6 * pct, 0.1, 1.0)
-	if _health_label != null:
-		_health_label.text = "%d / %d" % [int(current), int(max_val)]
-
-
-func _refresh_rapid_attack_bar() -> void:
-	if _rapid_attack_bar_fill == null:
-		return
-
-	if _rapid_attack_active:
-		var pct : float = clampf(_rapid_attack_timer / rapid_attack_duration, 0.0, 1.0)
-		_rapid_attack_bar_fill.size.x = 220.0 * pct
-		_rapid_attack_bar_fill.color  = Color(1.0, 0.4, 0.0, 1.0)
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = "RAPID ATTACK  %.1fs" % _rapid_attack_timer
-
-	elif _rapid_attack_cooldown_remain > 0.0:
-		var pct : float = 1.0 - clampf(_rapid_attack_cooldown_remain / rapid_attack_cooldown, 0.0, 1.0)
-		_rapid_attack_bar_fill.size.x = 220.0 * pct
-		_rapid_attack_bar_fill.color  = Color(0.7, 0.15, 0.05, 0.85)
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = "Cooldown  %.0fs" % _rapid_attack_cooldown_remain
-
-	elif _attack_held:
-		_rapid_attack_bar_fill.size.x = 220.0 * _rapid_attack_charge
-		_rapid_attack_bar_fill.color  = Color(0.95, 0.75, 0.1, 1.0) if _rapid_attack_charge < 1.0 \
-				else Color(1.0, 0.4, 0.0, 1.0)
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = "RELEASE!" if _rapid_attack_charge >= 1.0 else "Charging…"
-
-	else:
-		_rapid_attack_bar_fill.size.x = 220.0
-		_rapid_attack_bar_fill.color  = Color(0.15, 0.5, 0.15, 0.7)
-		if _rapid_attack_bar_label != null:
-			_rapid_attack_bar_label.text = ""
+	if _vitals == null: return
+	_vitals.set_health(current, max_val)
 
 
 # Called by BuffManager._finalize_close after the day-change slot machine
@@ -893,6 +747,7 @@ func _on_buff_pick_finished() -> void:
 
 
 func _on_die() -> void:
+	clear_timed_statuses()
 	if _streak_fire != null:
 		_streak_fire.emitting = false
 
@@ -919,10 +774,16 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if get_tree().paused: return
 
-	if event is InputEventMouseMotion:
+	# A finger on the touch screen also produces emulated mouse motion; touch look is fed by the touch
+	# layer as ordinary mouse-look instead, so the emulated copy must not turn the camera a second time.
+	if event is InputEventMouseMotion and (event as InputEventMouseMotion).device != InputEvent.DEVICE_ID_EMULATION:
 		var look        : float = (event as InputEventMouseMotion).relative.x
 		var actual_sens : float = mouse_sensitivity * turn_speed_modifier
 		_yaw -= look * actual_sens
+		# Show the turn on the frame it arrives, not at the next 30 Hz physics tick (at 20-40 fps the tick cadence made
+		# the camera stand still for a frame, then jump). Same states as the tick: the view is locked while blocking / dead.
+		if not _is_dead and not _is_blocking:
+			_apply_yaw_now()
 
 	if event.is_action_pressed("kick") and not _is_kicking and not _is_attacking and not _is_sliding and not _is_blocking:
 		_do_kick()
@@ -948,26 +809,13 @@ func _physics_tick(delta: float) -> void:
 		take_damage(max_health + 1.0)
 
 	# ── Attack Input Polling (ZELDA METHOD) ──────────────────────────────────
+	# One press = exactly one swing. Holding never charges, repeats or changes anything.
 	if Input.is_action_just_pressed("attack") and not _is_attacking and not _is_kicking \
-			and not _is_sliding and not _is_blocking and not _rapid_attack_active and not _is_dead:
-		_attack_held = true
-		_rapid_attack_charge = 0.0
+			and not _is_sliding and not _is_blocking and not _is_dead:
 		_do_attack()
 
-	if Input.is_action_pressed("attack") and _attack_held and not _is_dead and _rapid_attack_cooldown_remain <= 0.0:
-		_rapid_attack_charge = minf(_rapid_attack_charge + delta / rapid_attack_charge_time, 1.0)
-		_refresh_rapid_attack_bar()
-
-	if Input.is_action_just_released("attack") and _attack_held:
-		_attack_held = false
-		if _rapid_attack_charge >= 1.0 and _rapid_attack_cooldown_remain <= 0.0 and not _rapid_attack_active:
-			_rapid_attack_charge = 0.0
-			_start_rapid_attack()
-		else:
-			_rapid_attack_charge = 0.0
-			_refresh_rapid_attack_bar()
-
 	_check_kill_streak()
+	_tick_kill_haste(delta)
 
 	if _aoe_cooldown > 0.0:
 		_aoe_cooldown -= delta
@@ -977,7 +825,7 @@ func _physics_tick(delta: float) -> void:
 
 	if _status_acid and not _is_dead:
 		_status_acid_timer -= delta
-		take_damage(15.0 * delta)
+		take_damage(_status_acid_dps * delta)
 		if _status_acid_timer <= 0.0:
 			_status_acid = false
 
@@ -988,6 +836,13 @@ func _physics_tick(delta: float) -> void:
 			_status_drunk = false
 			_refresh_status_label()
 
+	if _status_reversed_view and _status_reversed_view_timer > 0.0:
+		_status_reversed_view_timer -= delta
+		if _status_reversed_view_timer <= 0.0:
+			_status_reversed_view = false
+			_reset_view_arm()
+			_refresh_status_label()
+
 	if _status_reversed_controls and _status_controls_timer > 0.0:
 		_status_controls_timer -= delta
 		if _status_controls_timer <= 0.0:
@@ -995,7 +850,7 @@ func _physics_tick(delta: float) -> void:
 			_refresh_status_label()
 
 	# Throttle status label refresh — no need to rebuild text every 60Hz tick.
-	if _status_drunk or _status_reversed_controls or _status_acid:
+	if _status_drunk or _status_reversed_view or _status_reversed_controls or _status_acid:
 		_status_update_timer -= delta
 		if _status_update_timer <= 0.0:
 			_status_update_timer = STATUS_UPDATE_INTERVAL
@@ -1007,41 +862,6 @@ func _physics_tick(delta: float) -> void:
 		move_and_slide()
 		_update_footsteps(delta)
 		return
-
-	if _rapid_attack_active:
-		# Normal first-person movement + view + footsteps — player is in
-		# full control during rapid attack. The only difference vs. normal
-		# play is the auto-swing tick below and the damage immunity in
-		# take_damage (see "_rapid_attack_active" gate there).
-		_handle_view_input(delta)
-		_apply_view_rotation()
-		_handle_movement(delta)
-		_update_footsteps(delta)
-		_apply_head_bob(delta)
-
-		_rapid_attack_timer -= delta
-		_rapid_attack_attack_timer -= delta
-
-		# Auto-chop. Keeps the weapon hitbox hot so anything walked into
-		# during the swing connects, then re-triggers each time the attack
-		# timer drains.
-		if _rapid_attack_attack_timer <= 0.0:
-			_rapid_attack_attack_timer = rapid_attack_attack_rate
-			_hit_targets.clear()
-			_set_weapon_hitbox_active(true)
-			_play_anim(pick_attack())
-			anim_player.speed_scale = attack_speed_scale * attack_speed * 1.5
-			_fire_swing_sparks()
-
-		_refresh_rapid_attack_bar()
-
-		if _rapid_attack_timer <= 0.0:
-			_end_rapid_attack()
-		return
-
-	if _rapid_attack_cooldown_remain > 0.0:
-		_rapid_attack_cooldown_remain = maxf(_rapid_attack_cooldown_remain - delta, 0.0)
-		_refresh_rapid_attack_bar()
 
 	_handle_view_input(delta)
 	_apply_view_rotation()
@@ -1070,11 +890,21 @@ func _handle_view_input(delta: float) -> void:
 		_yaw -= look_x * actual_speed * delta
 
 
-func _apply_view_rotation() -> void:
+## Starts the run facing `yaw` (the dungeon entry orients the player into the open space; see the main game file).
+func set_facing_yaw(yaw: float) -> void:
+	_yaw = yaw
+	_apply_yaw_now()
+
+
+func _apply_yaw_now() -> void:
 	var yaw_out : float = _yaw
 	if _status_drunk:
 		yaw_out += sin(Time.get_ticks_msec() * 0.002) * 0.18
 	rotation.y = yaw_out
+
+
+func _apply_view_rotation() -> void:
+	_apply_yaw_now()
 
 	var arm : SpringArm3D = get_node_or_null("SpringArm3D") as SpringArm3D
 	if arm != null:
@@ -1094,7 +924,7 @@ func _handle_movement(delta: float) -> void:
 		var right   := Vector3( cos(_yaw), 0.0, -sin(_yaw))
 		var dir      := (forward * -input_dir.y + right * input_dir.x).normalized()
 
-		var current_move_speed : float = maxf(move_speed + move_speed_modifier, 1.0)
+		var current_move_speed : float = maxf((move_speed + move_speed_modifier) * kill_haste_multiplier(), 1.0)
 		velocity.x = move_toward(velocity.x, dir.x * current_move_speed, move_acceleration * delta)
 		velocity.z = move_toward(velocity.z, dir.z * current_move_speed, move_acceleration * delta)
 
@@ -1116,35 +946,32 @@ func _handle_movement(delta: float) -> void:
 			if _idle_timer >= idle_return_delay: _change_state(_get_idle_state())
 
 
+# The jump / Slide button now performs REPULSE (it used to slide backwards). `_is_sliding` is kept as the "repulse in
+# progress" flag: it already makes take_damage() ignore hits, lifts the camera and gates the other actions, which is exactly
+# the short protected, rooted window the emergency push needs.
 func _handle_slide(delta: float) -> void:
 	if not InputMap.has_action("jump"):
 		return
 
-	if Input.is_action_just_pressed("jump") and not _is_sliding \
+	if _repulse_cooldown > 0.0:
+		_repulse_cooldown -= delta
+
+	if Input.is_action_just_pressed("jump") and not _is_sliding and _repulse_cooldown <= 0.0 \
 			and not _is_dead and not _is_blocking and is_on_floor():
 		_start_slide()
 
 	if _is_sliding:
 		_slide_timer += delta
-		var progress : float = clampf(_slide_timer / _slide_duration, 0.0, 1.0)
+		velocity.x = 0.0
+		velocity.z = 0.0
 
-		# Quadratic deceleration: fast lunge at the start, smooth halt at the end.
-		var spd : float = slide_power * (1.0 - progress) * (1.0 - progress)
-		velocity.x = _slide_direction.x * spd
-		velocity.z = _slide_direction.z * spd
-
-		# Camera lunge lift — rises quickly at the start then fades.
-		if progress < 0.2:
+		# Camera lift — rises quickly at the start then fades.
+		if _slide_timer / _slide_duration < 0.2:
 			_slide_cam_lift = lerpf(_slide_cam_lift, 0.08, delta * 20.0)
 
-		_check_slide_knockback()
-
-		if progress >= 1.0:
+		if _slide_timer >= _slide_duration:
 			_is_sliding = false
 			_slide_timer = 0.0
-			velocity.x   = 0.0
-			velocity.z   = 0.0
-			_slide_knocked_enemies.clear()
 			_change_state(_get_idle_state())
 
 
@@ -1158,52 +985,14 @@ func _start_slide() -> void:
 		_set_kick_hitbox_active(false)
 		anim_player.speed_scale = 1.0
 
-	# Slide backward — opposite of the look direction (+Z in Godot's coordinate system).
-	_slide_direction = Vector3(sin(_yaw), 0.0, cos(_yaw))
-	_is_sliding      = true
-	_slide_timer     = 0.0
-	# Duration so total distance ≈ slide_distance_clear. With quadratic decel the
-	# integral of (1-t)^2 over [0,1] is 1/3, so: distance = power * duration / 3.
-	_slide_duration  = 3.0 * slide_distance_clear / maxf(slide_power, 0.1)
-	_slide_cam_lift  = 0.0
-	_slide_knocked_enemies.clear()
-
-
-func _check_slide_knockback() -> void:
-	# Only knock one enemy per slide so the player doesn't chain-stun an entire room.
-	if _slide_knocked_enemies.size() >= 1:
-		return
-
-	var my_pos : Vector3 = global_position
-	for node in get_tree().get_nodes_in_group("enemies"):
-		if not (node is Node3D) or not is_instance_valid(node):
-			continue
-		var enemy : Node3D = node as Node3D
-		if enemy.get("_is_dead"):
-			continue
-		if my_pos.distance_to(enemy.global_position) > slide_knock_radius:
-			continue
-		if _slide_knocked_enemies.has(enemy):
-			continue
-
-		if enemy.has_method("take_knockback"):
-			enemy.take_knockback(_slide_direction, kick_force, 1.0)
-		_slide_knocked_enemies.append(enemy)
-
-		# Shorten remaining travel to slide_distance_hit after the bump.
-		_slide_duration = _slide_timer + 3.0 * slide_distance_hit / maxf(slide_power, 0.1)
-
-	# Kickable props in the slide's radius take the same impulse treatment.
-	# No per-slide cap — kicking a whole pile of barrels on a good slide is intended.
-	for prop in get_tree().get_nodes_in_group("kickable_prop"):
-		if not (prop is Node3D) or not is_instance_valid(prop):
-			continue
-		var prop_node : Node3D = prop as Node3D
-		if my_pos.distance_to(prop_node.global_position) > slide_knock_radius:
-			continue
-		if prop_node.has_method("apply_kick"):
-			prop_node.apply_kick(_slide_direction, kick_force * 10.0)
-		break
+	_is_sliding       = true
+	_slide_timer      = 0.0
+	_slide_duration   = REPULSE_DURATION
+	_slide_cam_lift   = 0.0
+	_repulse_cooldown = REPULSE_COOLDOWN
+	velocity.x = 0.0
+	velocity.z = 0.0
+	_repulse_burst(slide_power / 20.0)   # Heavy Gravity halves slide_power, so it halves the push too
 
 
 func _set_weapon_hitbox_active(active: bool) -> void:
@@ -1248,7 +1037,7 @@ func _do_attack() -> void:
 	var wait_time : float = maxf((duration / attack_speed_scale) - 0.15, 0.05)
 	await get_tree().create_timer(wait_time).timeout
 
-	if _rapid_attack_active or _is_dead:
+	if _is_dead:
 		return
 
 	_set_weapon_hitbox_active(false)
@@ -1390,13 +1179,14 @@ func _process(_delta: float) -> void:
 #  STATUS EFFECTS (TRAP SYSTEM)
 # ══════════════════════════════════════════════════════════════
 
-func apply_status(effect_name: String, days_duration: int) -> void:
+# days_duration: for the day-based effects it is the number of in-game days; for "acid_pool" it is
+# the duration in SECONDS (0 = default 15). strength: acid damage per second (0 = default 1.0).
+func apply_status(effect_name: String, days_duration: int, strength: float = 0.0) -> void:
 	match effect_name:
 		"reversed_view":
-			_status_reversed_view    = true
-			_status_day_effects_days = maxi(_status_day_effects_days, days_duration)
-			if not GameClock.day_changed.is_connected(_on_day_changed):
-				GameClock.day_changed.connect(_on_day_changed)
+			# Timer-based like Intoxicated (and the same length); the day count argument is ignored. Re-applying refreshes it.
+			_status_reversed_view       = true
+			_status_reversed_view_timer = STATUS_REVERSED_VIEW_SECONDS
 		"heavy_gravity":
 			if not _status_heavy_gravity:
 				_status_heavy_gravity    = true
@@ -1406,13 +1196,14 @@ func apply_status(effect_name: String, days_duration: int) -> void:
 				GameClock.day_changed.connect(_on_day_changed)
 		"drunk":
 			_status_drunk       = true
-			_status_drunk_timer = 30.0   # Tracked float replaces fire-and-forget timer
+			_status_drunk_timer = STATUS_DRUNK_SECONDS   # Tracked float replaces fire-and-forget timer
 		"reversed_controls":
 			_status_reversed_controls = true
 			_status_controls_timer    = 30.0
 		"acid_pool":
 			_status_acid       = true
-			_status_acid_timer = 15.0
+			_status_acid_timer = float(days_duration) if days_duration > 0 else 15.0
+			_status_acid_dps   = strength if strength > 0.0 else 1.0
 
 	# Show the label immediately when an effect is applied.
 	_refresh_status_label()
@@ -1428,23 +1219,21 @@ func _refresh_status_label() -> void:
 	var lines : Array[String] = []
 
 	if _status_reversed_view:
-		lines.append("⚠ Vision Reversed  (%d day%s)" % [
-			_status_day_effects_days,
-			"s" if _status_day_effects_days != 1 else ""])
+		lines.append("Vision Reversed  (%.0fs)" % maxf(_status_reversed_view_timer, 0.0))
 
 	if _status_heavy_gravity:
-		lines.append("⚠ Heavy Gravity  (%d day%s)" % [
+		lines.append("Heavy Gravity  (%d day%s)" % [
 			_status_day_effects_days,
 			"s" if _status_day_effects_days != 1 else ""])
 
 	if _status_drunk:
-		lines.append("⚠ Disoriented  (%.0fs)" % _status_drunk_timer)
+		lines.append("Disoriented  (%.0fs)" % _status_drunk_timer)
 
 	if _status_reversed_controls:
-		lines.append("⚠ Controls Reversed  (%.0fs)" % _status_controls_timer)
+		lines.append("Controls Reversed  (%.0fs)" % _status_controls_timer)
 
 	if _status_acid:
-		lines.append("⚠ Acid Burn  (%.0fs)" % _status_acid_timer)
+		lines.append("Acid Burn  (%.0fs)" % _status_acid_timer)
 
 	if lines.is_empty():
 		_status_panel.visible = false
@@ -1453,10 +1242,37 @@ func _refresh_status_label() -> void:
 		_status_panel.visible = true
 
 
+# Puts the camera arm back upright right now. _apply_view_rotation() normally does it every tick, but the blocking branch of
+# the physics tick returns before reaching it, so ending Reversed View (expiry or death) must not rely on that.
+func _reset_view_arm() -> void:
+	var arm : SpringArm3D = get_node_or_null("SpringArm3D") as SpringArm3D
+	if arm != null:
+		arm.rotation.x = 0.0
+
+# Ends every timed trap status at once (death: the screen must not stay upside-down / swaying behind the death overlay,
+# and nothing may carry into whatever comes next). Day-based Heavy Gravity is restored here too.
+func clear_timed_statuses() -> void:
+	_status_reversed_view       = false
+	_status_reversed_view_timer = 0.0
+	_reset_view_arm()
+	_status_drunk               = false
+	_status_drunk_timer         = 0.0
+	_status_reversed_controls   = false
+	_status_controls_timer      = 0.0
+	_status_acid                = false
+	_status_acid_timer          = 0.0
+	if _status_heavy_gravity:
+		_status_heavy_gravity = false
+		slide_power           *= 2.0
+	_status_day_effects_days = 0
+	if GameClock.day_changed.is_connected(_on_day_changed):
+		GameClock.day_changed.disconnect(_on_day_changed)
+	_refresh_status_label()
+
+
 func _on_day_changed(_day: int) -> void:
 	_status_day_effects_days -= 1
 	if _status_day_effects_days <= 0:
-		_status_reversed_view = false
 		if _status_heavy_gravity:
 			_status_heavy_gravity = false
 			slide_power           *= 2.0
@@ -1467,7 +1283,7 @@ func _on_day_changed(_day: int) -> void:
 
 
 func _get_effective_move_speed() -> float:
-	return maxf(move_speed + move_speed_modifier, 1.0)
+	return maxf((move_speed + move_speed_modifier) * kill_haste_multiplier(), 1.0)
 
 
 func _get_footstep_stream() -> AudioStream:

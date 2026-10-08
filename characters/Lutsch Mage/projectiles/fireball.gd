@@ -103,6 +103,9 @@ func activate(damage: float, dir: Vector3) -> void:
 	visible = true
 	set_physics_process(true)
 
+	# mage_ai's pool turns monitoring off while a fireball is idle; without
+	# turning it back on, body_entered never fires and the bolt does no damage.
+	set_deferred("monitoring", true)
 	if _collision_shape != null:
 		_collision_shape.set_deferred("disabled", false)
 	if _particles != null:
@@ -134,6 +137,13 @@ func _physics_process(delta: float) -> void:
 
 		var hit := space.intersect_ray(_wall_query)
 		if not hit.is_empty():
+			# The sweep ray uses mask 1, which also contains the player. If the
+			# ray reaches the player before the overlap does, count it as a hit
+			# instead of detonating harmlessly.
+			var collider = hit.get("collider")
+			if collider is Node and collider.is_in_group("player") \
+					and collider.has_method("take_damage"):
+				collider.take_damage(_damage, self)
 			_deactivate()
 			return
 
@@ -164,6 +174,7 @@ func _on_timeout() -> void:
 func _deactivate() -> void:
 	_is_active = false
 	_lifetime_timer.stop()
+	set_deferred("monitoring", false)
 	if _collision_shape != null:
 		_collision_shape.set_deferred("disabled", true)
 	if _particles != null:

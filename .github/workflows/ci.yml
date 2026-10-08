@@ -1,0 +1,373 @@
+name: CI
+
+# Validate the project headlessly, then export a Windows build and upload it as a
+# workflow artifact traceable to the exact commit.
+#
+# RELEASES (see docs/RELEASES.md): the owner only ever downloads "Purgatory Dungeon v<N>"
+# from the GitHub Releases page.
+#   * Push a tag v<N> (N = the number in ./VERSION), or - where tags cannot be pushed - the branch
+#     release/v<N>: this workflow builds that exact commit and publishes the Release (title
+#     "Purgatory Dungeon v<N>", file Purgatory-Dungeon-v<N>-Windows.zip, marked Latest). The build
+#     is stamped as the release build, so the game shows plainly "Purgatory Dungeon v<N>".
+#   * To publish a build an earlier CI run already made WITHOUT rebuilding it, push a
+#     helper BRANCH  promote/v<N>/<run_id>/<full_sha>[/notlatest]  (created from a commit that
+#     contains this workflow), wait for the `promote` job, then delete that helper branch.
+#     (A branch push is used because workflow_dispatch only works for workflows on the default
+#     branch, and the agent environment cannot push tags.)
+# ACTIONS BUDGET POLICY (CLAUDE.md "GitHub Actions budget"): GitHub-hosted minutes are scarce. Validate locally first
+# (tests/run_tests.sh, tools/ota_runtime.py --check, classify, the local e2e). This workflow therefore:
+#   * runs on pull requests only when they are READY FOR REVIEW (never for drafts), never for docs-only changes, and
+#     cancels the superseded run when a newer commit arrives;
+#   * runs tests only (no Windows export, no APK) on ordinary pushes/PRs;
+#   * builds the Windows package and the Android APK only for a release (tag v<N> / branch release/v<N>) or when asked
+#     explicitly through workflow_dispatch (build_windows / build_android);
+#   * never rebuilds for promote/ branches (they publish an existing artifact).
+on:
+  push:
+    branches: [main, 'promote/**', 'release/v[0-9]*']
+    tags: ['v[0-9]*']
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['docs/**', '**/*.md', 'LICENSE', '.gitignore', '.editorconfig', '.gitattributes']
+  workflow_dispatch:
+    inputs:
+      build_windows:
+        description: Also export and verify the Windows package (not needed for ordinary validation)
+        type: boolean
+        default: false
+      build_android:
+        description: Also build, sign and qualify the Android APK (only when a phone-testable artifact is needed)
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # A newer commit makes an older run on a PR / main irrelevant; a release or promote run must never be cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
+
+env:
+  GODOT_VERSION: "4.6"
+  GODOT_RELEASE: "4.6-stable"
+  # On pull_request events github.sha is a synthetic merge commit that exists on no
+  # branch; record the real head commit so builds are traceable to checkable source.
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-export:
+    # A promote branch publishes an existing artifact; it must not rebuild anything. Draft pull requests never run.
+    if: ${{ !startsWith(github.ref, 'refs/heads/promote/') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45   # typical: 15-17 minutes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot editor + export templates
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_RELEASE }}-windows-templates-v1
+
+      - name: Install Godot ${{ env.GODOT_RELEASE }}
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}"
+          mkdir -p ~/godot-bin && cd ~/godot-bin
+          curl -fsSL -O "${base}/SHA512-SUMS.txt"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          grep -E "Godot_v${GODOT_RELEASE}_(linux.x86_64.zip|export_templates.tpz)$" SHA512-SUMS.txt | sha512sum -c -
+          unzip -q "Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          tpl="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$tpl"
+          unzip -q "Godot_v${GODOT_RELEASE}_export_templates.tpz" 'templates/windows_*' 'templates/version.txt' -d tmp
+          mv tmp/templates/* "$tpl"/
+          rm -rf tmp *.zip *.tpz
+
+      - name: Locate Godot
+        run: echo "GODOT=$HOME/godot-bin/Godot_v${GODOT_RELEASE}_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: Verify Godot version
+        run: |
+          "$GODOT" --version
+          "$GODOT" --version | grep -q "^${GODOT_VERSION}.stable"
+
+      - name: Check public version consistency
+        run: |
+          rel=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then rel="$GITHUB_REF_NAME"; fi
+          if [[ "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="v${GITHUB_REF_NAME#release/v}"; fi
+          if [[ -n "$rel" ]]; then
+            python3 tools/release_tool.py check --tag "$rel"
+          else
+            python3 tools/release_tool.py check
+          fi
+
+      - name: Native runtime lock (docs/OTA.md section 3)
+        run: python3 tools/ota_runtime.py --check
+
+      - name: Validate project and run tests
+        env:
+          # A release build must contain the canonical studio logo (docs/RELEASES.md).
+          REQUIRE_STUDIO_LOGO: ${{ (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')) && '1' || '' }}
+          # OPT-IN (docs/RELEASES.md "CI cost", owner decision): the repository variable CI_TEST_JOBS (e.g. 3) runs that many Godot stages at once
+          # on the 4-vCPU runner. Unset/empty = strictly sequential, exactly as before.
+          TEST_JOBS: ${{ vars.CI_TEST_JOBS }}
+        run: tests/run_tests.sh "$GODOT"
+
+      # What lets a later OTA publication REUSE this green suite instead of re-running it (tools/ota/proven_suite.py, docs/OTA.md 11a).
+      # A pull_request run tests a synthetic merge commit, so the suite result only speaks for SOURCE_SHA when the tested tree IS the tree of
+      # SOURCE_SHA; the attestation step runs (and so shows success through the API) only then. Names are constants of proven_suite.py.
+      - name: Exact-tree check (is the tested tree the tree of the commit named SOURCE_SHA?)
+        id: exacttree
+        run: |
+          same=false
+          if python3 tools/ota/proven_suite.py same-tree --sha "$SOURCE_SHA"; then same=true; fi
+          echo "same=$same" >> "$GITHUB_OUTPUT"
+
+      - name: Exact-SHA attestation (the suite above passed on the tree of the commit)
+        if: steps.exacttree.outputs.same == 'true'
+        run: echo "the full suite passed on the exact tree of commit $SOURCE_SHA"
+
+      - name: Decide whether to build the Windows package (release, or requested by workflow_dispatch)
+        id: winbuild
+        env:
+          WANT: ${{ inputs.build_windows }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* || "$WANT" == "true" ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Windows package not built (policy: only for releases or an explicit request)."
+          fi
+
+      - name: Write build_info.json (shipped inside the game)
+        if: steps.winbuild.outputs.build == 'true'
+        run: |
+          rel=""
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="--release"; fi
+          python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" $rel
+
+      - name: Export Windows build
+        if: steps.winbuild.outputs.build == 'true'
+        run: |
+          mkdir -p build/windows
+          "$GODOT" --headless --path . --export-release "Windows Desktop" build/windows/PurgatoryDungeon.exe
+          test -s build/windows/PurgatoryDungeon.exe
+          test -s build/windows/PurgatoryDungeon.pck
+
+      - name: Verify exported package
+        if: steps.winbuild.outputs.build == 'true'
+        run: |
+          flags=""
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then
+            flags="--release --require-logo --sha $SOURCE_SHA"
+          fi
+          python3 tools/verify_package.py build/windows --version "$(cat VERSION)" $flags --godot "$GODOT"
+
+      - name: Write build info
+        if: steps.winbuild.outputs.build == 'true'
+        run: |
+          cd build/windows
+          {
+            echo "Purgatory Dungeon - Windows build"
+            echo "source_sha=${SOURCE_SHA}"
+            echo "ref=${GITHUB_REF}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "godot=$("$GODOT" --version)"
+            echo "built_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "export_preset=Windows Desktop (release, x86_64, external PCK)"
+            echo "sha256:"
+            sha256sum PurgatoryDungeon.exe PurgatoryDungeon.pck
+          } | tee BUILD_INFO.txt
+
+      - name: Upload Windows build
+        if: steps.winbuild.outputs.build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PurgatoryDungeon-windows-${{ env.SOURCE_SHA }}
+          path: |
+            build/windows/PurgatoryDungeon.exe
+            build/windows/PurgatoryDungeon.pck
+            build/windows/BUILD_INFO.txt
+          retention-days: 7
+          compression-level: 6
+
+  # Android APK: built, signed with the stable app key and qualified (identity, API 36 target, 16 KB
+  # alignment, signature, game content) by the same scripts anyone can run (tools/android/).
+  android:
+    # Built only for a release or when explicitly requested (it costs ~10 minutes of runner time and signs an APK), and only AFTER the full
+    # suite of validate-and-export is green: a red suite builds and signs nothing (it used to run in parallel and burn ~9 minutes anyway).
+    needs: validate-and-export
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v') || (github.event_name == 'workflow_dispatch' && inputs.build_android) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30   # typical: 4-5 minutes now that the duplicate test subset is gone
+    concurrency:
+      group: android-signing-key      # first run creates the key; never two at once
+      cancel-in-progress: false
+    permissions:
+      contents: write                 # stores the signing key in a private draft release on the first run
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache Godot editor + Android export templates
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_RELEASE }}-android-templates-v1
+
+      - name: Install Godot ${{ env.GODOT_RELEASE }} + Android templates
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}"
+          mkdir -p ~/godot-bin && cd ~/godot-bin
+          curl -fsSL -O "${base}/SHA512-SUMS.txt"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          grep -E "Godot_v${GODOT_RELEASE}_(linux.x86_64.zip|export_templates.tpz)$" SHA512-SUMS.txt | sha512sum -c -
+          unzip -q "Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          tpl="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$tpl"
+          unzip -q "Godot_v${GODOT_RELEASE}_export_templates.tpz" 'templates/android_*' 'templates/version.txt' -d tmp
+          mv tmp/templates/* "$tpl"/
+          rm -rf tmp *.zip *.tpz
+
+      - name: Locate Godot
+        run: echo "GODOT=$HOME/godot-bin/Godot_v${GODOT_RELEASE}_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: Verify Godot version
+        run: |
+          "$GODOT" --version
+          "$GODOT" --version | grep -q "^${GODOT_VERSION}.stable"
+
+      - name: Check public version consistency
+        run: |
+          rel=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then rel="$GITHUB_REF_NAME"; fi
+          if [[ "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="v${GITHUB_REF_NAME#release/v}"; fi
+          if [[ -n "$rel" ]]; then python3 tools/release_tool.py check --tag "$rel"; else python3 tools/release_tool.py check; fi
+
+      - name: Native runtime lock (docs/OTA.md section 3)
+        run: python3 tools/ota_runtime.py --check
+
+      # The former "Mobile input / splash / menu tests" step (a TEST_FILTER subset of tests/run_tests.sh, ~6 minutes) is gone: it ran the same
+      # stages, on the same runner type, commit and engine, that validate-and-export has just passed in full (this job needs it).
+
+      - name: Write build_info.json (shipped inside the game)
+        run: |
+          rel=""
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="--release"; fi
+          python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" $rel
+
+      - name: Android signing key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: source tools/android/signing.sh
+
+      - name: Build and qualify the APK
+        run: tools/android/build_apk.sh "$GODOT" build/android/Purgatory-Dungeon-Android.apk
+
+      - name: Android build record
+        run: |
+          apk=build/android/Purgatory-Dungeon-Android.apk
+          {
+            echo "Purgatory Dungeon - Android build"
+            echo "source_sha=${SOURCE_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "godot=$("$GODOT" --version)"
+            echo "package=com.hotatticgames.purgatorydungeon"
+            echo "version_name=$(cat VERSION)"
+            echo "version_code=$(cat VERSION)"
+            echo "cert_sha256=${ANDROID_CERT_SHA256}"
+            echo "apk_sha256=$(sha256sum "$apk" | cut -d' ' -f1)"
+          } | tee build/android/ANDROID_BUILD_INFO.txt
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PurgatoryDungeon-android-${{ env.SOURCE_SHA }}
+          path: |
+            build/android/Purgatory-Dungeon-Android.apk
+            build/android/ANDROID_BUILD_INFO.txt
+          retention-days: 7
+          compression-level: 0
+
+  # Tag push or release/v<N> branch push -> publish the release built by this very run.
+  publish:
+    needs: [validate-and-export, android]
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: PurgatoryDungeon-windows-${{ env.SOURCE_SHA }}
+          path: artifact
+      - uses: actions/download-artifact@v4
+        with:
+          name: PurgatoryDungeon-android-${{ env.SOURCE_SHA }}
+          path: android-artifact
+      - name: Publish "Purgatory Dungeon v<N>" (Windows zip + Android APK)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANDROID_ARTIFACT_DIR: android-artifact
+        run: |
+          ver="${GITHUB_REF_NAME#release/}"
+          tools/publish_release.sh "${ver#v}" "$SOURCE_SHA" artifact "$GITHUB_RUN_ID" true
+
+  # Helper branch promote/v<N>/<run_id>/<full_sha>[/notlatest] -> publish an artifact an earlier
+  # run already built (no rebuild; the exact verified binary is attached).
+  promote:
+    if: startsWith(github.ref, 'refs/heads/promote/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and validate the promote branch name
+        id: p
+        run: |
+          IFS=/ read -r _ ver run sha flag <<<"$GITHUB_REF_NAME"
+          [[ "$ver" =~ ^v[1-9][0-9]*$ ]] || { echo "bad version in branch name"; exit 1; }
+          [[ "$run" =~ ^[0-9]+$ ]] || { echo "bad run id in branch name"; exit 1; }
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "bad sha in branch name"; exit 1; }
+          [[ -z "$flag" || "$flag" == "notlatest" ]] || { echo "bad flag in branch name"; exit 1; }
+          echo "version=${ver#v}" >> "$GITHUB_OUTPUT"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if [[ "$flag" == "notlatest" ]]; then echo "latest=false" >> "$GITHUB_OUTPUT"; else echo "latest=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ steps.p.outputs.run }}
+          github-token: ${{ github.token }}
+          pattern: PurgatoryDungeon-windows-*
+          merge-multiple: true
+          path: artifact
+      - name: Publish "Purgatory Dungeon v<N>" from the existing artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/publish_release.sh "${{ steps.p.outputs.version }}" "${{ steps.p.outputs.sha }}" artifact "${{ steps.p.outputs.run }}" "${{ steps.p.outputs.latest }}"

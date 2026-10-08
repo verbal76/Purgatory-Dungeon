@@ -50,7 +50,7 @@ extends Node
 
 # ── Configurable paths ─────────────────────────────────────────────────────────
 const LORE_FILE_PATH  : String = "res://data/codex_lore.txt"
-const GAME_FOLDER     : String = "PurgetoryDungeon"   # Must match SaveManager
+const GAME_FOLDER     : String = StoragePaths.GAME_FOLDER   # Must match SaveManager
 const CODEX_FILE_NAME : String = "codex.json"
 
 # ── Runtime state ──────────────────────────────────────────────────────────────
@@ -78,10 +78,7 @@ func _ready() -> void:
 # Resolves Documents/PurgetoryDungeon/codex.json and creates the directory
 # if it does not yet exist.
 func _build_path() -> void:
-	var docs     : String = OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
-	var game_dir : String = docs.path_join(GAME_FOLDER)
-	if not DirAccess.dir_exists_absolute(game_dir):
-		DirAccess.make_dir_recursive_absolute(game_dir)
+	var game_dir : String = StoragePaths.ensure_root()
 	_codex_path = game_dir.path_join(CODEX_FILE_NAME)
 
 

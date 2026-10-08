@@ -44,6 +44,42 @@ const _POTION_REWARD : Dictionary = {"bronze": 5, "silver": 10, "gold": 15}
 
 const _DEBRIS_TEX : String = "res://addons/kenney_particle_pack/smoke_07.png"
 
+# The chest/key/mimic FBX files point at texture files that exist only on the artist's machine
+# (Mat_Chests_*.tga), so they import untextured. The same textures ship in this folder under
+# an "SM_Chests_" prefix: build one shared material from them and apply it to every chest mesh
+# (the same approach prop_spawner.gd uses for the general props).
+const _TEX_DIR : String = "res://addons/props/chests and keys/SM_Chests_Mat_Chests_"
+static var _shared_mat : StandardMaterial3D = null
+
+
+static func _chest_material() -> StandardMaterial3D:
+	if _shared_mat != null:
+		return _shared_mat
+	var m := StandardMaterial3D.new()
+	if ResourceLoader.exists(_TEX_DIR + "AlbedoTransparency.tga"):
+		m.albedo_texture = load(_TEX_DIR + "AlbedoTransparency.tga")
+	if ResourceLoader.exists(_TEX_DIR + "MetallicSmoothness.tga"):
+		var mt : Texture2D = load(_TEX_DIR + "MetallicSmoothness.tga")
+		m.metallic                  = 1.0
+		m.metallic_texture          = mt
+		m.metallic_texture_channel  = BaseMaterial3D.TEXTURE_CHANNEL_RED
+		m.roughness                 = 1.0
+		m.roughness_texture         = mt
+		m.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_GREEN
+	if ResourceLoader.exists(_TEX_DIR + "Normal.tga"):
+		m.normal_enabled = true
+		m.normal_texture = load(_TEX_DIR + "Normal.tga")
+	_shared_mat = m
+	return m
+
+
+static func _apply_chest_material(root: Node) -> void:
+	if root == null:
+		return
+	var mat := _chest_material()
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).material_override = mat
+
 @export var interact_radius   : float = 2.0
 @export var mimic_damage      : float = 8.0
 @export var mimic_curse_count : int   = 5
@@ -59,6 +95,7 @@ var _opened    : bool   = false
 var _player_in_range : bool = false
 
 # Prompt HUD (local CanvasLayer — only visible while player is in range).
+var _use_ctx       : bool        = false   # this chest is currently asking the touch layer for its USE button
 var _prompt_layer  : CanvasLayer = null
 var _prompt_label  : Label       = null
 
@@ -104,12 +141,14 @@ func _ready() -> void:
 	var wrap := Control.new()
 	wrap.set_anchors_preset(Control.PRESET_FULL_RECT)
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	PUI.adopt(wrap)   # a CanvasLayer child does not inherit the root theme
 	_prompt_layer.add_child(wrap)
 
-	_prompt_label = Label.new()
-	_prompt_label.add_theme_font_size_override("font_size", 22)
-	_prompt_label.add_theme_color_override("font_color", Color(1.0, 0.95, 0.85))
-	_prompt_label.add_theme_constant_override("outline_size", 4)
+	# Outline text over the world (HudValue role): no plate, the dungeon stays visible.
+	_prompt_label = PUI.label("", "HudValue")
+	_prompt_label.add_theme_constant_override("outline_size", 5)
+	_prompt_label.add_theme_font_size_override("font_size", int(round(PUI.fs("hud_value") * 1.25)))   # small caps read smaller   # stays when the locked sentence swaps the variation
+	_prompt_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_prompt_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 	_prompt_label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
@@ -125,6 +164,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_set_use_context(false)
 	if has_node("/root/PlayerWallet") and PlayerWallet.wallet_changed.is_connected(_on_wallet_changed):
 		PlayerWallet.wallet_changed.disconnect(_on_wallet_changed)
 
@@ -148,6 +188,7 @@ func _on_body_near(body: Node) -> void:
 	_player_in_range = true
 	_refresh_prompt()
 	_prompt_layer.visible = true
+	_sync_use_context()
 
 
 func _on_body_leave(body: Node) -> void:
@@ -156,11 +197,13 @@ func _on_body_leave(body: Node) -> void:
 	_player_in_range = false
 	if _prompt_layer != null:
 		_prompt_layer.visible = false
+	_set_use_context(false)
 
 
 func _on_wallet_changed(_n: int) -> void:
 	if _player_in_range and not _opened:
 		_refresh_prompt()
+		_sync_use_context()
 
 
 func _refresh_prompt() -> void:
@@ -168,9 +211,31 @@ func _refresh_prompt() -> void:
 		return
 	var color_title : String = color.capitalize()
 	if has_node("/root/PlayerWallet") and PlayerWallet.get_key_count(color) > 0:
-		_prompt_label.text = "[A] Use %s Key" % color_title
+		_prompt_label.theme_type_variation = &"HudValue"      # a short action prompt: Cinzel
+		_prompt_label.text = "[%s] Use %s Key" % [_use_glyph(), color_title]
+		_prompt_label.add_theme_color_override("font_color", PUI.BONE_BRIGHT)
 	else:
-		_prompt_label.text = "Locked — come back with a %s Key" % color_title
+		_prompt_label.theme_type_variation = &"WarningLabel"  # a sentence: Source Sans
+		_prompt_label.remove_theme_color_override("font_color")
+		_prompt_label.text = "Locked \u2014 come back with a %s Key" % color_title
+		_prompt_label.add_theme_color_override("font_color", PUI.BONE_DIM)
+
+
+func _use_glyph() -> String:
+	return InputManager.glyph("equip") if has_node("/root/InputManager") else "E"
+
+
+# Phones have no key to press: while the player stands at a chest they can open, the touch layer
+# shows its USE button (and hides it again when they walk away, or the chest opens).
+func _sync_use_context() -> void:
+	_set_use_context(has_node("/root/PlayerWallet") and PlayerWallet.get_key_count(color) > 0)
+
+
+func _set_use_context(want: bool) -> void:
+	if want == _use_ctx or not is_inside_tree():
+		return
+	_use_ctx = want
+	get_tree().call_group(TouchControls.GROUP, "set_use_context", want, "OPEN")
 
 
 func _attempt_unlock() -> void:
@@ -181,6 +246,7 @@ func _attempt_unlock() -> void:
 	if not PlayerWallet.spend_key(color):
 		return
 	_opened = true
+	_set_use_context(false)
 	_area.set_deferred("monitoring", false)
 	_prompt_layer.visible = false
 	_play_unlock_sequence()
@@ -206,6 +272,7 @@ func _play_unlock_sequence() -> void:
 				key_node.scale = Vector3(0.7, 0.7, 0.7)
 				key_node.position = Vector3(0.0, 1.2, 0.0)
 				add_child(key_node)
+				_apply_chest_material(key_node)
 
 	if key_node != null:
 		var tw : Tween = create_tween().set_parallel(true)
@@ -337,3 +404,4 @@ func _swap_mesh(new_path: String) -> void:
 	if _mesh_root != null:
 		_mesh_root.scale = Vector3(0.85, 0.85, 0.85)
 		add_child(_mesh_root)
+		_apply_chest_material(_mesh_root)
