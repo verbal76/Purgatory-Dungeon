@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b3w1yqkrjjjqk"
-path="res://godot/imported/icon_chevrons_pressed.png-3d02ef1f47262460915667c05cc6fe20.ctex"
+uid="uid://u7mt3ja1ognp"
+path="res://godot/imported/icon_repulse_cooldown.png-71936e1e76af81ac05f969ba64a51116.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/touch/icon_chevrons_pressed.png"
-dest_files=["res://godot/imported/icon_chevrons_pressed.png-3d02ef1f47262460915667c05cc6fe20.ctex"]
+source_file="res://assets/touch/icon_repulse_cooldown.png"
+dest_files=["res://godot/imported/icon_repulse_cooldown.png-71936e1e76af81ac05f969ba64a51116.ctex"]
 
 [params]
 

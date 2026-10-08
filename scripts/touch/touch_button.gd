@@ -9,7 +9,7 @@
 #
 #   Look (Purgatory brand, docs/UI_DESIGN_SYSTEM.md section 7): a blackened-iron disc (cached radial
 #   gradient texture) with a brass/iron rim, a bone icon and ember accents. Tiers keep one component
-#   family with a clear hierarchy: PRIMARY (attack: heaviest rim), COMBAT (kick, slide, block, burst),
+#   family with a clear hierarchy: PRIMARY (attack: heaviest rim), COMBAT (kick, repulse, block, burst),
 #   CONTEXT (USE/OPEN: ember rim, the contextual primary), QUIET (pause, map: lower contrast).
 #   Drawing is a handful of primitives and only happens when the state changes (plus the onboarding
 #   pulse while a hint is highlighting a button).
@@ -104,7 +104,7 @@ func hit(p: Vector2) -> bool:
 # code-drawn button below, so the layer can never be left without controls.
 const ART_DIR := "res://assets/touch/"
 const ART_STATES: Array[String] = ["default", "pressed", "cooldown", "disabled"]
-const ART_ICONS := {"attack": "sword", "block": "shield", "kick": "boot", "burst": "flask", "slide": "chevrons", "use": "key"}
+const ART_ICONS := {"attack": "sword", "block": "shield", "kick": "boot", "burst": "flask", "repulse": "repulse", "use": "key"}
 const ART_BASE_PX := {"attack": 512, "sub": 256}
 const ART_ICON_PX := 256
 const ART_CANVAS_HALF := 1.12   # base texture half-size = drawn radius * this (room for the pressed glow)

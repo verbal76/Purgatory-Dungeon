@@ -53,7 +53,7 @@ sensitivity apply to both.
 | Left thumb: floating stick (anywhere in the lower-left 40%) | move_forward/back/left/right (analog) | WASD | left stick |
 | Big sword button, lower-right rim. **One touch = at most one attack, decided by what the finger does** (see *Attack gesture*): a **tap** (or a short rest) attacks once; **dragging from it aims** (a continuous turn rate measured from the touch-down point) and never attacks; holding never repeats, auto-fires or charges | attack (+ look while dragging) | Left Mouse (+ mouse) | RT (+ right stick) |
 | Empty screen on the right (no button under the finger) | nothing: there is no look stick and no look zone | - | - |
-| Repulse (chevrons icon), kick boot, shield (hold), flask (cooldown ring, potion count) on an arc around Attack | jump, kick, block, AOE | Space, F, Right Mouse, Q | B, RB, D-pad down, LB |
+| Repulse (radial-arrows icon), kick boot (leg + boot + impact star), shield (hold), flask (cooldown ring, potion count) on an arc around Attack | jump, kick, block, AOE | Space, F, Right Mouse, Q | B, RB, D-pad down, LB |
 | USE / OPEN (appears only at a chest you can open), second ring | equip | E | A |
 | Pause / Map (top right, map toggles) | ui_menu / minimap | Esc / Tab | Start / - |
 | Android back | ui_cancel | - | - |
@@ -63,7 +63,7 @@ sensitivity apply to both.
 |---|---|
 | Left thumb: floating stick | move (analog) |
 | Right side: swipe/drag (no stick) | look (yaw, one motion event per drag event) |
-| Big sword button (press / hold / release: one press = one attack, holding never charges or repeats), boot, Repulse (chevrons), shield (hold), flask, USE, Pause, Map | attack, kick, jump, block, AOE, equip, ui_menu, minimap |
+| Big sword button (press / hold / release: one press = one attack, holding never charges or repeats), boot, Repulse (radial arrows), shield (hold), flask, USE, Pause, Map | attack, kick, jump, block, AOE, equip, ui_menu, minimap |
 
 ### Twin-stick design notes
 - **Why**: Classic needs repeated swipes to turn while moving. In twin-stick the Attack button is the aim control, as
@@ -170,7 +170,7 @@ with `TEXTURE_FILTER_LINEAR_WITH_MIPMAPS`. A missing file falls back to the code
 |---|---|---|
 | `base_attack_<state>.png` | 512 | Attack: 24-block bronze rim, slate face, four diamond studs at the cardinal points |
 | `base_sub_<state>.png` | 256 | slide, kick, block, burst, USE: 20-block rim, no studs |
-| `icon_sword / shield / boot / flask / chevrons / key _<state>.png` | 256 | attack, block, kick, burst (red gem), slide (chevrons), USE |
+| `icon_sword / shield / boot / flask / repulse / key _<state>.png` | 256 | attack, block, kick (a leg driving up-right, boot, ember impact star), burst (red gem), Repulse (eight arrows pushing outward from a centre hub), USE |
 Pause / Map stay code-drawn (quieter family members). 32 PNGs, about 1.2 MB with their `.import` files (budget 6 MB).
 **Size choice**: Attack is drawn at 200 virtual px = 374 Pixel device px, so a 512 px base is ~1.4x oversampled; subordinates are
 112 px = 210 device px from a 256 px base (1.2x); icons draw at ~1.15 x the face radius, 256 px is ample. Mipmaps keep other
@@ -240,3 +240,24 @@ ownership of simultaneous fingers, the compact-gain displacement look path, atta
 Options selector, onboarding, plus the real Barbarian and Mage turned by the ATTACK drag, empty right-side screen inert),
 `test_mobile_ui`, `test_app_lifecycle` and `test_input_desktop` (proves keyboard/controller bindings
 are unchanged). Procedural generation is untouched by the Android work.
+
+
+## Startup: automatic update, spawn orientation (after v8.2)
+
+- **Automatic update at cold launch** (`scripts/update_gate.gd`, started by `studio_splash.gd`; game layer only, the native client is untouched).
+  The check begins the moment the splash starts and runs behind the studio card, through the existing client's public API
+  (`Boot.check_now()`: the same pipeline, signature, runtime-fingerprint, save-schema, size and SHA-256 checks as every other
+  check; `update_state()` / `status_snapshot()` to read it). When the card ends: no update, offline, failed, incompatible or
+  rejected = straight on to the menu (a check still running after 3 s carries on in the background). An update that was found
+  shows "Downloading update..." (capped at 30 s), and once it is verified and staged "Applying update vX.Y..." and the app
+  restarts itself (`OS.set_restart_on_exit`; where the platform cannot restart, the app closes and the text says to open it
+  again). A staged package only runs at the next cold start (docs/OTA.md: never mid-run), which is why a restart is needed.
+  Loop guard: the OTA id restarted for is remembered in `user://update_gate.json`; if it is still staged next launch the
+  player is told "Update ready: restart Purgatory to apply it" and the game starts normally. The manual Options > About
+  check, the periodic / resume checks and the diagnostics overlay are unchanged.
+- **Spawn orientation** (`compute_spawn_yaw` in the main game file): the player is placed in the starter room and faces the open
+  space with the nearest wall behind them. 36 horizontal rays (static world geometry only; props, chests and bodies are looked
+  through); each facing scores (mean clear distance over +-35 degrees ahead, capped at 12 m) minus half the same measure
+  behind, then the winner is centred on its open gap. A wall ahead is never chosen while any direction is open, a corner
+  resolves to the diagonal away from it, a corridor-like room to the open direction along it. Both classes use
+  `set_facing_yaw`.

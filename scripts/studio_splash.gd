@@ -24,6 +24,7 @@ const LOGO_FILENAME : String = "Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png"
 # Where the file may live (project root first). Searched in order, by the exact file name.
 const LOGO_DIRS : Array[String] = ["", "branding/", "assets/", "Music & background images/"]
 const NEXT_SCENE : String = "res://scenes/MainMenu.tscn"
+const UpdateGate = preload("res://scripts/update_gate.gd")
 
 const FADE_IN_SECONDS  : float = 0.5
 const HOLD_SECONDS     : float = 1.4
@@ -44,6 +45,7 @@ var change_scene_on_finish : bool     = true
 var logo_override         : Texture2D = null
 var logo_path_override    : String    = ""   # use this logo path instead of the canonical lookup
 var navigate              : Callable  = Callable()   # called with (PackedScene or null, path) instead of changing scene
+var update_gate           : Node      = null         # the automatic update at cold launch (null: off, e.g. tests and desktop)
 
 var logo_rect      : TextureRect = null
 var skipped        : bool        = false   # no logo available: the card was skipped
@@ -79,6 +81,9 @@ func _ready() -> void:
 		skipped = true
 		_finish.call_deferred()
 		return
+
+	if change_scene_on_finish:
+		_start_update_check()   # cold launch: the check starts now and runs behind the card
 
 	var tex : Texture2D = logo_override
 	if tex == null:
@@ -124,6 +129,18 @@ func _ready() -> void:
 	get_tree().create_timer(FAILSAFE_SECONDS).timeout.connect(_finish)
 
 
+## Cold launch: the update check starts now, in the background, while the card plays (the existing OTA client; no-op where
+## there is none). See update_gate.gd.
+func _start_update_check() -> void:
+	var gate : Node = UpdateGate.new()
+	gate.name = "UpdateGate"
+	add_child(gate)
+	if gate.start():
+		update_gate = gate
+	else:
+		gate.queue_free()
+
+
 func _layout_logo() -> void:
 	if logo_rect == null or logo_rect.texture == null:
 		return
@@ -143,6 +160,8 @@ func _finish() -> void:
 	finished.emit()
 	if not change_scene_on_finish or not is_inside_tree():
 		return
+	if update_gate != null:
+		await update_gate.settle(self)   # tells the player about a found update and restarts for it; otherwise returns at once
 	_go_to_next_scene()
 
 

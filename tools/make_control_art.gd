@@ -16,7 +16,7 @@
 # Output (assets/touch/), every state baked because a tint cannot do it:
 #   base_attack_<state>.png   512x512  chunky segmented bronze rim + cracked slate face + 4 diamond studs
 #   base_sub_<state>.png      256x256  the same rim/face for slide, kick, block, burst, USE (no studs)
-#   icon_<kind>_<state>.png   256x256  sword, shield, boot, flask, chevrons, key
+#   icon_<kind>_<state>.png   256x256  sword, shield, boot (a kick), flask, repulse (radial pushback), key
 #   states: default | pressed (ember-lit rim + inner glow + outer glow) | cooldown (cool, desaturated) | disabled (dark grey)
 # Geometry: the button disc has radius 1.0 art unit; the canvas half-size is CANVAS_HALF (1.12) units so the
 # pressed glow has room. The game draws a base texture at half-size = drawn radius * CANVAS_HALF.
@@ -58,7 +58,7 @@ func _initialize() -> void:
 	for st in STATES:
 		_jobs.append(["base_attack_" + st, 512, 2, _draw_base.bind(true, st)])
 		_jobs.append(["base_sub_" + st, 256, 4, _draw_base.bind(false, st)])
-		for kind in ["sword", "shield", "boot", "flask", "chevrons", "key"]:
+		for kind in ["sword", "shield", "boot", "flask", "repulse", "key"]:
 			_jobs.append(["icon_%s_%s" % [kind, st], 256, 4, _draw_icon.bind(kind, st)])
 	_run()
 
@@ -339,7 +339,7 @@ func _draw_icon(ci: Control, kind: String, state: String) -> void:
 		"shield": _icon_shield(f)
 		"boot": _icon_boot(f)
 		"flask": _icon_flask(f)
-		"chevrons": _icon_chevrons(f)
+		"repulse": _icon_repulse(f)
 		"key": _icon_key(f)
 
 
@@ -417,24 +417,53 @@ func _icon_shield(f: Frame) -> void:
 
 
 func _icon_boot(f: Frame) -> void:
-	var shaft: Array = [Vector2(-0.34, -0.74), Vector2(0.14, -0.74), Vector2(0.22, -0.06), Vector2(-0.36, -0.06)]
-	var foot: Array = [Vector2(-0.36, -0.06), Vector2(0.22, -0.06), Vector2(0.38, 0.08), Vector2(0.72, 0.22), Vector2(0.76, 0.42), Vector2(-0.48, 0.42), Vector2(-0.46, 0.18)]
-	var sole: Array = [Vector2(-0.50, 0.40), Vector2(0.78, 0.40), Vector2(0.78, 0.56), Vector2(-0.50, 0.56)]
-	for part in [shaft, foot, sole]:
-		_shadow(f, part)
-	f.poly(sole, _tp(f, BRONZE, 3, 1.2))
-	f.poly([Vector2(-0.50, 0.40), Vector2(0.78, 0.40), Vector2(0.78, 0.45), Vector2(-0.50, 0.45)], _tp(f, BRONZE, 2))
-	f.poly(foot, _tp(f, BRONZE, 1))
-	f.poly([Vector2(-0.36, -0.06), Vector2(0.22, -0.06), Vector2(0.38, 0.08), Vector2(0.02, 0.10), Vector2(-0.46, 0.18)], _tp(f, BRONZE, 0, 0.98))
-	f.poly([Vector2(0.38, 0.08), Vector2(0.72, 0.22), Vector2(0.76, 0.42), Vector2(0.30, 0.42), Vector2(0.20, 0.20)], _tp(f, BRONZE, 0, 0.88))
-	f.poly([Vector2(-0.48, 0.42), Vector2(0.30, 0.42), Vector2(0.20, 0.20), Vector2(-0.46, 0.18)], _tp(f, BRONZE, 2, 1.1))
-	f.poly(shaft, _tp(f, STEEL, 2, 0.9))
-	f.poly([Vector2(-0.34, -0.74), Vector2(-0.07, -0.74), Vector2(-0.08, -0.06), Vector2(-0.36, -0.06)], _tp(f, STEEL, 1, 1.0))
-	f.poly([Vector2(-0.07, -0.74), Vector2(0.14, -0.74), Vector2(0.22, -0.06), Vector2(-0.08, -0.06)], _tp(f, STEEL, 2, 1.0))
-	f.poly([Vector2(-0.36, -0.74), Vector2(0.14, -0.74), Vector2(0.14, -0.58), Vector2(-0.35, -0.58)], _tp(f, STEEL, 0, 0.96))
-	f.poly([Vector2(-0.36, -0.20), Vector2(0.20, -0.20), Vector2(0.22, -0.06), Vector2(-0.36, -0.06)], _tp(f, BRONZE, 0))
-	f.line(Vector2(-0.33, -0.42), Vector2(0.16, -0.42), _tp(f, STEEL, 3), 0.03)
-	f.line(Vector2(0.40, 0.14), Vector2(0.50, 0.38), _tp(f, BRONZE, 3), 0.025)
+	# A KICK: a leg driving diagonally up and to the right, the boot at its end, and an impact burst where the toe strikes.
+	# Drawn pointing along +x and then turned -30 degrees as a whole, so every facet keeps the plane shading of the family.
+	var R := func(pts: Array) -> Array: return _rot(pts, -30.0, 0.90, Vector2(-0.30, 0.22))
+	var P := func(u: Vector2) -> Vector2: return (u * 0.90).rotated(deg_to_rad(-30.0)) + Vector2(-0.30, 0.22)
+	var leg: Array = [Vector2(-0.80, -0.17), Vector2(0.06, -0.19), Vector2(0.06, 0.21), Vector2(-0.80, 0.19)]
+	var cuff: Array = [Vector2(-0.10, -0.25), Vector2(0.16, -0.25), Vector2(0.16, 0.29), Vector2(-0.10, 0.29)]
+	# the boot, toe first: instep rising to the ball of the foot, a pointed toe cap, a heel block and a dark sole
+	var foot: Array = [Vector2(0.06, -0.20), Vector2(0.38, -0.23), Vector2(0.68, -0.14), Vector2(0.98, 0.02), Vector2(0.96, 0.12), Vector2(0.66, 0.18), Vector2(0.06, 0.20)]
+	var sole: Array = [Vector2(0.06, 0.18), Vector2(0.66, 0.16), Vector2(0.96, 0.10), Vector2(0.98, 0.21), Vector2(0.68, 0.30), Vector2(0.06, 0.32)]
+	var heel: Array = [Vector2(0.04, 0.18), Vector2(0.28, 0.18), Vector2(0.28, 0.44), Vector2(0.04, 0.44)]
+	for part in [leg, foot, sole, heel]:
+		_shadow(f, R.call(part))
+	# the leg (steel): lit upper edge, darker lower plane
+	f.poly(R.call(leg), _tp(f, STEEL, 2, 0.92))
+	f.poly(R.call([Vector2(-0.80, -0.17), Vector2(0.06, -0.19), Vector2(0.06, 0.0), Vector2(-0.80, 0.0)]), _tp(f, STEEL, 0, 0.98))
+	f.line(P.call(Vector2(-0.66, 0.05)), P.call(Vector2(0.0, 0.06)), _tp(f, STEEL, 3), 0.025)
+	# the boot (bronze): lit instep, darker toe cap and underside
+	f.poly(R.call(sole), _tp(f, BRONZE, 3, 1.2))
+	f.poly(R.call(heel), _tp(f, BRONZE, 3, 1.1))
+	f.poly(R.call(foot), _tp(f, BRONZE, 1))
+	f.poly(R.call([Vector2(0.06, -0.20), Vector2(0.38, -0.23), Vector2(0.68, -0.14), Vector2(0.60, -0.02), Vector2(0.06, 0.0)]), _tp(f, BRONZE, 0))
+	f.poly(R.call([Vector2(0.68, -0.14), Vector2(0.98, 0.02), Vector2(0.96, 0.12), Vector2(0.66, 0.18), Vector2(0.60, -0.02)]), _tp(f, BRONZE, 0, 0.84))
+	f.poly(R.call([Vector2(0.06, 0.0), Vector2(0.60, -0.02), Vector2(0.66, 0.18), Vector2(0.06, 0.20)]), _tp(f, BRONZE, 2, 1.08))
+	f.line(P.call(Vector2(0.50, -0.05)), P.call(Vector2(0.54, 0.16)), _tp(f, BRONZE, 3), 0.025)
+	# cuff (bronze band) over the ankle
+	f.poly(R.call(cuff), _tp(f, BRONZE, 1))
+	f.poly(R.call([Vector2(-0.10, -0.25), Vector2(0.16, -0.25), Vector2(0.16, -0.07), Vector2(-0.10, -0.07)]), _tp(f, BRONZE, 0))
+	# the impact: a jagged ember star at the toe, three spikes and two motion streaks behind the shin
+	var hit := Vector2(1.22, 0.0)
+	var star: Array = []
+	for i in 12:
+		var a: float = TAU * float(i) / 12.0
+		star.append(hit + Vector2.from_angle(a) * (0.30 if i % 2 == 0 else 0.15))
+	var star_r: Array = []
+	for u in star:
+		star_r.append(P.call(u))
+	f.poly(star_r, _tone(EMBER, f.state))
+	var core: Array = []
+	for i in 12:
+		var a2: float = TAU * float(i) / 12.0
+		core.append(P.call(hit + Vector2.from_angle(a2) * (0.14 if i % 2 == 0 else 0.07)))
+	f.poly(core, _tone(EMBER_BRIGHT, f.state))
+	for k in 3:
+		var ang: float = deg_to_rad(-58.0 + 58.0 * float(k))
+		f.line(P.call(hit + Vector2.from_angle(ang) * 0.38), P.call(hit + Vector2.from_angle(ang) * 0.54), _tone(EMBER_BRIGHT, f.state), 0.045)
+	f.line(P.call(Vector2(-0.62, -0.40)), P.call(Vector2(-0.10, -0.40)), _tp(f, IVORY, 1, 0.9), 0.035)
+	f.line(P.call(Vector2(-0.74, 0.46)), P.call(Vector2(-0.20, 0.46)), _tp(f, IVORY, 1, 0.8), 0.035)
 
 
 func _icon_flask(f: Frame) -> void:
@@ -478,16 +507,41 @@ func _icon_flask(f: Frame) -> void:
 	f.poly([Vector2(-0.22, -0.52), Vector2(0.22, -0.52), Vector2(0.20, -0.44), Vector2(-0.20, -0.44)], _tp(f, BRONZE, 0))
 
 
-func _icon_chevrons(f: Frame) -> void:
-	for k in 3:
-		var x: float = -0.74 + 0.46 * float(k)
-		var pts: Array = [Vector2(x, -0.58), Vector2(x + 0.26, -0.58), Vector2(x + 0.62, 0.0), Vector2(x + 0.26, 0.58), Vector2(x, 0.58), Vector2(x + 0.36, 0.0)]
-		_shadow(f, pts)
-		var k2: float = 0.80 + 0.10 * float(k)   # the leading chevron is brightest
-		f.poly(pts, _tp(f, IVORY, 1, k2))
-		f.poly([pts[0], pts[1], pts[2], pts[5]], _tp(f, IVORY, 0, k2))
-		f.poly([pts[5], pts[2], pts[3], pts[4]], _tp(f, IVORY, 2, k2 * 1.02))
-		f.line(pts[0], pts[1], _tp(f, BRONZE, 1, 1.0), 0.03)
+func _icon_repulse(f: Frame) -> void:
+	# REPULSE: everything around the player is pushed away. A centre point (the player) and eight arrows driving outward in
+	# every direction; the four main ones are larger. Faceted ivory arrows with a bronze hub and an ember core.
+	for k in 8:
+		var ang: float = deg_to_rad(45.0 * float(k) - 90.0)
+		var big: bool = k % 2 == 0
+		var sc: float = 1.0 if big else 0.82
+		var rot := func(pts: Array) -> Array: return _rot(pts, rad_to_deg(ang), sc)
+		var shaft: Array = [Vector2(0.34, -0.065), Vector2(0.64, -0.065), Vector2(0.64, 0.065), Vector2(0.34, 0.065)]
+		var head: Array = [Vector2(0.58, -0.21), Vector2(0.92, 0.0), Vector2(0.58, 0.21)]
+		_shadow(f, rot.call(shaft))
+		_shadow(f, rot.call(head))
+		var shade: float = 1.0 if big else 0.9
+		f.poly(rot.call(shaft), _tp(f, IVORY, 1, shade))
+		f.poly(rot.call([Vector2(0.34, -0.065), Vector2(0.64, -0.065), Vector2(0.64, 0.0), Vector2(0.34, 0.0)]), _tp(f, IVORY, 0, shade))
+		f.poly(rot.call(head), _tp(f, IVORY, 1, shade))
+		f.poly(rot.call([Vector2(0.58, -0.21), Vector2(0.92, 0.0), Vector2(0.62, 0.0), Vector2(0.58, -0.04)]), _tp(f, IVORY, 0, shade))
+		f.poly(rot.call([Vector2(0.62, 0.0), Vector2(0.92, 0.0), Vector2(0.58, 0.21), Vector2(0.58, 0.04)]), _tp(f, IVORY, 2, shade))
+	# the hub: a bronze octagon, a dark inset and the ember core
+	var hub: Array = []
+	var inset: Array = []
+	for i in 8:
+		var a: float = TAU * (float(i) + 0.5) / 8.0
+		hub.append(Vector2.from_angle(a) * 0.30)
+		inset.append(Vector2.from_angle(a) * 0.20)
+	_shadow(f, hub)
+	f.poly(hub, _tp(f, BRONZE, 1))
+	for i in 8:
+		var j: int = (i + 1) % 8
+		f.poly([hub[i], hub[j], inset[j], inset[i]], _tp(f, BRONZE, 0 if i in [4, 5, 6, 7] else 2))
+	f.poly(inset, _tp(f, BRONZE, 3, 1.1))
+	var core: Array = []
+	for i in 8:
+		core.append(Vector2.from_angle(TAU * (float(i) + 0.5) / 8.0) * 0.11)
+	f.poly(core, _tone(EMBER_BRIGHT, f.state))
 
 
 func _icon_key(f: Frame) -> void:

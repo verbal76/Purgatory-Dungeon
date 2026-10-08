@@ -180,7 +180,7 @@ schema recorded on the device (this protects rollbacks past a deliberate migrati
 
 ## 10. What players see, and diagnostics
 
-**Players see no OTA or debug text over the game or the menus** (runtime r2 onwards; v7.x showed "v7.2 (dev-000002) ready: restart to run it" as a
+**Players see no OTA or debug text over the game or the menus, except the cold-launch update hand-off** (`scripts/update_gate.gd`, game layer, owner-requested after v8.2: the check starts with the splash through `Boot.check_now()`; only when an update is really found does it say "Downloading update..." and "Applying update..." and restart once; nothing is shown for no update / offline / failure) (runtime r2 onwards; v7.x showed "v7.2 (dev-000002) ready: restart to run it" as a
 toast, a staged-update note in the menu footer and a fixed readout button in Options > Gameplay). Specifically:
 - The native layer never opens its overlay or a toast by itself: a finished download, a staged update or a failed check produce no on-screen text from
   `scripts/boot/`. The only transient native UI is the restrained "Applying update vX" panel while a never-run package starts (at most 20 s).

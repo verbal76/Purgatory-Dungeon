@@ -129,6 +129,13 @@ done
 run "res://tests/test_enemy_opening.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_enemy_opening.tscn
 # Starting health: Barbarian 200, Mage 135 (v8.2).
 run "res://tests/test_starting_health.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_starting_health.tscn
+# The player starts facing the open space with the nearest wall behind (pure scoring, synthetic rooms, then the real starter room).
+run "res://tests/test_spawn_facing.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_spawn_facing.tscn
+for cls in barbarian mage; do
+	SPAWN_CLASS="$cls" run "res://tests/test_spawn_facing.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_spawn_facing.tscn
+done
+# Automatic update at cold launch (the game-layer hand-off to the unchanged native OTA client): check at once, bounded, announce, one restart, no loop.
+run "res://tests/test_update_gate.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_update_gate.tscn
 for seed in 11 5 2024; do
 	CHEST_SEED="$seed" run "res://tests/test_chests.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_chests.tscn
 done

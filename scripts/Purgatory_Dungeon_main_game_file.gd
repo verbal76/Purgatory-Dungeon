@@ -174,6 +174,14 @@ func _ready() -> void:
 			active_player.global_position = safe_pos
 			spawn_origin = safe_pos
 
+			# 3b. Face the useful open space, with the nearest wall behind the player (see compute_spawn_yaw).
+			if active_player.has_method("set_facing_yaw"):
+				var ray_origin := Vector3(safe_pos.x, spawn_marker.global_position.y + SPAWN_RAY_HEIGHT, safe_pos.z)
+				var exclude: Array[RID] = []
+				if active_player is CollisionObject3D:
+					exclude.append((active_player as CollisionObject3D).get_rid())
+				active_player.set_facing_yaw(compute_spawn_yaw(active_player.get_world_3d().direct_space_state, ray_origin, exclude))
+
 			# 4. Turn physics back on
 			active_player.set_physics_process(true)
 			_mark("player_placed")
@@ -195,6 +203,90 @@ func _ready() -> void:
 
 ## Microseconds of layout work per frame while the loading screen is up.
 const LOAD_SLICE_US : int = 10000
+
+
+# ── Spawn orientation ────────────────────────────────────────────────────────
+# The player is placed in the starter room and must start looking into the useful open space, with the nearest wall
+# behind them, never into a wall. Rays are cast all round at chest height; every candidate facing is scored by how open
+# it is in front (mean clear distance over a +-SPAWN_FRONT_HALF_DEG window, capped at SPAWN_OPEN_CAP so a very long
+# corridor does not outweigh everything) minus how open it is behind (a near wall behind is the primary signal). A wall
+# straight ahead is therefore never chosen when any direction is open, a corner resolves to the diagonal facing away from
+# it, and two equidistant side walls (a corridor-like room) resolve to the open direction along it. Props, chests,
+# enemies and other bodies are skipped: only static world geometry counts as a wall.
+const SPAWN_RAY_HEIGHT : float = 1.0
+const SPAWN_RAY_COUNT : int = 36
+const SPAWN_RAY_RANGE : float = 30.0
+const SPAWN_OPEN_CAP : float = 12.0
+const SPAWN_FRONT_HALF_DEG : float = 35.0
+const SPAWN_BACK_WEIGHT : float = 0.5
+const SPAWN_GAP_FRACTION : float = 0.6   # a ray belongs to the open gap while it sees at least this much of the gap's best ray
+
+
+## Clear horizontal distance from `origin` along yaw `yaw` (forward = (-sin, 0, -cos)), SPAWN_RAY_RANGE when nothing blocks.
+static func spawn_clearance(space: PhysicsDirectSpaceState3D, origin: Vector3, yaw: float, exclude: Array[RID]) -> float:
+	var dir := Vector3(-sin(yaw), 0.0, -cos(yaw))
+	var skip: Array[RID] = exclude.duplicate()
+	for _i in 6:
+		var q := PhysicsRayQueryParameters3D.create(origin, origin + dir * SPAWN_RAY_RANGE, 1)
+		q.exclude = skip
+		var hit: Dictionary = space.intersect_ray(q)
+		if hit.is_empty():
+			return SPAWN_RAY_RANGE
+		var col: Object = hit.get("collider")
+		var is_wall: bool = col is StaticBody3D and not (col as Node).is_in_group("chest")
+		if is_wall:
+			return origin.distance_to(hit["position"] as Vector3)
+		skip.append(hit["rid"])   # a prop / body / chest: look through it
+	return SPAWN_RAY_RANGE
+
+
+## The yaw (radians, the players' own convention) a player placed at `origin` should start with.
+static func compute_spawn_yaw(space: PhysicsDirectSpaceState3D, origin: Vector3, exclude: Array[RID] = []) -> float:
+	var n: int = SPAWN_RAY_COUNT
+	var clear: PackedFloat32Array = PackedFloat32Array()
+	clear.resize(n)
+	for i in n:
+		clear[i] = minf(spawn_clearance(space, origin, TAU * float(i) / float(n), exclude), SPAWN_OPEN_CAP)
+	return spawn_yaw_from_clearances(clear)
+
+
+## Pure scoring step (unit-testable): `clear[i]` is the capped clear distance along yaw TAU * i / n.
+static func spawn_yaw_from_clearances(clear: PackedFloat32Array) -> float:
+	var n: int = clear.size()
+	if n == 0:
+		return 0.0
+	var half: int = maxi(int(round(deg_to_rad(SPAWN_FRONT_HALF_DEG) / (TAU / float(n)))), 0)
+	var best_i: int = 0
+	var best_score: float = -INF
+	for i in n:
+		var front: float = 0.0
+		var back: float = 0.0
+		for k in range(-half, half + 1):
+			front += clear[posmod(i + k, n)]
+			back += clear[posmod(i + (n >> 1) + k, n)]
+		var cnt: float = float(2 * half + 1)
+		var score: float = (front - SPAWN_BACK_WEIGHT * back) / (cnt * SPAWN_OPEN_CAP)
+		if score > best_score + 0.0001:   # ties keep the first (lowest yaw): deterministic
+			best_score = score
+			best_i = i
+	# Refine to the middle of the open gap around the winner (so a corridor or a doorway is faced squarely rather than at the
+	# edge of the window): the nearest-to-centre ray with the greatest clearance, widened both ways while it stays open.
+	var peak_i: int = best_i
+	var peak: float = clear[best_i]
+	for k in range(1, half + 1):
+		for sgn in [1, -1]:
+			var j: int = posmod(best_i + sgn * k, n)
+			if clear[j] > peak + 0.0001:
+				peak = clear[j]
+				peak_i = j
+	var left: int = 0
+	var right: int = 0
+	while right < n / 4 and clear[posmod(peak_i + right + 1, n)] >= SPAWN_GAP_FRACTION * peak:
+		right += 1
+	while left < n / 4 and clear[posmod(peak_i - left - 1, n)] >= SPAWN_GAP_FRACTION * peak:
+		left += 1
+	return TAU * (float(peak_i) + float(right - left) * 0.5) / float(n)
+
 ## Per-frame population budget (microseconds) behind the loading screen / once the player has control.
 const STAGE_BUDGET_LOADING_US : int = 10000
 const STAGE_BUDGET_PLAY_US : int = 2500

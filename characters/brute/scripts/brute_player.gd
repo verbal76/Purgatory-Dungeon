@@ -890,6 +890,12 @@ func _handle_view_input(delta: float) -> void:
 		_yaw -= look_x * actual_speed * delta
 
 
+## Starts the run facing `yaw` (the dungeon entry orients the player into the open space; see the main game file).
+func set_facing_yaw(yaw: float) -> void:
+	_yaw = yaw
+	_apply_yaw_now()
+
+
 func _apply_yaw_now() -> void:
 	var yaw_out : float = _yaw
 	if _status_drunk:

@@ -14,7 +14,7 @@ extends RefCounted
 const BONE   := PUI.BONE         # icon strokes/fills
 const EMBER  := PUI.EMBER_BRIGHT # accent
 const INK    := PUI.IRON_DEEP    # button face / cut-outs
-const KINDS  : Array[String] = ["attack", "kick", "slide", "block", "burst", "use", "map", "pause",
+const KINDS  : Array[String] = ["attack", "kick", "repulse", "block", "burst", "use", "map", "pause",
 	"potion", "key", "hourglass", "blade", "chevron_left", "chevron_right"]
 
 
@@ -23,7 +23,7 @@ static func draw_icon(ci: CanvasItem, kind: String, c: Vector2, r: float, tint: 
 	match kind:
 		"attack": _sword(ci, c, r, w, tint)
 		"kick":   _boot(ci, c, r, w, tint)
-		"slide":  _dash(ci, c, r, w, tint)
+		"repulse": _repulse(ci, c, r, w, tint)
 		"block":  _shield(ci, c, r, w, tint)
 		"burst":  _burst(ci, c, r, w, tint)
 		"use":    _key(ci, c, r, w, tint)
@@ -53,22 +53,50 @@ static func _sword(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -
 
 
 static func _boot(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -> void:
-	var boot := PackedVector2Array([
-		_p(c, r, -0.22, -0.55), _p(c, r, 0.12, -0.55), _p(c, r, 0.14, -0.05), _p(c, r, 0.52, 0.12),
-		_p(c, r, 0.58, 0.36), _p(c, r, -0.32, 0.36)])
-	ci.draw_colored_polygon(boot, col)
-	ci.draw_line(_p(c, r, -0.32, 0.36), _p(c, r, 0.58, 0.36), EMBER, w * 1.6, true)    # sole
-	# impact lines
-	ci.draw_line(_p(c, r, 0.62, -0.18), _p(c, r, 0.82, -0.30), EMBER, w, true)
-	ci.draw_line(_p(c, r, 0.66, 0.02), _p(c, r, 0.88, 0.0), EMBER, w, true)
+	# A KICK: a leg driving up and to the right, the boot at its end, an impact star where the toe strikes.
+	var a: float = deg_to_rad(-30.0)
+	var k: float = 0.86
+	var o := Vector2(-0.22, 0.20)
+	var leg := PackedVector2Array([Vector2(-0.80, -0.17), Vector2(0.06, -0.19), Vector2(0.06, 0.21), Vector2(-0.80, 0.19)])
+	var foot := PackedVector2Array([Vector2(0.06, -0.20), Vector2(0.38, -0.23), Vector2(0.68, -0.14), Vector2(0.98, 0.02), Vector2(0.96, 0.12), Vector2(0.66, 0.18), Vector2(0.06, 0.20)])
+	var sole := PackedVector2Array([Vector2(0.06, 0.18), Vector2(0.66, 0.16), Vector2(0.96, 0.10), Vector2(0.98, 0.21), Vector2(0.68, 0.30), Vector2(0.06, 0.32)])
+	ci.draw_colored_polygon(_tf(c, r, leg, a, k, o), Color(col.r, col.g, col.b, col.a * 0.8))
+	ci.draw_colored_polygon(_tf(c, r, sole, a, k, o), EMBER)
+	ci.draw_colored_polygon(_tf(c, r, foot, a, k, o), col)
+	var star := PackedVector2Array()
+	for i in 12:
+		star.append(_tf1(c, r, Vector2(1.22, 0.0) + Vector2.from_angle(TAU * float(i) / 12.0) * (0.30 if i % 2 == 0 else 0.14), a, k, o))
+	ci.draw_colored_polygon(star, EMBER)
+	ci.draw_line(_tf1(c, r, Vector2(-0.62, -0.40), a, k, o), _tf1(c, r, Vector2(-0.10, -0.40), a, k, o), col, w * 0.9, true)
+	ci.draw_line(_tf1(c, r, Vector2(-0.74, 0.46), a, k, o), _tf1(c, r, Vector2(-0.20, 0.46), a, k, o), col, w * 0.9, true)
 
 
-static func _dash(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -> void:
-	for i in 3:
-		var x: float = -0.50 + 0.36 * float(i)
-		var a: float = 1.0 - 0.28 * float(2 - i)
-		var tint := Color(col.r, col.g, col.b, col.a * a)
-		ci.draw_polyline(PackedVector2Array([_p(c, r, x, -0.42), _p(c, r, x + 0.30, 0.0), _p(c, r, x, 0.42)]), tint, w * 1.9, true)
+static func _tf1(c: Vector2, r: float, u: Vector2, ang: float, k: float, o: Vector2) -> Vector2:
+	return c + ((u * k).rotated(ang) + o) * r
+
+
+static func _tf(c: Vector2, r: float, pts: PackedVector2Array, ang: float, k: float, o: Vector2) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for u in pts:
+		out.append(_tf1(c, r, u, ang, k, o))
+	return out
+
+
+static func _repulse(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -> void:
+	# Radial pushback: a centre point (the player) and eight arrows driving outward in every direction.
+	for i in 8:
+		var ang: float = TAU * float(i) / 8.0 - PI * 0.5
+		var big: bool = i % 2 == 0
+		var k: float = 1.0 if big else 0.82
+		var d := Vector2.from_angle(ang)
+		var n := Vector2(-d.y, d.x)
+		ci.draw_line(c + d * r * 0.34 * k, c + d * r * 0.62 * k, col, w * 1.5, true)
+		var tip: Vector2 = c + d * r * 0.92 * k
+		var base: Vector2 = c + d * r * 0.58 * k
+		ci.draw_colored_polygon(PackedVector2Array([tip, base + n * r * 0.20 * k, base - n * r * 0.20 * k]), col)
+	ci.draw_circle(c, r * 0.28, col)
+	ci.draw_circle(c, r * 0.17, INK)
+	ci.draw_circle(c, r * 0.10, EMBER)
 
 
 static func _shield(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -> void:

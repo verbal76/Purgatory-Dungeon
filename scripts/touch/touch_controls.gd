@@ -19,7 +19,7 @@
 #                  Classic swipe path (finger displacement -> mouse-look motion, see _look), multiplied by a fixed
 #                  compact-input gain that stands in for the smaller travel area (compact_gain). A drag NEVER attacks;
 #                  a tap or a short rest attacks once; holding never repeats or charges.
-#     arc around   slide, kick, block (hold), burst (cooldown ring + potion count): subordinate buttons on a
+#     arc around   Repulse, kick, block (hold), burst (cooldown ring + potion count): subordinate buttons on a
 #     ATTACK       semicircle on its upper/left side, plus the contextual USE one ring further out
 #     top right    pause, map (toggle)
 #
@@ -329,7 +329,7 @@ func _ready() -> void:
 
 	_make_button("attack", "attack", "", TouchButton.Mode.HOLD)
 	_make_button("kick", "kick", "", TouchButton.Mode.HOLD)
-	_make_button("jump", "slide", "", TouchButton.Mode.HOLD)
+	_make_button("jump", "repulse", "", TouchButton.Mode.HOLD)
 	_make_button("block", "block", "", TouchButton.Mode.HOLD)
 	_make_button("AOE", "burst", "", TouchButton.Mode.HOLD)
 	_make_button("equip", "use", "USE", TouchButton.Mode.HOLD)
