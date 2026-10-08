@@ -53,7 +53,7 @@ sensitivity apply to both.
 | Left thumb: floating stick (anywhere in the lower-left 40%) | move_forward/back/left/right (analog) | WASD | left stick |
 | Big sword button, lower-right rim. **One touch = at most one attack, decided by what the finger does** (see *Attack gesture*): a **tap** (or a short rest) attacks once; **dragging from it aims** (a continuous turn rate measured from the touch-down point) and never attacks; holding never repeats, auto-fires or charges | attack (+ look while dragging) | Left Mouse (+ mouse) | RT (+ right stick) |
 | Empty screen on the right (no button under the finger) | nothing: there is no look stick and no look zone | - | - |
-| Repulse (radial-arrows icon), kick boot (leg + boot + impact star), shield (hold), flask (cooldown ring, potion count) on an arc around Attack | jump, kick, block, AOE | Space, F, Right Mouse, Q | B, RB, D-pad down, LB |
+| Repulse (open palm + shock rings icon), kick boot (boot swung up with a swing trail and an impact star), shield (hold), flask (cooldown ring, potion count) on an arc around Attack | jump, kick, block, AOE | Space, F, Right Mouse, Q | B, RB, D-pad down, LB |
 | USE / OPEN (appears only at a chest you can open), second ring | equip | E | A |
 | Pause / Map (top right, map toggles) | ui_menu / minimap | Esc / Tab | Start / - |
 | Android back | ui_cancel | - | - |
@@ -63,7 +63,7 @@ sensitivity apply to both.
 |---|---|
 | Left thumb: floating stick | move (analog) |
 | Right side: swipe/drag (no stick) | look (yaw, one motion event per drag event) |
-| Big sword button (press / hold / release: one press = one attack, holding never charges or repeats), boot, Repulse (radial arrows), shield (hold), flask, USE, Pause, Map | attack, kick, jump, block, AOE, equip, ui_menu, minimap |
+| Big sword button (press / hold / release: one press = one attack, holding never charges or repeats), boot, Repulse (palm + shock rings), shield (hold), flask, USE, Pause, Map | attack, kick, jump, block, AOE, equip, ui_menu, minimap |
 
 ### Twin-stick design notes
 - **Why**: Classic needs repeated swipes to turn while moving. In twin-stick the Attack button is the aim control, as
@@ -170,7 +170,7 @@ with `TEXTURE_FILTER_LINEAR_WITH_MIPMAPS`. A missing file falls back to the code
 |---|---|---|
 | `base_attack_<state>.png` | 512 | Attack: 24-block bronze rim, slate face, four diamond studs at the cardinal points |
 | `base_sub_<state>.png` | 256 | slide, kick, block, burst, USE: 20-block rim, no studs |
-| `icon_sword / shield / boot / flask / repulse / key _<state>.png` | 256 | attack, block, kick (a leg driving up-right, boot, ember impact star), burst (red gem), Repulse (eight arrows pushing outward from a centre hub), USE |
+| `icon_sword / shield / boot / flask / repulse / key _<state>.png` | 256 | attack, block, kick (the boot swung up and forward, a swing trail, an ember impact star at the toe), burst (red gem), Repulse (an open palm held out with two broken shock rings spreading all round: "get back from me"), USE |
 Pause / Map stay code-drawn (quieter family members). 32 PNGs, about 1.2 MB with their `.import` files (budget 6 MB).
 **Size choice**: Attack is drawn at 200 virtual px = 374 Pixel device px, so a 512 px base is ~1.4x oversampled; subordinates are
 112 px = 210 device px from a 256 px base (1.2x); icons draw at ~1.15 x the face radius, 256 px is ample. Mipmaps keep other

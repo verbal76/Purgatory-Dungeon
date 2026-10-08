@@ -99,44 +99,51 @@ func _ready() -> void:
 			b2.unavailable = st == "disabled"
 			b2.queue_redraw()
 
-	# Icon readability (v8.3): Repulse is a RADIAL pushback (arrows in every direction around a centre), the old rightward
-	# chevrons are gone, and Kick is a leg driving up and to the right with an ember impact star at the striking end.
+	# Icon readability (v8.3): Repulse is an open palm with shock rings spreading all round (get back from me), the old rightward
+	# chevrons are gone, and Kick is a boot swung up and forward with a swing trail and an ember impact star at the toe.
 	_check(TouchButton.ART_ICONS.get("repulse", "") == "repulse" and not TouchButton.ART_ICONS.has("slide") and not TouchButton.ART_ICONS.values().has("chevrons"), "the jump/Repulse button uses the radial Repulse icon, not the chevrons")
 	_check(not FileAccess.file_exists(TouchButton.ART_DIR + "icon_chevrons_default.png"), "the three-arrows-to-the-right art is gone")
 	_check(not TouchIcons.KINDS.has("slide") and TouchIcons.KINDS.has("repulse"), "the code-drawn icon family names it Repulse")
 	var rep: Image = TouchButton.art_texture("icon_repulse_default").get_image()
-	var dirs_hit: int = 0
-	for k in 8:
-		var v := Vector2.from_angle(TAU * float(k) / 8.0 - PI * 0.5) * 0.74 * 128.0 + Vector2(128, 128)
+	var ring_hits: int = 0
+	for k in 4:
+		var v := Vector2.from_angle(TAU * (float(k) + 0.5) / 4.0) * 0.70 * 128.0 + Vector2(128, 128)
 		var found := false
-		for dx in range(-6, 7, 2):
-			for dy in range(-6, 7, 2):
-				if rep.get_pixel(clampi(int(v.x) + dx, 0, 255), clampi(int(v.y) + dy, 0, 255)).a > 0.8:
+		for dx in range(-8, 9, 2):
+			for dy in range(-8, 9, 2):
+				var rc: Color = rep.get_pixel(clampi(int(v.x) + dx, 0, 255), clampi(int(v.y) + dy, 0, 255))
+				if rc.a > 0.8 and rc.r > 0.7 and rc.b < 0.4:   # an ember ring pixel
 					found = true
 		if found:
-			dirs_hit += 1
-	_check(dirs_hit == 8, "Repulse draws an arrow in all eight directions around the player (%d of 8)" % dirs_hit)
-	var halves := {"left": 0, "right": 0, "top": 0, "bottom": 0}
+			ring_hits += 1
+	_check(ring_hits == 4, "Repulse: shock rings spread from the centre in all four quarters (%d of 4)" % ring_hits)
+	var palm_px := 0
+	for gy in range(96, 176, 4):
+		for gx in range(104, 152, 4):
+			var pc: Color = rep.get_pixel(gx, gy)
+			if pc.a > 0.9 and pc.r > 0.7 and pc.g > 0.65 and pc.b > 0.5:   # bone / ivory
+				palm_px += 1
+	_check(palm_px >= 25, "Repulse: an open palm (bone) is held out at the centre (%d samples)" % palm_px)
+	var halves := {"left": 0, "right": 0}
 	for gy in range(0, 256, 4):
 		for gx in range(0, 256, 4):
 			if rep.get_pixel(gx, gy).a > 0.8:
 				halves["left" if gx < 128 else "right"] += 1
-				halves["top" if gy < 128 else "bottom"] += 1
-	_check(absf(float(halves["left"] - halves["right"])) <= 0.12 * float(halves["left"] + halves["right"]) and absf(float(halves["top"] - halves["bottom"])) <= 0.12 * float(halves["top"] + halves["bottom"]), "Repulse is balanced about its centre: nothing says 'move right' (%s)" % [halves])
+	_check(absf(float(halves["left"] - halves["right"])) <= 0.15 * float(halves["left"] + halves["right"]), "Repulse is balanced about its centre: nothing says 'move right' (%s)" % [halves])
 	var kick: Image = TouchButton.art_texture("icon_boot_default").get_image()
 	var ember := 0
 	for dx in range(-14, 15):
 		for dy in range(-14, 15):
-			var kc: Color = kick.get_pixel(211 + dx, 86 + dy)
+			var kc: Color = kick.get_pixel(216 + dx, 81 + dy)
 			if kc.a > 0.9 and kc.r > 0.75 and kc.g > 0.45 and kc.g < 0.8 and kc.b < 0.4:
 				ember += 1
-	_check(ember >= 40, "Kick has an ember impact star at the end of the leg's strike (%d ember pixels)" % ember)
+	_check(ember >= 40, "Kick has an ember impact star at the toe's strike (%d ember pixels)" % ember)
 	var left_leg := 0
-	for gy in range(160, 230, 4):
-		for gx in range(10, 70, 4):
+	for gy in range(40, 120, 4):
+		for gx in range(40, 110, 4):
 			if kick.get_pixel(gx, gy).a > 0.8:
 				left_leg += 1
-	_check(left_leg >= 6, "Kick has a leg trailing down-left from the boot (%d samples)" % left_leg)
+	_check(left_leg >= 6, "Kick has the shin (steel) rising up-left behind the boot (%d samples)" % left_leg)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	tc.queue_free()

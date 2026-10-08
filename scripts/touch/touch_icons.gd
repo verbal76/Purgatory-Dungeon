@@ -53,22 +53,25 @@ static func _sword(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -
 
 
 static func _boot(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -> void:
-	# A KICK: a leg driving up and to the right, the boot at its end, an impact star where the toe strikes.
-	var a: float = deg_to_rad(-30.0)
-	var k: float = 0.86
-	var o := Vector2(-0.22, 0.20)
-	var leg := PackedVector2Array([Vector2(-0.80, -0.17), Vector2(0.06, -0.19), Vector2(0.06, 0.21), Vector2(-0.80, 0.19)])
-	var foot := PackedVector2Array([Vector2(0.06, -0.20), Vector2(0.38, -0.23), Vector2(0.68, -0.14), Vector2(0.98, 0.02), Vector2(0.96, 0.12), Vector2(0.66, 0.18), Vector2(0.06, 0.20)])
-	var sole := PackedVector2Array([Vector2(0.06, 0.18), Vector2(0.66, 0.16), Vector2(0.96, 0.10), Vector2(0.98, 0.21), Vector2(0.68, 0.30), Vector2(0.06, 0.32)])
-	ci.draw_colored_polygon(_tf(c, r, leg, a, k, o), Color(col.r, col.g, col.b, col.a * 0.8))
+	# A KICK: the boot (shin, ankle, heel, sole, toe) swung up and forward, a swing trail under it, an impact star at the toe.
+	var a: float = deg_to_rad(-34.0)
+	var k: float = 0.80
+	var o := Vector2(-0.08, 0.04)
+	var shaft := PackedVector2Array([Vector2(-0.34, -0.74), Vector2(0.14, -0.74), Vector2(0.22, -0.06), Vector2(-0.36, -0.06)])
+	var foot := PackedVector2Array([Vector2(-0.36, -0.06), Vector2(0.22, -0.06), Vector2(0.38, 0.08), Vector2(0.72, 0.22), Vector2(0.76, 0.42), Vector2(-0.48, 0.42), Vector2(-0.46, 0.18)])
+	var sole := PackedVector2Array([Vector2(-0.50, 0.40), Vector2(0.78, 0.40), Vector2(0.78, 0.56), Vector2(-0.50, 0.56)])
+	var trail := PackedVector2Array()
+	for i in 9:
+		var t: float = float(i) / 8.0
+		trail.append(_tf1(c, r, Vector2(-0.95 + 1.95 * t, 0.78 + 0.18 * sin(t * PI) - 0.62 * t * t), a, k, o))
+	ci.draw_polyline(trail, Color(col.r, col.g, col.b, col.a * 0.6), w * 1.2, true)
+	ci.draw_colored_polygon(_tf(c, r, shaft, a, k, o), Color(col.r, col.g, col.b, col.a * 0.8))
 	ci.draw_colored_polygon(_tf(c, r, sole, a, k, o), EMBER)
 	ci.draw_colored_polygon(_tf(c, r, foot, a, k, o), col)
 	var star := PackedVector2Array()
 	for i in 12:
-		star.append(_tf1(c, r, Vector2(1.22, 0.0) + Vector2.from_angle(TAU * float(i) / 12.0) * (0.30 if i % 2 == 0 else 0.14), a, k, o))
+		star.append(_tf1(c, r, Vector2(1.08, 0.12) + Vector2.from_angle(TAU * float(i) / 12.0) * (0.30 if i % 2 == 0 else 0.15), a, k, o))
 	ci.draw_colored_polygon(star, EMBER)
-	ci.draw_line(_tf1(c, r, Vector2(-0.62, -0.40), a, k, o), _tf1(c, r, Vector2(-0.10, -0.40), a, k, o), col, w * 0.9, true)
-	ci.draw_line(_tf1(c, r, Vector2(-0.74, 0.46), a, k, o), _tf1(c, r, Vector2(-0.20, 0.46), a, k, o), col, w * 0.9, true)
 
 
 static func _tf1(c: Vector2, r: float, u: Vector2, ang: float, k: float, o: Vector2) -> Vector2:
@@ -83,20 +86,23 @@ static func _tf(c: Vector2, r: float, pts: PackedVector2Array, ang: float, k: fl
 
 
 static func _repulse(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -> void:
-	# Radial pushback: a centre point (the player) and eight arrows driving outward in every direction.
-	for i in 8:
-		var ang: float = TAU * float(i) / 8.0 - PI * 0.5
-		var big: bool = i % 2 == 0
-		var k: float = 1.0 if big else 0.82
-		var d := Vector2.from_angle(ang)
-		var n := Vector2(-d.y, d.x)
-		ci.draw_line(c + d * r * 0.34 * k, c + d * r * 0.62 * k, col, w * 1.5, true)
-		var tip: Vector2 = c + d * r * 0.92 * k
-		var base: Vector2 = c + d * r * 0.58 * k
-		ci.draw_colored_polygon(PackedVector2Array([tip, base + n * r * 0.20 * k, base - n * r * 0.20 * k]), col)
-	ci.draw_circle(c, r * 0.28, col)
-	ci.draw_circle(c, r * 0.17, INK)
-	ci.draw_circle(c, r * 0.10, EMBER)
+	# "Get back from me": an open palm held out, shock rings spreading from it in every direction.
+	for ring in 2:
+		var rad: float = 0.70 if ring == 0 else 0.93
+		for q in 4:
+			var a0: float = deg_to_rad(90.0 * float(q) - 90.0 + 16.0)
+			var a1: float = deg_to_rad(90.0 * float(q) - 90.0 + 74.0)
+			ci.draw_arc(c, r * rad, a0, a1, 10, EMBER if ring == 0 else Color(EMBER.r, EMBER.g, EMBER.b, 0.75), w * (1.6 if ring == 0 else 1.2), true)
+	var hs: float = 0.95
+	var palm := PackedVector2Array([Vector2(-0.27, -0.04), Vector2(0.27, -0.04), Vector2(0.29, 0.28), Vector2(0.17, 0.50), Vector2(-0.17, 0.50), Vector2(-0.29, 0.28)])
+	var thumb := PackedVector2Array([Vector2(-0.26, 0.08), Vector2(-0.56, -0.12), Vector2(-0.47, -0.27), Vector2(-0.20, -0.02)])
+	ci.draw_colored_polygon(_tf(c, r, palm, 0.0, hs, Vector2(0.0, 0.04)), col)
+	ci.draw_colored_polygon(_tf(c, r, thumb, 0.0, hs, Vector2(0.0, 0.04)), col)
+	var tops: Array = [-0.46, -0.58, -0.52, -0.36]
+	for i in 4:
+		var x0: float = -0.27 + 0.1375 * float(i)
+		var t: float = float(tops[i])
+		ci.draw_colored_polygon(_tf(c, r, PackedVector2Array([Vector2(x0, -0.02), Vector2(x0 + 0.12, -0.02), Vector2(x0 + 0.12, t + 0.06), Vector2(x0 + 0.06, t), Vector2(x0, t + 0.06)]), 0.0, hs, Vector2(0.0, 0.04)), col)
 
 
 static func _shield(ci: CanvasItem, c: Vector2, r: float, w: float, col: Color) -> void:
