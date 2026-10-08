@@ -77,7 +77,8 @@ func _ready() -> void:
 	_check(rep.cooldown_text == str(ceili(cd)) and absf(rep.cooldown - cd / total) < 0.05, "[%s] about a second in: sweep %.2f and number '%s' still agree with %.2f" % [cls, rep.cooldown, rep.cooldown_text, cd])
 
 	# representative values, driven through the authoritative variable the HUD only reads
-	var cases: Array = [[3.0, "3"], [2.5, "3"], [2.0, "2"], [1.5, "2"], [1.0, "1"], [0.4, "1"], [0.01, "1"]]
+	# (values sit away from whole seconds: a 30 Hz physics tick may land between the HUD frame and this read)
+	var cases: Array = [[2.9, "3"], [2.5, "3"], [1.9, "2"], [1.5, "2"], [0.9, "1"], [0.5, "1"], [0.3, "1"]]
 	for cs in cases:
 		player.set("_repulse_cooldown", float(cs[0]))
 		await get_tree().process_frame
