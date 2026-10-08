@@ -151,6 +151,8 @@ var _atk_gesture : int = Gesture.NONE    # twin ATTACK gesture state (see above)
 var _atk_down_ms : int = 0
 var _atk_down_pos : Vector2 = Vector2.ZERO   # touch-down point: the slop circle is centred here
 var _atk_slop_px : float = ATTACK_SLOP_MAX_PX
+var _player_ref : Node = null            # the live player (Repulse cooldown readout), looked up lazily
+var _player_look_frames : int = 0
 var _stale : Array[String] = []          # scratch for _enforce_inputs (reused: no per-frame allocation)
 var _attack_release_ms : int = 0         # when we last released attack (for the engine-state watch), 0 = nothing to watch
 var attack_pulses : int = 0              # attacks sent through the twin gesture (diagnostics / tests)
@@ -509,6 +511,7 @@ func _process(delta: float) -> void:
 	if _atk_moved:
 		_atk_moved = false
 		look_time += delta   # the ATTACK finger turned the camera this frame (onboarding)
+	_update_repulse_cooldown()
 	_status_poll += delta
 	if _status_poll >= 0.1:
 		_status_poll = 0.0
@@ -529,6 +532,30 @@ func _poll_settings(delta: float) -> void:
 		set_scheme(_stored_scheme())   # releases, re-lays out
 	elif not is_equal_approx(o, opacity) or not is_equal_approx(sc, ui_scale) or view_size() != _last_view:
 		_relayout()
+
+
+## Repulse cooldown presentation (read-only: the player's own `_repulse_cooldown` is the single authority). A dark sweep over
+## the button shrinks with the fraction remaining and the remaining WHOLE seconds show large in the centre; both disappear
+## the moment it is ready. Redraws only when the picture changes.
+func _update_repulse_cooldown() -> void:
+	var b: TouchButton = buttons.get("jump")
+	if b == null:
+		return
+	var remain: float = 0.0
+	if _player_ref == null or not is_instance_valid(_player_ref):
+		_player_ref = null
+		_player_look_frames -= 1
+		if _player_look_frames <= 0:
+			_player_look_frames = 30   # frames between looks while there is no player (menu, loading)
+			_player_ref = get_tree().get_first_node_in_group("player")
+	if _player_ref != null and "_repulse_cooldown" in _player_ref:
+		remain = maxf(float(_player_ref.get("_repulse_cooldown")), 0.0)
+	var frac: float = clampf(remain / BruteCharacter.REPULSE_COOLDOWN, 0.0, 1.0)
+	var text: String = str(ceili(remain)) if remain > 0.0 else ""
+	if text != b.cooldown_text or absf(frac - b.cooldown) > 0.003 or (remain <= 0.0 and b.cooldown != 0.0):
+		b.cooldown = frac
+		b.cooldown_text = text
+		b.queue_redraw()
 
 
 # Burst cooldown ring + potion count from the live player and wallet.

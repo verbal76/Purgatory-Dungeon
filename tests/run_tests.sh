@@ -136,6 +136,10 @@ for cls in barbarian mage; do
 done
 # Automatic update at cold launch (the game-layer hand-off to the unchanged native OTA client): check at once, bounded, announce, one restart, no loop.
 run "res://tests/test_update_gate.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_update_gate.tscn
+# Repulse cooldown presentation (dark sweep + remaining seconds) follows the real cooldown; Kick has none.
+for cls in barbarian mage; do
+	REPULSE_CLASS="$cls" PURGATORY_FORCE_TOUCH=1 run "res://tests/test_repulse_hud.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_repulse_hud.tscn
+done
 for seed in 11 5 2024; do
 	CHEST_SEED="$seed" run "res://tests/test_chests.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_chests.tscn
 done

@@ -49,6 +49,7 @@ var center    : Vector2 = Vector2.ZERO  # in TouchControls space
 var pressed_visual : bool = false
 var toggled_on     : bool = false
 var cooldown       : float = 0.0        # 0..1 fraction remaining (ring over the button)
+var cooldown_text  : String = ""        # remaining whole seconds shown large in the centre ("" = none; Repulse only)
 var badge          : String = ""        # small count in the corner (e.g. potions)
 var highlighted    : bool = false       # onboarding pulse
 var enabled_look   : bool = true
@@ -141,8 +142,8 @@ func art_state() -> String:
 		return "disabled"
 	if pressed_visual or toggled_on:
 		return "pressed"
-	if cooldown > 0.0:
-		return "cooldown"
+	if cooldown > 0.0 and cooldown_text == "":
+		return "cooldown"   # (a button that shows a countdown keeps its coloured icon under the dark sweep instead)
 	return "default"
 
 
@@ -301,8 +302,10 @@ func _draw_baked(base_tex: Texture2D, icon_tex: Texture2D) -> void:
 	if cooldown > 0.0:
 		var a0: float = -PI * 0.5
 		var a1: float = a0 + TAU * clampf(cooldown, 0.0, 1.0)
-		draw_arc(c, fr * 0.5, a0, a1, 32, Color(0.03, 0.02, 0.02, 0.50), fr, false)
+		draw_arc(c, fr * 0.5, a0, a1, 48, Color(0.03, 0.02, 0.02, 0.62 if cooldown_text != "" else 0.50), fr, false)
 		draw_arc(c, r - rw * 0.5, a0, a1, RIM_SEGMENTS, PUI.EMBER, rw * 0.5, true)
+		if cooldown_text != "":
+			_draw_cooldown_text(c, fr)
 
 	if label != "":
 		_draw_label(c, r)
@@ -355,13 +358,25 @@ func _draw_coded() -> void:
 		# Dark wedge over the face and an ember arc on the bezel, both shrinking as the cooldown runs out.
 		var a0: float = -PI * 0.5
 		var a1: float = a0 + TAU * clampf(cooldown, 0.0, 1.0)
-		draw_arc(c, fr * 0.5, a0, a1, 32, Color(0.03, 0.02, 0.02, 0.62), fr, false)
+		draw_arc(c, fr * 0.5, a0, a1, 48, Color(0.03, 0.02, 0.02, 0.62), fr, false)
 		draw_arc(c, r - rw * 0.5, a0, a1, RIM_SEGMENTS, PUI.EMBER, rw * 0.7, true)
+		if cooldown_text != "":
+			_draw_cooldown_text(c, fr)
 
 	if label != "":
 		_draw_label(c, r)
 	if badge != "":
 		_draw_badge(c, r)
+
+
+## The remaining cooldown in whole seconds, large and centred on the face, over the dark sweep (Repulse).
+func _draw_cooldown_text(c: Vector2, fr: float) -> void:
+	var font: Font = PUI.font("display_bold")
+	var fs: int = int(maxf(fr * 0.95, 20.0))
+	var ts: Vector2 = font.get_string_size(cooldown_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+	var base: Vector2 = c + Vector2(-ts.x * 0.5, (font.get_ascent(fs) - font.get_descent(fs)) * 0.5)
+	draw_string_outline(font, base, cooldown_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 9, Color(0.02, 0.015, 0.015, 0.95))
+	draw_string(font, base, cooldown_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, PUI.BONE_BRIGHT)
 
 
 func _draw_label(c: Vector2, r: float) -> void:

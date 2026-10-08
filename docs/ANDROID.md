@@ -261,3 +261,9 @@ are unchanged). Procedural generation is untouched by the Android work.
   behind, then the winner is centred on its open gap. A wall ahead is never chosen while any direction is open, a corner
   resolves to the diagonal away from it, a corridor-like room to the open direction along it. Both classes use
   `set_facing_yaw`.
+- **Repulse cooldown presentation** (`TouchControls._update_repulse_cooldown`, `TouchButton.cooldown_text`): the jump / Repulse
+  button reads the player's own `_repulse_cooldown` (read-only; `BruteCharacter.REPULSE_COOLDOWN` is the total) every frame and
+  shows a dark translucent radial sweep over the button for the fraction remaining, the coloured icon visible under it, and the
+  remaining WHOLE seconds large in the centre. Both vanish the moment it is ready; a repeated use restarts them. Presentation
+  only: duration, availability, input and the touch target are unchanged. Kick has no cooldown and gets no cooldown
+  presentation (`tests/test_repulse_hud.gd`).
