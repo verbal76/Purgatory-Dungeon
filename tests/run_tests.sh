@@ -127,6 +127,8 @@ for cls in barbarian mage; do
 done
 # The opening keeps a growing share of the population near the player (far off-screen sleepers are recycled).
 run "res://tests/test_enemy_opening.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_enemy_opening.tscn
+# Starting health: Barbarian 200, Mage 135 (v8.2).
+run "res://tests/test_starting_health.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_starting_health.tscn
 for seed in 11 5 2024; do
 	CHEST_SEED="$seed" run "res://tests/test_chests.tscn (seed $seed)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_chests.tscn
 done

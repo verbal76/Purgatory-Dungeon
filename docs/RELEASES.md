@@ -168,6 +168,12 @@ Every release build must contain the canonical Hot Attic Games logo
 | v7 | (the `release/v7` release commit; see its release notes) | First OTA-capable native APK: signed OTA client + runtime lock, `v7.K` versioning, separate right thumbstick removed (Attack-drag aims) | no OTA published with it; first OTA will be v7.1 |
 | v8 | (the `release/v8` release commit; see its release notes) | Native generation `android-godot-4.6.0-r2`: Boot status API, Options > About (Check for updates, Copy diagnostics), no player-facing OTA overlay, main-menu Exit, gilded dungeon-door icon (Android + desktop), tap/hold/drag ATTACK gesture, Rapid Attack removed, floor-seam and enemy-model fixes | OTAs on it will be v8.1, v8.2 ... (none published yet) |
 
+### OTAs on the v8 native generation (`android-godot-4.6.0-r2`)
+| Owner-facing | OTA id | What it changed |
+|---|---|---|
+| v8.1 | `dev-000003` | Repulse replaces the backward Slide; the opening enemy drought is fixed; Repulse and floor-mesh stability fixes |
+| v8.2 | `dev-000004` (assigned by the publisher from the live pointer) | Health balance ONLY: starting/max health Barbarian 150 -> 200, Mage 100 -> 135. No other gameplay change; follow-ups are in `docs/BACKLOG.md` |
+
 Why the sequence starts here: the repository had no GitHub Releases, no tags, and no APK/AAB/EXE
 files when the convention was adopted (October 2026). The only playable builds ever delivered
 from it are the two above, so v1 and v2 are the honest count. Earlier pre-GitHub builds
