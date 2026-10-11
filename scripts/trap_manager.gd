@@ -37,6 +37,7 @@ const Juice := preload("res://scripts/juice.gd")
 @export var homing_fireball_speed  : float = 10.0  # Mine fireball travel speed
 @export var homing_fireball_damage : float = 15.0  # Mine fireball damage on hit
 @export var schizophrenia_duration : float = 60.0  # Seconds the auditory hallucinations last
+@export var mine_free_start_radius : float = 35.0  # No fireball mine within this many metres (flat distance) of where the run starts
 
 # ── Effect IDs ────────────────────────────────────────────────────────────────
 const EFFECT_REVERSED_VIEW      := "reversed_view"
@@ -68,6 +69,8 @@ var _player             : Node3D    = null
 var _trap_sense_level   : int       = 0    # 0 = no perk; each level adds 25% glow chance
 var _trap_nodes         : Array     = []
 var _homing_fireballs   : Array     = []
+var _start_pos          : Vector3   = Vector3.ZERO   # Where the player stood when the traps were armed (the run's start)
+var _has_start_pos      : bool      = false
 var _banner_hud         : CanvasLayer = null
 # Jumpscare resources — assigned by boot_traps(), sourced from the main
 # game scene's Inspector exports (see Purgatory_Dungeon_main_game_file.gd).
@@ -123,6 +126,9 @@ func boot_traps(dungeon_gen: Node, player: Node3D,
 		push_warning("TrapManager: dungeon_gen not valid — no traps spawned.")
 		return
 
+	if is_instance_valid(_player):
+		_start_pos = _player.global_position
+		_has_start_pos = true
 	stage_done = false
 	call("_stage_arm")   # dynamic call: runs as a background coroutine
 
@@ -143,11 +149,30 @@ func _stage_arm() -> void:
 	if fireball_trap_count > 0:
 		var fb_candidates : Array[Node3D] = _dungeon_gen.get_trap_candidates(fireball_trap_count)
 		for tile in fb_candidates:
-			if is_instance_valid(tile):
+			# A guaranteed mine never goes into the opening rooms: the first minute must not be decided by one.
+			if is_instance_valid(tile) and not in_mine_free_zone(tile.global_position):
 				_arm_trap(tile, EFFECT_FIREBALL_MINE)
 			if budgeted and main.stage_over():
 				await get_tree().process_frame
 	stage_done = true
+
+
+# ── Start-area fairness ───────────────────────────────────────────────────────
+
+## True when `pos` is inside the start area where no fireball mine may be placed (flat distance from where the run began).
+func in_mine_free_zone(pos: Vector3) -> bool:
+	if not _has_start_pos:
+		return false
+	var d := Vector2(pos.x - _start_pos.x, pos.z - _start_pos.z)
+	return d.length() < mine_free_start_radius
+
+
+## A random effect other than the mine (used by a random trap that happens to sit near the start).
+func pick_effect_without_mine() -> String:
+	var e: String = EFFECT_FIREBALL_MINE
+	while e == EFFECT_FIREBALL_MINE:
+		e = ALL_EFFECTS[randi() % ALL_EFFECTS.size()]
+	return e
 
 
 # ── Trap arming ───────────────────────────────────────────────────────────────
@@ -190,6 +215,7 @@ func _arm_trap(tile: MeshInstance3D, forced_effect: String = "") -> void:
 	area.set_meta("tile_node", tile)
 	area.set_meta("armed", true)
 	area.set_meta("forced_effect", forced_effect)   # "" = random, non-empty = always that effect
+	area.set_meta("no_mine", in_mine_free_zone(tile.global_position))   # a random trap near the start never rolls the mine
 
 	# Position trigger above the tile centre.
 	get_parent().add_child(area)
@@ -238,6 +264,8 @@ func _on_trap_body_entered(body: Node3D, area: Area3D) -> void:
 	# Pick effect — use forced_effect if set, otherwise random.
 	var forced : String = area.get_meta("forced_effect", "")
 	var effect : String = forced if forced != "" else ALL_EFFECTS[randi() % ALL_EFFECTS.size()]
+	if effect == EFFECT_FIREBALL_MINE and bool(area.get_meta("no_mine", false)):
+		effect = pick_effect_without_mine()
 	_apply_effect(body, effect, area.global_position)
 
 	# Clean up the Area3D after a short delay.

@@ -79,8 +79,17 @@ func _run() -> void:
 	screen.set_script(load("res://scripts/run_end_screen.gd"))
 	add_child(screen)
 	var completions_before := int(SaveManager.current_profile.get("dungeon_completions", 0))
+	# A win pays a flat 20 potions and banks the run's kills.
+	var run_end_script: GDScript = load("res://scripts/run_end_screen.gd")
+	_check(run_end_script.win_potions() == 20, "a win pays 20 potions (%d)" % run_end_script.win_potions())
+	var potions_before := int(SaveManager.current_profile.get("meta_currency", 0))
+	var kills_banked_before := int(SaveManager.current_profile.get("kill_count", 0))
+	CharacterBase.GLOBAL_KILL_COUNT = 120
 	screen._on_leave_pressed()
 	screen._on_leave_pressed()
+	_check(int(SaveManager.current_profile.get("meta_currency", 0)) == potions_before + 20, "Return pays the win's potions exactly once (%d -> %d)" % [potions_before, int(SaveManager.current_profile.get("meta_currency", 0))])
+	_check(int(SaveManager.current_profile.get("kill_count", 0)) == kills_banked_before + 120, "Return banks the run's kills")
+	_check(CharacterBase.GLOBAL_KILL_COUNT == 0, "Return resets the run's kill count")
 	_check(int(SaveManager.current_profile.get("dungeon_completions", 0)) == completions_before + 1, "pressing Return twice records the completion once")
 	_check(screen.is_queued_for_deletion(), "run-end screen removes itself after Return")
 

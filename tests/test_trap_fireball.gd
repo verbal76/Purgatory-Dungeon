@@ -60,5 +60,24 @@ func _ready() -> void:
 			enemy.queue_free()
 		await get_tree().physics_frame
 
+	# Fairness: no fireball mine near where the run starts (guaranteed mines are not placed there; a random trap there never rolls the mine).
+	var start := Vector3(10, 0, -5)
+	var starter := _body("player", start)
+	var tm: Node = (load("res://scripts/trap_manager.gd") as GDScript).new()
+	holder.add_child(tm)
+	_check(not tm.in_mine_free_zone(start), "before the run starts nothing is a mine-free zone")
+	tm._player = starter
+	tm._start_pos = starter.global_position
+	tm._has_start_pos = true
+	_check(tm.in_mine_free_zone(start + Vector3(0, 3, 0)), "the start itself is mine-free (height ignored)")
+	_check(tm.in_mine_free_zone(start + Vector3(tm.mine_free_start_radius - 1.0, 0, 0)), "just inside the radius is mine-free")
+	_check(not tm.in_mine_free_zone(start + Vector3(tm.mine_free_start_radius + 1.0, 0, 0)), "just outside the radius is allowed")
+	var saw_mine := false
+	for i in 400:
+		if tm.pick_effect_without_mine() == tm.EFFECT_FIREBALL_MINE:
+			saw_mine = true
+	_check(not saw_mine, "a near-start random trap never rolls the mine in 400 draws")
+	starter.queue_free()
+
 	print("test_trap_fireball: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)

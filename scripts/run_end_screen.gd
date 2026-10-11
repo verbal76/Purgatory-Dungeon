@@ -20,6 +20,8 @@ extends CanvasLayer
 
 const FADE_DURATION     : float  = 1.8
 const ALCHEMIST_SCENE   : String = "res://scenes/AlchemistStore.tscn"
+# A win (leaving through the Day 30 portal, "Return to your old life") pays a flat number of potions (owner decision).
+const WIN_POTIONS       : int    = 20
 
 var _portal_manager : Node  = null
 var _fade_rect      : ColorRect = null
@@ -27,6 +29,11 @@ var _choice_root    : Control   = null
 var _first_button   : Button    = null
 var _fade_done      : bool  = false
 var _exiting        : bool  = false   # one-shot guard: a second button press must do nothing
+
+
+## Potions a win pays (flat; the run's kills are still banked in the profile's kill_count).
+static func win_potions() -> int:
+	return WIN_POTIONS
 
 
 func _ready() -> void:
@@ -91,7 +98,7 @@ func _build_ui() -> void:
 	vbox.add_child(flavour)
 
 	# The run's numbers (the death screen shows them; a win should at least as much).
-	var stats := PUI.label("Day %d    \u00b7    Kills %d" % [GameClock.current_day if has_node("/root/GameClock") else 30, CharacterBase.GLOBAL_KILL_COUNT], "StatLabel")
+	var stats := PUI.label("Day %d    \u00b7    Kills %d    \u00b7    +%d potions if you leave" % [GameClock.current_day if has_node("/root/GameClock") else 30, CharacterBase.GLOBAL_KILL_COUNT, win_potions()], "StatLabel")
 	stats.name = "RunStats"
 	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(stats)
@@ -154,10 +161,14 @@ func _on_leave_pressed() -> void:
 	if _exiting:
 		return
 	_exiting = true
-	# Record the completion.
+	# Record the completion, pay the win's potions and bank the run's kills (as the death screen does).
 	if SaveManager.current_profile_is_valid():
 		var prev : int = int(SaveManager.current_profile.get("dungeon_completions", 0))
 		SaveManager.current_profile["dungeon_completions"] = prev + 1
+		var kills_this_run : int = CharacterBase.GLOBAL_KILL_COUNT
+		SaveManager.current_profile["kill_count"] = int(SaveManager.current_profile.get("kill_count", 0)) + kills_this_run
+		SaveManager.current_profile["meta_currency"] = int(SaveManager.current_profile.get("meta_currency", 0)) + win_potions()
+		CharacterBase.GLOBAL_KILL_COUNT = 0
 		SaveManager.save_profile()
 
 	if has_node("/root/CodexManager"):

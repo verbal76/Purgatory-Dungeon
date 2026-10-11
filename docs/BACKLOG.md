@@ -23,14 +23,16 @@ any tuning. Nothing here is scheduled; do not fold these into an unrelated relea
   Needs a separate physical test / balance investigation before anything is changed (count, placement, a start-area exclusion, the 50% rule,
   fireball damage and homing).
 
-## 3. Design items from the game-feel audit (kept OUT of `docs/GAME_FEEL.md` on purpose)
-Each changes what the game asks of the player, so each needs an owner decision:
-- **The buff pick has no choice**: a reel the player stops, so the outcome is luck plus timing; offering e.g. 2-3 cards to choose from would be a
-  design change (and a large UI one).
-- **Positive globes**: the audit asked for good globes alongside the curses; adding them changes the risk balance of the globe system.
-- **Fireball mine fairness**: no start-area exclusion, 50% of max health at once (see section 2).
-- **Potions on a win**: the victory path pays no potions, the death path pays 1 per 50 kills.
-- **Loot from culled enemies**: day culls and room-lock culls retire far-off enemies through the normal death path, which still rolls potion / key drops.
+## 3. Design items from the game-feel audit
+Owner decisions (2026-10-11):
+- **The buff pick keeps the reel** (the lottery-style flicker the player stops with a tap): DECIDED, no change. No choose-from-cards screen.
+- **Potions on a win**: DECIDED and built. "Return to your old life" at the Day 30 portal pays a flat 20 potions (`WIN_POTIONS` in `scripts/run_end_screen.gd`)
+  and now banks the run's kills into the profile like the death screen. "Stay Below" pays nothing yet; the run then ends through the normal death rule.
+- **Fireball mine fairness**: DECIDED and built as a start-area exclusion only: no fireball mine within `mine_free_start_radius` (35 m, flat distance) of where the
+  run starts (guaranteed mines are not placed there; a random trap there never rolls the mine). The 50%-of-max-health hit and the homing fireballs are unchanged.
+Still open:
+- **Positive globes**: the audit asked for good globes alongside the curses; adding them changes the risk balance of the globe system. Not decided.
+- **Loot from culled enemies**: day culls and room-lock culls retire far-off enemies through the normal death path, which still rolls potion / key drops. Not decided.
 
 ## Related, already decided
 - Starting health: Barbarian 200 (was 150), Mage 135 (was 100), shipped as OTA v8.2 (health only; no other balance change in that release).

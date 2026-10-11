@@ -106,5 +106,5 @@ the music at default volumes; the scene wipe on slow storage. Screen Shake 0 sho
 
 - Combat-intensity music layers, per-room reverb, footstep surface variants.
 - `physics/common/physics_interpolation` in `project.godot` (native; replaced by the camera smoothing above).
-- Design items kept out on purpose (owner decisions): a real choice at the buff pick, positive globes, a fairer fireball mine / start-area
-  exclusion, potions on a win. See `docs/BACKLOG.md`.
+- Design items: decided on 2026-10-11 (buff reel stays; potions on a win = 20; no fireball mines near the start) and built, see `docs/BACKLOG.md`
+  section 3. Still open: positive globes, loot from culled enemies.
