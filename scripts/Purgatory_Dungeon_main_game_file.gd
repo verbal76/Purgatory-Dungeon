@@ -62,6 +62,7 @@ extends Node3D
 @export var jumpscare_texture : Texture2D   # Scary face image (.png, .jpg, etc.)
 @export var jumpscare_sound   : AudioStream # Scream / stinger audio file
 
+const Juice = preload("res://scripts/juice.gd")
 const FloorMeshRepair = preload("res://scripts/floor_mesh_repair.gd")
 const PropSpawnerScript = preload("res://scripts/prop_spawner.gd")
 
@@ -112,6 +113,10 @@ func _ready() -> void:
 
 	# THE FIX: Directly capture the newly spawned player so we never grab a ghost
 	var active_player = _spawn_selected_character()
+
+	# The shared effect pool (hit sparks, damage numbers, flash lights) is built now, under the loading screen, so no combat
+	# frame ever pays for it.
+	Juice.ensure_pool(self)
 
 	# Phones: the touch layer feeds the same input actions as keyboard / gamepad (no-op on desktop).
 	TouchControls.install(self)

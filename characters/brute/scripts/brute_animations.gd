@@ -60,37 +60,64 @@ func _repulse_burst(force_scale: float = 1.0) -> int:
 	if has_node("/root/AudioManager"):
 		var snd : AudioStream = load(REPULSE_SOUND_PATH) as AudioStream
 		if snd != null:
-			AudioManager.play_one_shot(snd, 2.0, 0.7)
+			AudioManager.play_one_shot(snd, 2.0, 0.7, 2)
+		AudioManager.play_sfx("impact_thud", 1.0, 0.55, 0.65, 2)
+	# Feel: the biggest FOV push in the game, a heavy jolt, a ring of dust at the feet.
+	if camera_fx != null:
+		camera_fx.punch_fov(6.0)
+		camera_fx.add_trauma(0.6)
+		camera_fx.flash_screen(Color(1.0, 0.8, 0.4), 0.2)
+	Juice.burst("ring_white", origin + Vector3(0.0, 0.1, 0.0), Vector3.UP, 1.0)
+	Juice.burst("dust", origin + Vector3(0.0, 0.15, 0.0), Vector3.UP, 1.0)
+	Juice.haptic(55)
 	return pushed
 
 
-## A flat gold shockwave that expands to the push radius and fades (one short-lived node per use).
-func _spawn_repulse_ring() -> void:
-	var parent : Node = get_parent()
-	if parent == null:
+# The shockwave is ONE reused mesh + material (built by prepare_repulse_ring() when the player is set up, so the first use
+# doesn't hitch); each use re-scales and fades it. It used to create a mesh, a material and a tween target per use.
+var _repulse_ring : MeshInstance3D = null
+var _repulse_ring_mat : StandardMaterial3D = null
+var _repulse_tween : Tween = null
+
+
+func prepare_repulse_ring() -> void:
+	if _repulse_ring != null:
 		return
-	var mesh := MeshInstance3D.new()
 	var sphere := SphereMesh.new()
 	sphere.radius = REPULSE_RADIUS
 	sphere.height = REPULSE_RADIUS * 2.0
 	sphere.radial_segments = 24
 	sphere.rings = 12
-	mesh.mesh = sphere
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.albedo_color = Color(1.0, 0.78, 0.35, 0.45)
-	mesh.material_override = mat
-	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	parent.add_child(mesh)
-	mesh.global_position = global_position + Vector3(0.0, 0.9, 0.0)
-	mesh.scale = Vector3.ONE * 0.12
-	var tw : Tween = mesh.create_tween().set_parallel(true)
-	tw.tween_property(mesh, "scale", Vector3.ONE, 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(mat, "albedo_color:a", 0.0, 0.32)
-	tw.chain().tween_callback(mesh.queue_free)
+	_repulse_ring_mat = StandardMaterial3D.new()
+	_repulse_ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_repulse_ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_repulse_ring_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_repulse_ring_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_repulse_ring_mat.albedo_color = Color(1.0, 0.78, 0.35, 0.0)
+	_repulse_ring = MeshInstance3D.new()
+	_repulse_ring.mesh = sphere
+	_repulse_ring.material_override = _repulse_ring_mat
+	_repulse_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_repulse_ring.top_level = true
+	_repulse_ring.visible = false
+	add_child(_repulse_ring)
+
+
+## A flat gold shockwave that expands to the push radius and fades (the one reused mesh).
+func _spawn_repulse_ring() -> void:
+	prepare_repulse_ring()
+	if _repulse_ring == null:
+		return
+	if _repulse_tween != null and _repulse_tween.is_valid():
+		_repulse_tween.kill()
+	_repulse_ring.visible = true
+	_repulse_ring.global_position = global_position + Vector3(0.0, 0.9, 0.0)
+	_repulse_ring.scale = Vector3.ONE * 0.12
+	_repulse_ring_mat.albedo_color.a = 0.45
+	_repulse_tween = _repulse_ring.create_tween().set_parallel(true)
+	_repulse_tween.tween_property(_repulse_ring, "scale", Vector3.ONE, 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_repulse_tween.tween_property(_repulse_ring_mat, "albedo_color:a", 0.0, 0.32)
+	_repulse_tween.chain().tween_callback(_repulse_ring.hide)
 
 const ANIMATION_MAP := {
 	"standing_idle"        : "StandingIdle",

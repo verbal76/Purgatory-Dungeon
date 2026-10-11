@@ -35,6 +35,11 @@ const TURN_SPEED := 10.0
 const MESH_SCALE := 0.01
 const MESH_FACING := PI
 
+# Game-feel layer (scripts/juice.gd, camera_fx.gd, vfx_pool.gd). Plain preloads (no new global class_name, so an OTA can ship them).
+# Subclasses use `Juice` directly: a second `const Juice` in a child script would be a redeclaration error.
+const Juice := preload("res://scripts/juice.gd")
+const CameraFxScript := preload("res://scripts/camera_fx.gd")
+
 @export var max_health             : float = 100.0
 @export var react_anim_speed       : float = 5.0
 @export var death_anim_speed       : float = 1.0
@@ -122,12 +127,17 @@ var _anim_map : Dictionary = {}
 var camera_3d       : Camera3D          = null
 var footstep_player : AudioStreamPlayer = null
 var _footstep_timer : float = 0.0
+var _fall_speed     : float = 0.0
+var _landing_armed  : bool  = false
+var _was_on_floor   : bool  = true
 var _head_bob_time  : float = 0.0
 var _default_cam_y  : float = 0.0
 var _is_blocking         : bool    = false
 # Tracks the node that dealt the killing blow — used to credit kills only to
 # the player, not to cull sweeps, traps, or other enemies.
 var _last_damage_source  : Node3D  = null
+# True when the player earned this enemy's death (false for culls / traps): the death sound and effects only play for earned kills.
+var _credited_kill       : bool    = false
 # Knockback wall-hit response: armed when take_knockback() fires, consumed the
 # first time a high-speed slide collision is detected during stun.
 var _knockback_hit_fired : bool    = false
@@ -183,6 +193,24 @@ func _ready() -> void:
 		_setup_visibility_notifier()
 	else:
 		_build_damage_direction_fan()
+		_setup_camera_fx()
+
+
+# The player's camera-feel node (shake, FOV punch, hit-stop, render-rate smoothing, screen flashes). See scripts/camera_fx.gd.
+var camera_fx : Node = null
+
+
+func _setup_camera_fx() -> void:
+	if camera_3d == null or camera_fx != null:
+		return
+	camera_fx = CameraFxScript.new()
+	camera_fx.name = "CameraFx"
+	camera_fx.process_mode = Node.PROCESS_MODE_PAUSABLE   # a paused game must not keep interpolating the camera
+	add_child(camera_fx)
+	camera_fx.setup(self, camera_3d, get_node_or_null("SpringArm3D") as Node3D, anim_player)
+	if not health_changed.is_connected(camera_fx.on_health_changed):
+		health_changed.connect(camera_fx.on_health_changed)
+	camera_fx.on_health_changed(_current_health, max_health)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -427,6 +455,10 @@ func take_damage(amount: float, _source_node: Node3D = null) -> void:
 
 	_current_health = maxf(_current_health - amount, 0.0)
 	health_changed.emit(_current_health, max_health)
+	if is_in_group("player"):
+		_juice_player_hurt(amount, _source_node)
+	else:
+		_juice_enemy_hit(amount, _source_node)
 
 	if _current_health <= 0.0:
 		_trigger_death()
@@ -440,6 +472,58 @@ func receive_heal(amount: float) -> void:
 
 	_current_health = minf(_current_health + amount, max_health)
 	health_changed.emit(_current_health, max_health)
+	_juice_healed(amount)
+
+
+# ══════════════════════════════════════════════════════════════
+#  GAME FEEL  (presentation only: no gameplay value is read or changed here)
+# ══════════════════════════════════════════════════════════════
+
+## A hit on the player: size-scaled vignette + shake + kick (CameraFx), the hurt grunt, a haptic pulse. Damage that arrives without a
+## source in many small ticks (acid, poison) is a status, not a blow: it tints the screen and nothing else, so it can't strobe.
+func _juice_player_hurt(amount: float, source: Node) -> void:
+	if amount <= 0.0:
+		return
+	var dot: bool = source == null and amount < 2.0
+	if camera_fx != null:
+		camera_fx.on_damage(amount, max_health, dot)
+	if dot or not has_node("/root/AudioManager"):
+		return
+	var grunt: AudioStream = get("hit_grunt_sound") as AudioStream if "hit_grunt_sound" in self else null
+	if grunt != null:
+		AudioManager.play_one_shot(grunt, 0.0, randf_range(0.92, 1.06), 2, 300)
+
+
+## A heal of a real size (an orb, a kill heal): green screen wash, rising motes, a soft chime. Per-tick regeneration stays silent.
+func _juice_healed(amount: float) -> void:
+	if amount < 1.0 or not is_in_group("player"):
+		return
+	if camera_fx != null:
+		camera_fx.on_heal()
+	Juice.burst("heal", global_position + Vector3(0.0, 0.4, 0.0), Vector3.UP, 0.6)
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("heal_chime", -6.0, 0.98, 1.04, 1)
+
+
+## An enemy hurt by the player (melee, bolt, kick, blast): floating damage number and a hit spray. Damage from traps, culls and
+## other enemies is not "your hit", so it stays quiet.
+func _juice_enemy_hit(amount: float, source: Node) -> void:
+	if amount <= 0.0 or source == null or not is_instance_valid(source) or not source.is_in_group("player"):
+		return
+	var chest: Vector3 = global_position + Vector3(0.0, 1.3, 0.0)
+	if amount < 5000.0:   # (the potion blast uses a one-shot-kill amount: a 999999999 floating over every enemy would be noise)
+		var big: float = clampf(amount / maxf(max_health, 1.0), 0.0, 1.0)
+		Juice.number(chest + Vector3(0.0, 0.6, 0.0), str(int(roundf(amount))),
+				Color(1.0, 0.82 - 0.3 * big, 0.45 - 0.3 * big), 0.85 + 0.7 * big)
+	var away: Vector3 = global_position - (source as Node3D).global_position
+	away.y = 0.35
+	Juice.burst("hit", chest, away, 1.0 if amount >= 10.0 else 0.6)
+
+
+## A kill the player earned (not a cull or a trap): a soul wisp rises, dust puffs from the fall.
+func _juice_enemy_kill() -> void:
+	Juice.burst("soul", global_position + Vector3(0.0, 1.0, 0.0), Vector3.UP, 1.0)
+	Juice.burst("poof", global_position + Vector3(0.0, 0.2, 0.0), Vector3.UP, 0.6)
 
 
 # Bonus attack damage that depends on the player's current health (Adrenaline Spike).
@@ -556,6 +640,10 @@ func _trigger_death() -> void:
 				and _last_damage_source.is_in_group("player"):
 			GLOBAL_KILL_COUNT     += 1
 			GLOBAL_LAST_KILL_POS   = global_position
+			_credited_kill = true
+			_juice_enemy_kill()
+	elif camera_fx != null:
+		camera_fx.on_death()
 
 	died.emit()
 	_on_die()
@@ -586,16 +674,8 @@ func _spawn_kill_aoe(kill_pos: Vector3, damage: float) -> void:
 func _spawn_kill_flash(kill_pos: Vector3, range_bonus: float, brightness: float) -> void:
 	if not is_inside_tree():
 		return
-	var light        := OmniLight3D.new()
-	light.omni_range  = 4.0 + range_bonus * 10.0
-	light.light_energy = 3.0 + brightness * 10.0
-	light.light_color  = Color(1.0, 0.88, 0.45)
-	get_tree().current_scene.add_child(light)
-	light.global_position = kill_pos + Vector3(0.0, 0.5, 0.0)
-	# Fade and remove over 0.5 s.
-	var tw := create_tween()
-	tw.tween_property(light, "light_energy", 0.0, 0.5)
-	tw.finished.connect(light.queue_free)
+	# A pooled flash light (the pool fades it out over 0.5 s): no light node is created per kill.
+	Juice.flash(kill_pos + Vector3(0.0, 0.5, 0.0), Color(1.0, 0.88, 0.45), 3.0 + brightness * 10.0, 0.5, 4.0 + range_bonus * 10.0)
 
 
 # Plague Spreader — poison cloud that deals 5 damage every 0.5 s for 5 s.
@@ -746,7 +826,9 @@ func _configure_footstep_player() -> void:
 
 
 func _update_footsteps(delta: float) -> void:
-	if footstep_player == null or not is_on_floor():
+	# (There is no "FootstepPlayer" node in the player scenes, so the old `footstep_player == null` gate made the steps silent.
+	# Steps now play from AudioManager's pooled voices; a scene that does carry a FootstepPlayer keeps using it.)
+	if not is_on_floor():
 		_footstep_timer = 0.0
 		return
 	var h_speed := Vector2(velocity.x, velocity.z).length()
@@ -755,18 +837,44 @@ func _update_footsteps(delta: float) -> void:
 		return
 	_footstep_timer -= delta
 	if _footstep_timer <= 0.0:
-		footstep_player.stop()
-		footstep_player.volume_db   = _get_footstep_db()
-		footstep_player.pitch_scale = randf_range(footstep_pitch_min, footstep_pitch_max)
-		footstep_player.play()
+		if footstep_player != null:
+			footstep_player.stop()
+			footstep_player.volume_db   = _get_footstep_db()
+			footstep_player.pitch_scale = randf_range(footstep_pitch_min, footstep_pitch_max)
+			footstep_player.play()
+		elif has_node("/root/AudioManager"):
+			# footstep_volume_db 5.0 is the designed default (-> -6 dB for the synthesised steps); a buff that changes it moves them too.
+			AudioManager.play_footstep(footstep_volume_db - 11.0)
 		# Buffs add to footstep_interval_seconds as an absolute (Footstep Stalker is -0.5 on a 0.38
 		# default), which could go to or below 0 and retrigger the sound every frame. Floor it.
 		_footstep_timer = maxf(footstep_interval_seconds, 0.12) / clampf(h_speed / _get_effective_move_speed(), 0.65, 1.35)
 
 
+## Landing: the fastest downward speed of the fall is remembered while airborne; touching down at speed dips the camera, shakes
+## it a little and thumps. (Called from _apply_head_bob, i.e. once per player physics tick.)
+func _detect_landing() -> void:
+	var on_floor: bool = is_on_floor()
+	if on_floor:
+		# (the first touchdown is the spawn drop onto the starting floor: it is silent, only later landings are felt)
+		if not _was_on_floor and _fall_speed > 6.0 and _landing_armed:
+			var k: float = clampf((_fall_speed - 6.0) / 12.0, 0.0, 1.0)
+			if camera_fx != null:
+				camera_fx.dip(0.07 + 0.12 * k)
+				camera_fx.add_trauma(0.12 + 0.3 * k)
+			if has_node("/root/AudioManager"):
+				AudioManager.play_sfx("landing_thud", -4.0 + 4.0 * k, 0.94, 1.06, 2)
+			Juice.burst("dust", global_position + Vector3(0.0, 0.1, 0.0), Vector3.UP, 0.5 + 0.5 * k)
+		_landing_armed = true
+		_fall_speed = 0.0
+	else:
+		_fall_speed = maxf(_fall_speed, -velocity.y)
+	_was_on_floor = on_floor
+
+
 func _apply_head_bob(delta: float) -> void:
 	if camera_3d == null:
 		return
+	_detect_landing()
 	var h_speed := Vector2(velocity.x, velocity.z).length()
 	if is_on_floor() and h_speed > minimum_movement_for_footsteps and not _is_blocking:
 		_head_bob_time += delta * h_speed * head_bob_speed

@@ -83,7 +83,7 @@ var swing_sound: AudioStream = preload("res://Music & background images/Sound Ef
 var kick_sound: AudioStream = preload("res://Music & background images/Sound Effects/player kick.mp3")
 var aoe_blast_sound: AudioStream = preload("res://Music & background images/Sound Effects/Burned A.wav")
 var block_sound: AudioStream = preload("res://Music & background images/Sound Effects/axe blocked.mp3")
-@export var hit_grunt_sound: AudioStream
+@export var hit_grunt_sound: AudioStream = preload("res://Music & background images/Sound Effects/male-hurt-sound-95206.mp3")
 
 # ── Node references ────────────────────────────────────────────
 @onready var spring_arm : SpringArm3D = get_node_or_null("SpringArm3D")
@@ -153,6 +153,9 @@ var _streak_tier          : int   = 0
 var _streak_attack_bonus  : float = 0.0  # running attack_speed bonus from attack_speed_streak
 
 # ── Particle nodes ──────────────────────────────────────────────
+# Perfect block: a block raised within this window before the hit lands.
+const PERFECT_BLOCK_MS : int = 280
+var _block_started_ms : int = 0
 var _swing_sparks  : GPUParticles3D = null
 var _streak_fire   : GPUParticles3D = null
 
@@ -161,13 +164,7 @@ var _hud_layer       : CanvasLayer = null
 var _vitals          : HudVitals   = null   # health bar + value (scripts/ui/hud_vitals.gd)
 var _health_label    : Label       = null
 
-# ── Damage vignette ────────────────────────────────────────────
-# Full-screen red overlay that pulses on damage and fades out over ~0.8s.
-# Gives the player a behind-hit warning without a direction indicator.
-@export var vignette_peak_alpha : float = 0.32  # Max alpha on a single hit
-@export var vignette_fade_speed : float = 0.9   # Alpha units per second to fade
-var _damage_vignette : ColorRect = null
-var _vignette_alpha  : float     = 0.0
+# The damage vignette (a radial edge tint sized by the hit, plus the low-health pulse) is CameraFx's: scripts/camera_fx.gd.
 
 
 # ══════════════════════════════════════════════════════════════
@@ -195,6 +192,7 @@ func _on_ready() -> void:
 	_setup_weapon_hitbox()
 	_setup_kick_hitbox()
 	_setup_particles()
+	prepare_repulse_ring()
 	_last_kill_count = CharacterBase.GLOBAL_KILL_COUNT
 	_apply_hub_perks()
 
@@ -247,6 +245,7 @@ func _do_block() -> void:
 		if anim_player != null: anim_player.speed_scale = 1.0
 
 	_is_blocking = true
+	_block_started_ms = Time.get_ticks_msec()
 	velocity.x   = 0.0
 	velocity.z   = 0.0
 
@@ -532,15 +531,7 @@ func _spawn_kill_aoe(kill_pos: Vector3, damage: float) -> void:
 func _spawn_kill_flash(kill_pos: Vector3, range_bonus: float, brightness: float) -> void:
 	if not is_inside_tree():
 		return
-	var light         := OmniLight3D.new()
-	light.omni_range   = 4.0 + range_bonus * 10.0
-	light.light_energy = 3.0 + brightness * 10.0
-	light.light_color  = Color(1.0, 0.88, 0.45)
-	get_tree().current_scene.add_child(light)
-	light.global_position = kill_pos + Vector3(0.0, 0.5, 0.0)
-	var tw := create_tween()
-	tw.tween_property(light, "light_energy", 0.0, 0.5)
-	tw.finished.connect(light.queue_free)
+	Juice.flash(kill_pos + Vector3(0.0, 0.5, 0.0), Color(1.0, 0.88, 0.45), 3.0 + brightness * 10.0, 0.5, 4.0 + range_bonus * 10.0)
 
 func _spawn_poison_cloud(kill_pos: Vector3) -> void:
 	const TICK_DAMAGE    : float = 5.0
@@ -577,19 +568,26 @@ func take_damage(amount: float, source_node: Node3D = null) -> void:
 
 		if forward.dot(to_source) > 0.7:
 			if block_sound != null and has_node("/root/AudioManager"):
-				AudioManager.play_one_shot(block_sound, 2.0, randf_range(0.9, 1.1))
-			if hit_grunt_sound != null and has_node("/root/AudioManager"):
-				AudioManager.play_one_shot(hit_grunt_sound, 0.0, randf_range(0.9, 1.1))
+				AudioManager.play_one_shot(block_sound, 2.0, randf_range(0.9, 1.1), 2)
+			# A block you raised just before the hit is a PERFECT block: bigger sparks, a flash and a longer freeze.
+			var perfect : bool = Time.get_ticks_msec() - _block_started_ms < PERFECT_BLOCK_MS
+			Juice.burst("block", global_position + Vector3(0.0, 1.3, 0.0) + to_source * 0.8, to_source + Vector3.UP * 0.3, 1.0 if perfect else 0.6)
+			if camera_fx != null:
+				camera_fx.add_trauma(0.45 if perfect else 0.22)
+				camera_fx.kick_pitch(2.0 if perfect else 1.0)
+				camera_fx.hit_stop(0.09 if perfect else 0.045)
+				camera_fx.flash_screen(Color(0.7, 0.85, 1.0), 0.35 if perfect else 0.15)
+			if perfect:
+				Juice.number(global_position + Vector3(0.0, 2.1, 0.0), "PERFECT", Color(0.75, 0.9, 1.0), 1.1)
+				if has_node("/root/AudioManager"):
+					AudioManager.play_sfx("ready_ding", -4.0, 1.2, 1.2, 2)
+			Juice.haptic(30 if perfect else 18)
 			var push_dir : Vector3 = (global_position - source_node.global_position).normalized()
 			push_dir.y = 0.0
 			velocity = push_dir * block_knockback_force
 			return
 
 	_break_streak()
-	# Flash the damage vignette — stacks slightly on rapid hits, capped at peak.
-	_vignette_alpha = minf(_vignette_alpha + 0.28, vignette_peak_alpha)
-	if _damage_vignette != null:
-		_damage_vignette.color.a = _vignette_alpha
 	# Flash the shared damage direction fan (points at the hit source).
 	if source_node != null:
 		_flash_damage_direction(source_node, _yaw)
@@ -651,11 +649,24 @@ func _on_weapon_hit(collider: Node3D) -> void:
 				swing_dmg *= 1.0 + low_health_damage
 		target.take_damage(swing_dmg, self)
 		_hit_targets[target] = true
+		_melee_feedback(target, 1.0)
 
 		if axe_hit_sounds.size() > 0 and has_node("/root/AudioManager"):
 			var hit_sfx : AudioStream = axe_hit_sounds.pick_random() as AudioStream
 			if hit_sfx != null:
-				AudioManager.play_3d_one_shot(hit_sfx, collider.global_position, 0.0, randf_range(0.9, 1.1))
+				AudioManager.play_3d_one_shot(hit_sfx, collider.global_position, 0.0, randf_range(0.9, 1.1), 25.0, 2)
+			AudioManager.play_sfx_3d("impact_thud", collider.global_position, -6.0, 0.9, 1.1, 25.0, 1)
+
+
+## Weight on a connected melee blow (presentation only): a short freeze of the swing and of the target, a camera jolt, a haptic tick.
+## A kill gets a longer freeze and a bigger jolt. `weight` is 1 for the axe and larger for the kick.
+func _melee_feedback(target: Node, weight: float) -> void:
+	var killed : bool = bool(target.get("_is_dead"))
+	if camera_fx != null:
+		camera_fx.hit_stop((0.10 if killed else 0.055) * weight, target)
+		camera_fx.add_trauma((0.38 if killed else 0.2) * weight)
+		camera_fx.kick_pitch((1.4 if killed else 0.7) * weight)
+	Juice.haptic(int((40 if killed else 20) * weight))
 
 
 func _on_kick_hit(collider: Node3D) -> void:
@@ -670,6 +681,7 @@ func _on_kick_hit(collider: Node3D) -> void:
 		var forward_kick := Vector3(-sin(_yaw), 0.0, -cos(_yaw))
 		target.apply_kick(forward_kick, kick_force * 12.0)
 		_hit_targets[target] = true
+		_kick_contact(collider.global_position, 0.5)
 		return
 
 	if target.has_method("take_damage"):
@@ -680,12 +692,25 @@ func _on_kick_hit(collider: Node3D) -> void:
 			if max_hp > 0.0 and cur_hp / max_hp < 0.3:
 				kick_dmg *= 1.0 + low_health_damage
 		target.take_damage(kick_dmg, self)
+		_melee_feedback(target, 1.35)
 
 	if target.has_method("take_knockback"):
 		var forward := Vector3(-sin(_yaw), 0.0, -cos(_yaw))
 		target.take_knockback(forward, kick_force, kick_stun_time)
+		_kick_contact(collider.global_position, 1.0)
 
 	_hit_targets[target] = true
+
+
+## The kick's thud lands when the boot connects (it used to play on the button press, hit or miss).
+func _kick_contact(pos: Vector3, weight: float) -> void:
+	if has_node("/root/AudioManager"):
+		if kick_sound != null:
+			AudioManager.play_3d_one_shot(kick_sound, pos, 3.0 * weight, randf_range(0.85, 1.0), 25.0, 2)
+		AudioManager.play_sfx_3d("impact_thud", pos, -2.0, 0.75, 0.9, 25.0, 1)
+	Juice.burst("dust", pos + Vector3(0.0, 0.2, 0.0), Vector3.UP, 0.7 * weight)
+	if camera_fx != null:
+		camera_fx.add_trauma(0.2 * weight)
 
 
 func _build_hud() -> void:
@@ -698,15 +723,6 @@ func _build_hud() -> void:
 	_hud_layer.add_child(_vitals)
 	_health_label            = _vitals.health_label
 	_refresh_health_bar(max_health, max_health)
-
-	# Damage vignette — sits above all other HUD elements so it bleeds over
-	# the health bar and fills the whole screen. mouse_filter IGNORE so it
-	# doesn't block any UI clicks on menus that appear while paused.
-	_damage_vignette = ColorRect.new()
-	_damage_vignette.color = Color(PUI.BLOOD, 0.0)
-	_damage_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_damage_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hud_layer.add_child(_damage_vignette)
 
 	# ── Active trap effects list ───────────────────────────────────────────────
 	# Small plate at the bottom-centre of the screen, sized to its text. Visible only when at
@@ -753,6 +769,11 @@ func _on_die() -> void:
 
 	if has_node("/root/GameClock"):
 		GameClock.hide_hud()
+	if has_node("/root/AudioManager"):
+		AudioManager.stop_ambience()
+		AudioManager.fade_out_music(1.2)
+		AudioManager.play_sfx("death_sting", 0.0, 1.0, 1.0, 2)
+	Juice.haptic(160)
 
 	anim_player.speed_scale = death_anim_speed
 	_play_anim("death")
@@ -874,10 +895,6 @@ func _physics_tick(delta: float) -> void:
 		_slide_cam_lift = lerpf(_slide_cam_lift, 0.0, delta * 8.0)
 		camera_3d.position.y += _slide_cam_lift
 
-	# Fade damage vignette — runs every tick so it disappears smoothly.
-	if _vignette_alpha > 0.0 and _damage_vignette != null:
-		_vignette_alpha = maxf(_vignette_alpha - vignette_fade_speed * delta, 0.0)
-		_damage_vignette.color.a = _vignette_alpha
 	_tick_damage_fan(delta)
 
 
@@ -899,7 +916,9 @@ func set_facing_yaw(yaw: float) -> void:
 func _apply_yaw_now() -> void:
 	var yaw_out : float = _yaw
 	if _status_drunk:
-		yaw_out += sin(Time.get_ticks_msec() * 0.002) * 0.18
+		# The sway eases in over 1.5 s and out over the last 3 s instead of switching on and off.
+		var amp : float = clampf((STATUS_DRUNK_SECONDS - _status_drunk_timer) / 1.5, 0.0, 1.0) * clampf(_status_drunk_timer / 3.0, 0.0, 1.0)
+		yaw_out += sin(Time.get_ticks_msec() * 0.002) * 0.18 * amp
 	rotation.y = yaw_out
 
 
@@ -908,7 +927,8 @@ func _apply_view_rotation() -> void:
 
 	var arm : SpringArm3D = get_node_or_null("SpringArm3D") as SpringArm3D
 	if arm != null:
-		arm.rotation.x = PI if _status_reversed_view else 0.0
+		# The view turns over in ~0.4 s (it used to snap), then back the same way.
+		arm.rotation.x = move_toward(arm.rotation.x, PI if _status_reversed_view else 0.0, PI * get_physics_process_delta_time() / 0.4)
 
 
 func _handle_movement(delta: float) -> void:
@@ -1013,6 +1033,12 @@ func _do_attack() -> void:
 	anim_player.speed_scale = attack_speed_scale * attack_speed
 	_play_anim(pick_attack())
 	_set_weapon_hitbox_active(true)
+	# The swing: whoosh + axe swish, sparks off the blade, a small forward FOV push (the animation-event hooks were never wired).
+	anim_trigger_swing_sound()
+	_fire_swing_sparks()
+	if camera_fx != null:
+		camera_fx.punch_fov(3.0)
+		camera_fx.add_trauma(0.05)
 
 	# Seek past wind-up to start time, stop at end time (player only — AI does not seek).
 	var seek_offset : float = 0.0
@@ -1073,8 +1099,10 @@ func _apply_kick_to_nearby_props() -> void:
 func _do_kick() -> void:
 	_is_kicking = true
 	_hit_targets.clear()
-	if kick_sound != null and has_node("/root/AudioManager"):
-		AudioManager.play_one_shot(kick_sound, 4.0, randf_range(0.7, 0.85))
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("swing_whoosh", -2.0, 0.65, 0.8, 1)
+	if camera_fx != null:
+		camera_fx.punch_fov(2.5)
 	anim_player.speed_scale = kick_speed_scale
 	_play_anim("kick")
 
@@ -1116,7 +1144,14 @@ func _do_aoe() -> void:
 	velocity.z = 0.0
 
 	if aoe_blast_sound != null and has_node("/root/AudioManager"):
-		AudioManager.play_one_shot(aoe_blast_sound, 2.0, 1.0)
+		AudioManager.play_one_shot(aoe_blast_sound, 2.0, 1.0, 2)
+	if camera_fx != null:
+		camera_fx.add_trauma(0.55)
+		camera_fx.punch_fov(5.0)
+		camera_fx.flash_screen(Color(0.8, 0.5, 1.0), 0.28)
+	Juice.burst("ring_white", global_position + Vector3(0.0, 0.1, 0.0), Vector3.UP, 1.0)
+	Juice.burst("magic", global_position + Vector3(0.0, 1.0, 0.0), Vector3.UP, 1.0)
+	Juice.haptic(70)
 
 	_play_anim("block_react")
 	var raw_len := _current_anim_length()
@@ -1142,16 +1177,21 @@ func _do_aoe() -> void:
 		_change_state(_get_idle_state())
 
 
+# One shared dome material: the shader is compiled once (building a new Shader per blast stalled the frame it was cast on).
+static var _dome_material : ShaderMaterial = null
+
+
 func _build_aoe_dome(radius: float) -> MeshInstance3D:
 	var mesh_inst := MeshInstance3D.new()
 	var mesh_sphere := SphereMesh.new()
 	mesh_sphere.radius = radius; mesh_sphere.height = radius * 2.0; mesh_sphere.radial_segments = 32; mesh_sphere.rings = 16
 	mesh_inst.mesh = mesh_sphere
-	var shader := Shader.new()
-	shader.code = "shader_type spatial;\nrender_mode blend_add, cull_disabled, unshaded;\n\nvec3 hsv2rgb(float h, float s, float v) {\n\tvec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);\n\tvec3 p = abs(fract(vec3(h) + K.xyz) * 6.0 - K.www);\n\treturn v * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), s);\n}\n\nvoid fragment() {\n\tfloat hue = fract(UV.x + UV.y * 0.5 + TIME * 0.8);\n\tvec3 rgb = hsv2rgb(hue, 0.85, 1.0);\n\tfloat pulse = 0.25 + 0.1 * sin(TIME * 4.0);\n\tALBEDO = rgb;\n\tALPHA = pulse;\n\tEMISSION = rgb * 1.5;\n}\n"
-	var mat := ShaderMaterial.new()
-	mat.shader = shader
-	mesh_inst.material_override = mat
+	if _dome_material == null:
+		_dome_material = ShaderMaterial.new()
+		var shader := Shader.new()
+		shader.code = "shader_type spatial;\nrender_mode blend_add, cull_disabled, unshaded;\n\nvec3 hsv2rgb(float h, float s, float v) {\n\tvec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);\n\tvec3 p = abs(fract(vec3(h) + K.xyz) * 6.0 - K.www);\n\treturn v * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), s);\n}\n\nvoid fragment() {\n\tfloat hue = fract(UV.x + UV.y * 0.5 + TIME * 0.8);\n\tvec3 rgb = hsv2rgb(hue, 0.85, 1.0);\n\tfloat pulse = 0.25 + 0.1 * sin(TIME * 4.0);\n\tALBEDO = rgb;\n\tALPHA = pulse;\n\tEMISSION = rgb * 1.5;\n}\n"
+		_dome_material.shader = shader
+	mesh_inst.material_override = _dome_material
 	get_parent().add_child(mesh_inst)
 	mesh_inst.global_position = global_position
 	return mesh_inst
@@ -1205,8 +1245,30 @@ func apply_status(effect_name: String, days_duration: int, strength: float = 0.0
 			_status_acid_timer = float(days_duration) if days_duration > 0 else 15.0
 			_status_acid_dps   = strength if strength > 0.0 else 1.0
 
+	_status_cue(effect_name)
 	# Show the label immediately when an effect is applied.
 	_refresh_status_label()
+
+
+# A short, distinct "something happened to you" cue per trap status: screen tint, camera jolt and a sound.
+func _status_cue(effect_name: String) -> void:
+	var tint : Color = Color(1, 1, 1)
+	match effect_name:
+		"reversed_view":     tint = Color(0.3, 0.55, 1.0)
+		"heavy_gravity":     tint = Color(0.55, 0.55, 0.6)
+		"drunk":             tint = Color(0.75, 0.35, 0.95)
+		"reversed_controls": tint = Color(1.0, 0.6, 0.15)
+		"acid_pool":         tint = Color(0.2, 0.85, 0.3)
+	if camera_fx != null:
+		camera_fx.flash_screen(tint, 0.4)
+		camera_fx.add_trauma(0.35)
+		if effect_name == "heavy_gravity":
+			camera_fx.dip(0.14)
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("trap_click", -2.0, 0.8, 0.9, 2)
+		if effect_name == "heavy_gravity":
+			AudioManager.play_sfx("impact_thud", 0.0, 0.5, 0.6, 2)
+	Juice.haptic(45)
 
 
 # Builds the active trap effects text and shows/hides the panel.
@@ -1314,8 +1376,11 @@ func _smooth_turn(_delta: float) -> void:
 	pass
 
 func anim_trigger_swing_sound() -> void:
-	if swing_sound != null and has_node("/root/AudioManager"):
-		AudioManager.play_one_shot(swing_sound, -2.0, randf_range(0.9, 1.1))
+	if not has_node("/root/AudioManager"):
+		return
+	if swing_sound != null:
+		AudioManager.play_one_shot(swing_sound, -3.0, randf_range(0.9, 1.1))
+	AudioManager.play_sfx("swing_whoosh", -5.0, 0.95, 1.15, 1)
 
 func anim_trigger_hitbox_on() -> void:
 	_hit_targets.clear(); _set_weapon_hitbox_active(true)

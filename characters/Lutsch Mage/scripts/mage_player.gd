@@ -168,20 +168,18 @@ var _crosshair_layer       : CanvasLayer = null
 var _vitals       : HudVitals = null   # health bar + value (scripts/ui/hud_vitals.gd)
 var _health_label : Label     = null
 
-# ── Damage vignette ────────────────────────────────────────────
-# Full-screen red overlay that pulses on damage and fades out over ~0.8 s.
-# Mirrors the Brute's vignette so both players get the same feedback.
-@export var vignette_peak_alpha : float = 0.32
-@export var vignette_fade_speed : float = 0.9
-var _damage_vignette : ColorRect = null
-var _vignette_alpha  : float     = 0.0
+# The damage vignette (a radial edge tint sized by the hit, plus the low-health pulse) is CameraFx's: scripts/camera_fx.gd.
+
+# Perfect block: a block raised within this window before the hit lands.
+const PERFECT_BLOCK_MS : int = 280
+var _block_started_ms : int = 0
 
 # ── HUD ────────────────────────────────────────────────────────
 # Health bar removed — mage uses a separate world-space health indicator.
 # Legacy brute-style HUD variables stripped here.
 
 # ── Audio Streams ──────────────────────────────────────────────
-@export var hit_grunt_sound: AudioStream # Drag your hit react sound here in the inspector
+@export var hit_grunt_sound: AudioStream = preload("res://Music & background images/Sound Effects/male-hurt-sound-95206.mp3")
 var block_sound: AudioStream = preload("res://Music & background images/Sound Effects/axe blocked.mp3")
 
 # ══════════════════════════════════════════════════════════════
@@ -267,13 +265,7 @@ func _on_ready() -> void:
 	_status_label = status.label
 	connect("health_changed", _on_health_changed)
 
-	# ── Damage vignette ────────────────────────────────────────────────────────
-	# Sits on top of the health bar and fills the screen on hit.
-	_damage_vignette = ColorRect.new()
-	_damage_vignette.color = Color(PUI.BLOOD, 0.0)
-	_damage_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_damage_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_crosshair_layer.add_child(_damage_vignette)
+	prepare_repulse_ring()
 
 	# SURGICAL ADD: Apply hub-purchased perks from the save profile before the run starts.
 	_apply_hub_perks()
@@ -473,9 +465,20 @@ func take_damage(amount: float, source_node: Node3D = null) -> void:
 		if forward.dot(to_source) > 0.7:
 			# Play the block impact and hit react grunts
 			if block_sound != null and has_node("/root/AudioManager"):
-				AudioManager.play_one_shot(block_sound, 2.0, randf_range(0.9, 1.1))
-			if hit_grunt_sound != null and has_node("/root/AudioManager"):
-				AudioManager.play_one_shot(hit_grunt_sound, 0.0, randf_range(0.9, 1.1))
+				AudioManager.play_one_shot(block_sound, 2.0, randf_range(0.9, 1.1), 2)
+			# A block raised just before the hit is a PERFECT block (brighter sparks, a flash, a longer freeze).
+			var perfect : bool = Time.get_ticks_msec() - _block_started_ms < PERFECT_BLOCK_MS
+			Juice.burst("block", global_position + Vector3(0.0, 1.3, 0.0) + to_source * 0.8, to_source + Vector3.UP * 0.3, 1.0 if perfect else 0.6)
+			if camera_fx != null:
+				camera_fx.add_trauma(0.45 if perfect else 0.22)
+				camera_fx.kick_pitch(2.0 if perfect else 1.0)
+				camera_fx.hit_stop(0.09 if perfect else 0.045)
+				camera_fx.flash_screen(Color(0.7, 0.85, 1.0), 0.35 if perfect else 0.15)
+			if perfect:
+				Juice.number(global_position + Vector3(0.0, 2.1, 0.0), "PERFECT", Color(0.75, 0.9, 1.0), 1.1)
+				if has_node("/root/AudioManager"):
+					AudioManager.play_sfx("ready_ding", -4.0, 1.2, 1.2, 2)
+			Juice.haptic(30 if perfect else 18)
 
 			# Calculate horizontal knockback away from the hit
 			var push_dir : Vector3 = (global_position - source_node.global_position).normalized()
@@ -485,10 +488,6 @@ func take_damage(amount: float, source_node: Node3D = null) -> void:
 			# We do not restart the block_react animation here, leaving the shield held high.
 			return
 
-	# Flash the red vignette on any damage that isn't fully blocked above.
-	_vignette_alpha = minf(_vignette_alpha + 0.28, vignette_peak_alpha)
-	if _damage_vignette != null:
-		_damage_vignette.color.a = _vignette_alpha
 	# Flash the shared damage direction fan (points at the hit source).
 	if source_node != null:
 		_flash_damage_direction(source_node, _yaw)
@@ -534,6 +533,11 @@ func _on_die() -> void:
 	# and day ticks cannot fire after the player is dead.
 	if has_node("/root/GameClock"):
 		GameClock.hide_hud()
+	if has_node("/root/AudioManager"):
+		AudioManager.stop_ambience()
+		AudioManager.fade_out_music(1.2)
+		AudioManager.play_sfx("death_sting", 0.0, 1.0, 1.0, 2)
+	Juice.haptic(160)
 
 	anim_player.speed_scale = death_anim_speed
 	_play_anim(pick_death_direction())
@@ -593,10 +597,6 @@ func _unhandled_input(event: InputEvent) -> void:
 # ══════════════════════════════════════════════════════════════
 
 func _physics_tick(delta: float) -> void:
-	# Fade damage vignette every tick so it disappears smoothly.
-	if _vignette_alpha > 0.0 and _damage_vignette != null:
-		_vignette_alpha = maxf(_vignette_alpha - vignette_fade_speed * delta, 0.0)
-		_damage_vignette.color.a = _vignette_alpha
 	_tick_damage_fan(delta)
 
 	if get_tree().paused:
@@ -681,7 +681,9 @@ func set_facing_yaw(yaw: float) -> void:
 func _apply_yaw_now() -> void:
 	var yaw_out : float = _yaw
 	if _status_drunk:
-		yaw_out += sin(Time.get_ticks_msec() * 0.002) * 0.18
+		# The sway eases in over 1.5 s and out over the last 3 s instead of switching on and off.
+		var amp : float = clampf((STATUS_DRUNK_SECONDS - _status_drunk_timer) / 1.5, 0.0, 1.0) * clampf(_status_drunk_timer / 3.0, 0.0, 1.0)
+		yaw_out += sin(Time.get_ticks_msec() * 0.002) * 0.18 * amp
 	rotation.y = yaw_out
 
 
@@ -689,7 +691,8 @@ func _apply_view_rotation() -> void:
 	_apply_yaw_now()
 	var arm : SpringArm3D = get_node_or_null("SpringArm3D") as SpringArm3D
 	if arm != null:
-		arm.rotation.x = PI if _status_reversed_view else 0.0
+		# The view turns over in ~0.4 s (it used to snap), then back the same way.
+		arm.rotation.x = move_toward(arm.rotation.x, PI if _status_reversed_view else 0.0, PI * get_physics_process_delta_time() / 0.4)
 
 
 func _handle_movement(delta: float) -> void:
@@ -830,6 +833,7 @@ func _do_spell_attack() -> void:
 		else:
 			aim_dir = Vector3(-sin(_yaw), 0.0, -cos(_yaw))
 
+		_cast_feedback(spawn_pos, aim_dir)
 		_launch_fireball(spawn_pos, aim_dir)
 
 		# Hold the cast pose so the player sees the bolt leave.
@@ -845,6 +849,23 @@ func _do_spell_attack() -> void:
 		anim_player.speed_scale = 1.0
 		_is_attacking = false
 		_change_state(_get_idle_state())
+
+
+## The cast: a magic burst + light flash at the staff tip, the cast sound (the exported `fireball_cast_sound` was never assigned), a
+## small FOV push and kick, a haptic tick.
+func _cast_feedback(spawn_pos: Vector3, aim_dir: Vector3) -> void:
+	Juice.burst("magic", spawn_pos, aim_dir + Vector3.UP * 0.4, 0.7)
+	Juice.flash(spawn_pos, Color(0.5, 0.75, 1.0), 2.0, 0.12, 4.0)
+	if has_node("/root/AudioManager"):
+		if fireball_cast_sound != null:
+			AudioManager.play_one_shot(fireball_cast_sound, 0.0, randf_range(0.92, 1.08), 2)
+		else:
+			AudioManager.play_sfx("fireball_cast", -2.0, 0.94, 1.08, 2)
+	if camera_fx != null:
+		camera_fx.punch_fov(2.5)
+		camera_fx.kick_pitch(0.9)
+		camera_fx.add_trauma(0.07)
+	Juice.haptic(16)
 
 
 # Launches one fireball from the right hand (and one from the left
@@ -975,6 +996,13 @@ func _on_fireball_hit(body: Node3D, fb_name: String, damage_val: float, travel_d
 
 	# Scorch mark at impact point — placed before queue_free so position is still valid.
 	_spawn_scorch_mark(fb.global_position, travel_dir)
+	# Impact: a magic burst + a short light + a bang at the hit point (the bolt used to vanish silently).
+	Juice.burst("magic", fb.global_position, -travel_dir + Vector3.UP * 0.3, 0.8)
+	Juice.flash(fb.global_position, Color(0.5, 0.75, 1.0), 2.5, 0.14, 4.0)
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("fireball_impact", fb.global_position, -2.0, 0.92, 1.08, 25.0, 1)
+	if camera_fx != null:
+		camera_fx.add_trauma(0.1)
 
 	var target : Node3D = body
 	if not target.has_method("take_damage") and not target.has_method("apply_kick") and target.get_parent() != null:
@@ -995,6 +1023,10 @@ func _on_fireball_hit(body: Node3D, fb_name: String, damage_val: float, travel_d
 		# Pass self so character_base._trigger_death() correctly credits this kill
 		# to the player via GLOBAL_KILL_COUNT (kill-streak and potion tracking).
 		target.take_damage(final_dmg, self)
+		if camera_fx != null and bool(target.get("_is_dead")):
+			camera_fx.add_trauma(0.25)
+			camera_fx.hit_stop(0.06, target)
+			Juice.haptic(30)
 
 	fb.queue_free()
 
@@ -1345,8 +1377,18 @@ func _do_lightning_dome() -> void:
 	velocity.x = 0.0
 	velocity.z = 0.0
 
-	if fireball_cast_sound != null and has_node("/root/AudioManager"):
-		AudioManager.play_one_shot(fireball_cast_sound, 3.0, 0.75)
+	if has_node("/root/AudioManager"):
+		if fireball_cast_sound != null:
+			AudioManager.play_one_shot(fireball_cast_sound, 3.0, 0.75, 2)
+		else:
+			AudioManager.play_sfx("explosion", -3.0, 0.9, 1.0, 2)
+	if camera_fx != null:
+		camera_fx.add_trauma(0.55)
+		camera_fx.punch_fov(5.0)
+		camera_fx.flash_screen(Color(0.5, 0.75, 1.0), 0.28)
+	Juice.burst("ring_white", global_position + Vector3(0.0, 0.1, 0.0), Vector3.UP, 1.0)
+	Juice.burst("magic", global_position + Vector3(0.0, 1.2, 0.0), Vector3.UP, 1.0)
+	Juice.haptic(70)
 
 	_play_anim("block_react")
 
@@ -1393,6 +1435,10 @@ func _do_shove() -> void:
 
 	anim_player.speed_scale = attack_speed_scale * attack_speed
 	anim_player.play("StandingMeleeKickVer")   # direct play — bypass lookup chain
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("swing_whoosh", -2.0, 0.65, 0.8, 1)
+	if camera_fx != null:
+		camera_fx.punch_fov(2.5)
 
 	# Props react INSTANTLY on shove start — don't wait for the 85% anim mark.
 	# Enemy shove still waits for the swing apex below so animation sync feels right.
@@ -1445,6 +1491,13 @@ func _apply_shove() -> void:
 			enemy.take_damage(shove_damage + maxf(0.0, attack_damage + get_low_health_attack_bonus()), self)
 		if enemy.has_method("take_knockback"):
 			enemy.take_knockback(forward, shove_force, shove_stun_time)
+		# The shove lands: thud + dust at the target, a jolt and a short freeze (the sound used to be absent entirely).
+		if has_node("/root/AudioManager"):
+			AudioManager.play_sfx_3d("impact_thud", enemy.global_position + Vector3(0.0, 1.0, 0.0), -2.0, 0.75, 0.9, 25.0, 2)
+		Juice.burst("dust", enemy.global_position + Vector3(0.0, 0.2, 0.0), Vector3.UP, 0.7)
+		if camera_fx != null:
+			camera_fx.add_trauma(0.25)
+			camera_fx.hit_stop(0.05, enemy)
 
 
 # Instant prop-kick pass fired at the START of _do_shove, so kicked props move
@@ -1482,6 +1535,7 @@ func _do_block() -> void:
 
 	# Lock movement immediately — block is active.
 	_is_blocking = true
+	_block_started_ms = Time.get_ticks_msec()
 	velocity.x   = 0.0
 	velocity.z   = 0.0
 
@@ -1561,7 +1615,29 @@ func apply_status(effect_name: String, days_duration: int, strength: float = 0.0
 			_status_acid       = true
 			_status_acid_timer = float(days_duration) if days_duration > 0 else 15.0
 			_status_acid_dps   = strength if strength > 0.0 else 1.0
+	_status_cue(effect_name)
 	_refresh_status_label()   # show the new effect immediately
+
+
+# A short, distinct "something happened to you" cue per trap status: screen tint, camera jolt and a sound.
+func _status_cue(effect_name: String) -> void:
+	var tint : Color = Color(1, 1, 1)
+	match effect_name:
+		"reversed_view":     tint = Color(0.3, 0.55, 1.0)
+		"heavy_gravity":     tint = Color(0.55, 0.55, 0.6)
+		"drunk":             tint = Color(0.75, 0.35, 0.95)
+		"reversed_controls": tint = Color(1.0, 0.6, 0.15)
+		"acid_pool":         tint = Color(0.2, 0.85, 0.3)
+	if camera_fx != null:
+		camera_fx.flash_screen(tint, 0.4)
+		camera_fx.add_trauma(0.35)
+		if effect_name == "heavy_gravity":
+			camera_fx.dip(0.14)
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("trap_click", -2.0, 0.8, 0.9, 2)
+		if effect_name == "heavy_gravity":
+			AudioManager.play_sfx("impact_thud", 0.0, 0.5, 0.6, 2)
+	Juice.haptic(45)
 
 
 # Builds the active trap effects text and shows/hides the panel (mirrors the Barbarian's).

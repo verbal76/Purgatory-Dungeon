@@ -1,0 +1,19 @@
+[remap]
+
+importer="oggvorbisstr"
+type="AudioStreamOggVorbis"
+uid="uid://c538jurkmrsho"
+path="res://godot/imported/ActionFlick Vol2 Determined Main.ogg-12bbddafcb96e0a0f4073f2d30b997d0.oggvorbisstr"
+
+[deps]
+
+source_file="res://Music & background images/ActionFlick Vol2 Determined Main.ogg"
+dest_files=["res://godot/imported/ActionFlick Vol2 Determined Main.ogg-12bbddafcb96e0a0f4073f2d30b997d0.oggvorbisstr"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4
