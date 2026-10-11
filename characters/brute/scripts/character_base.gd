@@ -39,6 +39,8 @@ const MESH_FACING := PI
 # Subclasses use `Juice` directly: a second `const Juice` in a child script would be a redeclaration error.
 const Juice := preload("res://scripts/juice.gd")
 const CameraFxScript := preload("res://scripts/camera_fx.gd")
+# The project's own footstep (the synthesised set in AudioManager was too boomy). Played from AudioManager's pooled voices.
+const FOOTSTEP_STREAM := preload("res://Music & background images/single footstep.mp3")
 
 @export var max_health             : float = 100.0
 @export var react_anim_speed       : float = 5.0
@@ -914,7 +916,12 @@ func _get_effective_move_speed() -> float:
 
 # Override in player scripts that carry a footstep audio stream.
 func _get_footstep_stream() -> AudioStream:
-	return null
+	return FOOTSTEP_STREAM
+
+
+## True when `p` is a player that has died. Enemies stop attacking (and making attack sounds) once it is.
+func _player_is_dead(p: Node) -> bool:
+	return p != null and is_instance_valid(p) and "_is_dead" in p and bool(p.get("_is_dead"))
 
 
 func _configure_footstep_player() -> void:
@@ -946,8 +953,10 @@ func _update_footsteps(delta: float) -> void:
 			footstep_player.pitch_scale = randf_range(footstep_pitch_min, footstep_pitch_max)
 			footstep_player.play()
 		elif has_node("/root/AudioManager"):
-			# footstep_volume_db 5.0 is the designed default (-> -6 dB for the synthesised steps); a buff that changes it moves them too.
-			AudioManager.play_footstep(footstep_volume_db - 11.0)
+			# footstep_volume_db 5.0 is the designed default (-> -4 dB here); a buff that changes it moves the steps too.
+			var step: AudioStream = _get_footstep_stream()
+			AudioManager.play_one_shot(step if step != null else FOOTSTEP_STREAM, footstep_volume_db - 9.0,
+					randf_range(footstep_pitch_min, footstep_pitch_max), 1, 120)
 		# Buffs add to footstep_interval_seconds as an absolute (Footstep Stalker is -0.5 on a 0.38
 		# default), which could go to or below 0 and retrigger the sound every frame. Floor it.
 		_footstep_timer = maxf(footstep_interval_seconds, 0.12) / clampf(h_speed / _get_effective_move_speed(), 0.65, 1.35)

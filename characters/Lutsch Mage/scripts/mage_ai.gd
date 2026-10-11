@@ -892,7 +892,8 @@ func _physics_tick(delta: float) -> void:
 		return
 
 	var player : Node3D = _find_player()
-	if player == null:
+	# No player, or the player is dead: stand down (a dead player's run is over; the charge / lunge sounds kept playing at the corpse).
+	if player == null or _player_is_dead(player):
 		_set_horizontal_velocity(Vector3.ZERO, stop_acceleration, delta)
 		_change_state(_get_idle_state())
 		return

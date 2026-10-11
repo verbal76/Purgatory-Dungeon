@@ -78,6 +78,13 @@ and teleports, dip spring, death camera, pool no-growth over 120 effects, light 
 sound, a hit tints/shakes/starts low-health, landing dips, enemy bars/numbers/elite mark/flinch cancel/credited kill/size restore, wallet pop, torch flicker.
 Existing suites cover the unchanged contracts (fireball pool, enemy pooling, chests, room locks, light budget, touch art/controls); `test_attack_gesture` now counts a bolt when a pooled one is activated (renamed `MageFireball_*`) instead of when a node enters the tree.
 
+## 6a. Fixes after the first phone test (v8.4 feedback)
+
+- **Footsteps:** the synthesised steps (`footstep_1..4.wav`, a ~70 Hz thud) were too boomy. Steps now play the project's own `single footstep.mp3` through AudioManager's
+  pooled voices (about -4 dB, +-4% pitch). The synthesised files remain in the sound set (`AudioManager.play_footstep`) but the player no longer uses them.
+- **Enemies after the player dies:** they kept attacking the corpse, and the attack-tell sounds added by this pass (swish, lunge, cast charge) kept playing. Brute and
+  Mage AIs now stand down when the player is dead (`CharacterBase._player_is_dead`); `test_juice` proves an enemy attacks a live player in reach and not a dead one.
+
 ## 7. Regenerating the sounds
 
 `python3 tools/make_juice_audio.py` (repo root) rewrites `Music & background images/Sound Effects/juice/*.wav`; then `godot --headless --import`.

@@ -318,9 +318,9 @@ func _game_tests() -> void:
 	player._update_footsteps(0.016)
 	var stepped := false
 	for p in AudioManager._sfx_pool:
-		if p.playing and p.stream in AudioManager._footsteps:
+		if p.playing and p.stream == CharacterBase.FOOTSTEP_STREAM:
 			stepped = true
-	_check(stepped, "walking sounds a footstep")
+	_check(stepped, "walking sounds a footstep (the project's own single footstep)")
 	_check(player._footstep_timer > 0.1, "and schedules the next one (%.2f s)" % player._footstep_timer)
 	player.velocity = Vector3.ZERO
 
@@ -416,6 +416,38 @@ func _game_tests() -> void:
 			e.take_damage(1.0e6, player)
 			_check(e._is_dead and e._credited_kill, label + ": the player's kill is credited")
 			_check(e._bar == null or not e._bar.visible, label + ": a dead enemy shows no bar")
+
+	# A dead player: enemies stand down instead of attacking (and making attack sounds) at the corpse.
+	if manager != null and gen != null:
+		for want_mage in [false, true]:
+			var d = _find_enemy(manager, gen, want_mage)
+			if d == null:
+				continue
+			var tag: String = "mage" if want_mage else "brute"
+			d.reset_for_pool(player.global_position + Vector3(0, 0, -1.2), Vector3.ZERO, manager._waypoints)
+			await _frames(3)
+			d._is_attacking = false
+			d._attack_cooldown_timer = 0.0
+			d._cached_player = player
+			# Control: with a LIVE player in reach the same enemy starts an attack within a few ticks.
+			for i in 12:
+				d._attack_cooldown_timer = 0.0
+				d._physics_tick(0.033)
+				if d._is_attacking:
+					break
+			_check(d._is_attacking, tag + ": (control) an enemy in reach of a live player attacks")
+			d._attack_token += 1   # cancel that attack's coroutine
+			d._is_attacking = false
+			if "_is_kicking_ai" in d:
+				d._is_kicking_ai = false
+			if "_is_shoving" in d:
+				d._is_shoving = false
+			player._is_dead = true
+			for i in 12:
+				d._attack_cooldown_timer = 0.0
+				d._physics_tick(0.033)
+			_check(not d._is_attacking, tag + ": a dead player is not attacked (the enemy stands down)")
+			player._is_dead = false
 
 	# The Mage's bolts are pooled: a ring of 16 (the dome) builds no node, and every bolt returns to the pool.
 	if cls == "mage":

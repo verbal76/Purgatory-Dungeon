@@ -1350,7 +1350,7 @@ func _get_effective_move_speed() -> float:
 
 
 func _get_footstep_stream() -> AudioStream:
-	return preload("res://Music & background images/single footstep.mp3")
+	return FOOTSTEP_STREAM
 
 
 func _is_pause_event(event: InputEvent) -> bool:
