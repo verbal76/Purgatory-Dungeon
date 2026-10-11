@@ -1509,10 +1509,13 @@ func _point_is_clear(p: Vector3, probe_y: float) -> bool:
 		s.radius = 0.35
 		_clear_query.shape = s
 		_clear_query.collision_mask = 1
-	_clear_query.transform = Transform3D(Basis(), Vector3(p.x, probe_y, p.z))
-	for hit in space.intersect_shape(_clear_query, 8):
-		if PhysicsUtil.is_world_geometry(hit.get("collider")):
-			return false
+	# Two heights: the sphere at probe_y and one 0.5 m above it, so geometry that only shows up at body height (an overhang, a low
+	# beam) is not missed between a prop's base and the 1.2 m the placement audit probes.
+	for lift in [0.0, 0.5]:
+		_clear_query.transform = Transform3D(Basis(), Vector3(p.x, probe_y + lift, p.z))
+		for hit in space.intersect_shape(_clear_query, 8):
+			if PhysicsUtil.is_world_geometry(hit.get("collider")):
+				return false
 	var rq := PhysicsRayQueryParameters3D.create(Vector3(p.x, probe_y, p.z), Vector3(p.x, probe_y - 4.0, p.z))
 	rq.collision_mask = 1
 	return not PhysicsUtil.ray_world(space, rq).is_empty()

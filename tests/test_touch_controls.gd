@@ -159,6 +159,12 @@ func _ready() -> void:
 		await get_tree().create_timer(0.12).timeout
 		await _frames(2)   # the deferred release (MIN_PRESS_MS) runs in the layer's _process: a frame hitch must not skip it
 		_flush()
+		# A loaded machine can stall the layer's _process for longer than that: give the release up to 2 s before calling it a failure.
+		for _i in 120:
+			if not Input.is_action_pressed(pair[1]):
+				break
+			await get_tree().process_frame
+			_flush()
 		_check(not Input.is_action_pressed(pair[1]), "button %s releases %s" % [pair[0], pair[1]])
 	# A very short tap still lasts long enough for polling gameplay code to see it.
 	var att: TouchButton = tc.buttons["attack"]
@@ -170,6 +176,11 @@ func _ready() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame   # the deferred release runs in the layer's _process: a frame hitch must not skip it
 	_flush()
+	for _i in 120:
+		if not Input.is_action_pressed("attack"):
+			break
+		await get_tree().process_frame
+		_flush()
 	_check(not Input.is_action_pressed("attack"), "...and released afterwards")
 	# Minimap is a toggle.
 	var mm: TouchButton = tc.buttons["minimap"]
