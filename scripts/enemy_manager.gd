@@ -594,6 +594,9 @@ func _spawn_enemy_from_data(data: Dictionary) -> bool:
 		enemy.apply_buff(effective_mult)
 	if is_buffed and enemy.has_method("apply_red_glow"):
 		enemy.apply_red_glow()
+		# An elite announces itself: a low rumble you can place before you see it (it appeared like any other enemy).
+		if has_node("/root/AudioManager"):
+			AudioManager.play_sfx_3d("aggro_rumble", safe_pos + Vector3(0.0, 1.0, 0.0), -3.0, 0.92, 1.05, 35.0, 0)
 
 	_active_enemies.append(enemy)
 	_live_count += 1
@@ -1008,6 +1011,12 @@ func _check_pressure_spawn() -> void:
 	# Apply the maximum buff multiplier to make this a real threat.
 	if enemy.has_method("apply_buff"):
 		enemy.apply_buff(buff_cap)
+	# A pressure spawn is a real threat arriving out of sight: mark it as elite and let the player HEAR it (a rumble, positional,
+	# audible well beyond the usual range) so the escalation is felt rather than discovered.
+	if enemy.has_method("apply_red_glow"):
+		enemy.apply_red_glow()
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("aggro_rumble", safe_pos + Vector3(0.0, 1.0, 0.0), 2.0, 0.8, 0.9, 70.0, 2)
 
 	_active_enemies.append(enemy)
 	_live_count += 1

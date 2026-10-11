@@ -21,6 +21,8 @@
 # ==============================================================================
 extends Area3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 @export var speed              : float = 15.0   # Metres per second travel speed
 @export var max_lifetime       : float = 5.0    # Failsafe: destroy after this many seconds
 @export var particle_fade_time : float = 1.5    # Match your Kenney particle lifetime
@@ -144,6 +146,7 @@ func _physics_process(delta: float) -> void:
 			if collider is Node and collider.is_in_group("player") \
 					and collider.has_method("take_damage"):
 				collider.take_damage(_damage, self)
+			_impact(hit.get("position", global_position))
 			_deactivate()
 			return
 
@@ -161,7 +164,17 @@ func _on_body_entered(body: Node3D) -> void:
 	if body.has_method("apply_kick"):
 		body.apply_kick(_direction, _damage * 3.0)
 
+	_impact(global_position)
 	_deactivate()
+
+
+# The bolt's end (a wall, the player, a prop): an ember burst, a short light and a bang, positional. (A bolt that simply runs out of
+# range fades quietly: no _impact.) Pooled burst / light / audio voices: nothing is created here.
+func _impact(pos: Vector3) -> void:
+	Juice.burst("ember", pos, -_direction + Vector3.UP * 0.4, 0.8)
+	Juice.flash(pos, Color(1.0, 0.55, 0.1), 2.5, 0.14, 4.5)
+	if Engine.get_main_loop() is SceneTree and (Engine.get_main_loop() as SceneTree).root.has_node("AudioManager"):
+		(Engine.get_main_loop() as SceneTree).root.get_node("AudioManager").play_sfx_3d("fireball_impact", pos, -1.0, 0.92, 1.08, 30.0, 1)
 
 
 func _on_timeout() -> void:

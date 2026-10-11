@@ -25,7 +25,11 @@ static func motion_scale() -> float:
 const PoolScript := preload("res://scripts/vfx_pool.gd")
 
 
-## Called once by the main game file while the loading screen is up: builds the pool so no run-time hitch happens later.
+const ToastScript := preload("res://scripts/hud_toast.gd")
+
+
+## Called once by the main game file while the loading screen is up: builds the pool (and the banner layer) so no run-time hitch
+## happens later.
 static func ensure_pool(parent: Node) -> Node:
 	var p := pool()
 	if p != null and is_instance_valid(p):
@@ -33,7 +37,31 @@ static func ensure_pool(parent: Node) -> Node:
 	p = PoolScript.new()
 	p.name = "VfxPool"
 	parent.add_child(p)
+	var t := ToastScript.new()
+	t.name = "HudToast"
+	parent.add_child(t)
 	return p
+
+
+static func _toast() -> Node:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return null
+	return tree.get_first_node_in_group("hud_toast")
+
+
+## A centred message that pops in, holds and fades (day change, "Room sealed"). No-op when the run has no banner layer.
+static func banner(text: String, seconds: float = 2.2, color: Color = Color(0, 0, 0, 0)) -> void:
+	var t := _toast()
+	if t != null:
+		t.banner(text, seconds, color)
+
+
+## The persistent line under the banner ("Sealed: 3 left"); "" clears it.
+static func counter(text: String) -> void:
+	var t := _toast()
+	if t != null:
+		t.counter(text)
 
 
 static func pool() -> Node:

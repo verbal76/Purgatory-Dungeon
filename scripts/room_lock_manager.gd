@@ -23,6 +23,8 @@
 # ============================================================
 extends Node3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 const LARGE_ROOM_PATHS : Array[String] = [
 	"res://dungeon modules/new_collision_rectangle_4_opening.tscn",
 	"res://dungeon modules/collision_x_large_room_2_opening.tscn",
@@ -271,6 +273,18 @@ func _lock_room(mod: Node3D) -> void:
 		blocker.global_transform = (conn as Node3D).global_transform
 		lock.blockers.append(blocker)
 		_start_orb_pulse(blocker)
+		Juice.burst("dust", blocker.global_position + Vector3(0.0, 0.2, 0.0), Vector3.UP, 0.7)
+		if has_node("/root/AudioManager"):
+			AudioManager.play_sfx_3d("door_slam", blocker.global_position + Vector3(0.0, 1.5, 0.0), 0.0, 0.92, 1.05, 40.0, 2)
+
+	# The seal lands: a heavy camera jolt and the message (the doors used to appear with no sound and no word).
+	var fx : Node = Juice.cam_fx(_player)
+	if fx != null:
+		fx.add_trauma(0.6)
+		fx.punch_fov(3.0)
+	Juice.haptic(80)
+	Juice.banner("SEALED", 1.8, PUI.BLOOD_BRIGHT)
+	Juice.counter("Sealed: %d left" % LOCK_ENEMY_COUNT)
 
 	# ── Clear space for the encounter — cull the 5 furthest existing enemies ──
 	if _enemy_mgr != null and _enemy_mgr.has_method("cull_for_room_lock"):
@@ -424,6 +438,8 @@ func _force_spawn(pos: Vector3, waypoints: Array) -> Node3D:
 
 func _on_lock_enemy_died(lock: RoomLock) -> void:
 	lock.remaining -= 1
+	if lock.remaining > 0 and _active_locks.has(lock):
+		Juice.counter("Sealed: %d left" % lock.remaining)
 	# Scan the room AABB for any live enemy still inside.
 	# This handles: enemies that escaped before blockers went up (outside AABB →
 	# not counted), enemies recycled without firing died, and any other edge case.
@@ -453,6 +469,23 @@ func _count_live_enemies_in_room(aabb: AABB) -> int:
 func _unlock_room(lock: RoomLock) -> void:
 	for blocker in lock.blockers:
 		if is_instance_valid(blocker):
-			blocker.queue_free()
+			_dissolve_blocker(blocker)
 	lock.blockers.clear()
+	Juice.counter("")
+	if _active_locks.has(lock):
+		Juice.banner("DOORS OPEN", 1.6, PUI.EMBER_BRIGHT)
+		if has_node("/root/AudioManager"):
+			AudioManager.play_sfx("unlock_chime", -2.0, 1.0, 1.0, 2)
+		Juice.haptic(40)
 	_active_locks.erase(lock)   # Release the strong reference — GC can now collect
+
+
+# A barrier doesn't blink out: it stops blocking at once, then collapses to a line and bursts into embers over 0.35 s.
+func _dissolve_blocker(blocker: StaticBody3D) -> void:
+	for child in blocker.get_children():
+		if child is CollisionShape3D:
+			(child as CollisionShape3D).set_deferred("disabled", true)
+	Juice.burst("ember", blocker.global_position + Vector3(0.0, 1.5, 0.0), Vector3.UP, 1.0)
+	var tw : Tween = blocker.create_tween()
+	tw.tween_property(blocker, "scale", Vector3(1.0, 0.02, 1.0), 0.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_callback(blocker.queue_free)

@@ -191,6 +191,7 @@ func _ready() -> void:
 	# Done after _on_ready() so the "player" group is already registered.
 	if not is_in_group("player"):
 		_setup_visibility_notifier()
+		_build_enemy_bar()
 	else:
 		_build_damage_direction_fan()
 		_setup_camera_fx()
@@ -599,8 +600,108 @@ func _on_buff_applied(_multiplier: float) -> void:
 	pass
 
 
+# Buffed ("elite") enemies get a soft red-orange ring on the floor under them: readable at a glance, and nothing on the body
+# (the old whole-body red overlay was removed on purpose). One quad per enemy, a shared mesh and material.
+static var _elite_mesh : QuadMesh = null
+static var _elite_mat : StandardMaterial3D = null
+var _elite_mark : MeshInstance3D = null
+
+
 func apply_red_glow() -> void:
-	pass
+	if is_in_group("player") or not is_inside_tree():
+		return
+	if _elite_mark == null:
+		if _elite_mesh == null:
+			_elite_mesh = QuadMesh.new()
+			_elite_mesh.size = Vector2(2.4, 2.4)
+			_elite_mesh.orientation = PlaneMesh.FACE_Y
+			_elite_mat = StandardMaterial3D.new()
+			_elite_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			_elite_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			_elite_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+			_elite_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			_elite_mat.albedo_color = Color(1.0, 0.25, 0.1, 0.75)
+			_elite_mat.albedo_texture = load("res://addons/kenney_particle_pack/circle_03.png") as Texture2D
+			_elite_mesh.material = _elite_mat
+		_elite_mark = MeshInstance3D.new()
+		_elite_mark.name = "EliteMark"
+		_elite_mark.mesh = _elite_mesh
+		_elite_mark.position = Vector3(0.0, 0.07, 0.0)
+		_elite_mark.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(_elite_mark)
+	_elite_mark.visible = true
+	_update_enemy_bar()
+
+
+## Called when a pooled enemy is reborn: undo what its last life's death and elite mark did to it.
+func _reset_juice_state() -> void:
+	if mesh_root != null:
+		mesh_root.scale = Vector3.ONE * MESH_SCALE
+	if _elite_mark != null:
+		_elite_mark.visible = false
+	_update_enemy_bar()
+
+
+# ── Enemy health bar ────────────────────────────────────────────────────────────
+# A small camera-facing bar over an enemy, shown only once it is hurt (or while it is an elite) and hidden when it dies: the
+# only read the player had on "how close is it to dead" was the white hit flash. One quad + one shader per enemy, built once.
+const ENEMY_BAR_SHADER := """shader_type spatial;
+render_mode unshaded, cull_disabled, depth_draw_never;
+uniform float fill = 1.0;
+uniform vec4 fill_color : source_color = vec4(0.85, 0.12, 0.1, 1.0);
+uniform vec4 back_color : source_color = vec4(0.04, 0.02, 0.02, 0.85);
+void vertex() {
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
+}
+void fragment() {
+	float inner = step(0.03, UV.x) * step(UV.x, 0.97) * step(0.2, UV.y) * step(UV.y, 0.8);
+	float on = step(UV.x, fill) * inner;
+	ALBEDO = mix(back_color.rgb, fill_color.rgb, on);
+	ALPHA = mix(back_color.a, 1.0, on);
+}
+"""
+static var _bar_shader : Shader = null
+static var _bar_mesh : QuadMesh = null
+var _bar : MeshInstance3D = null
+var _bar_mat : ShaderMaterial = null
+
+
+func _build_enemy_bar() -> void:
+	if _bar != null:
+		return
+	if _bar_shader == null:
+		_bar_shader = Shader.new()
+		_bar_shader.code = ENEMY_BAR_SHADER
+		_bar_mesh = QuadMesh.new()
+		_bar_mesh.size = Vector2(0.95, 0.14)
+	_bar_mat = ShaderMaterial.new()
+	_bar_mat.shader = _bar_shader
+	_bar = MeshInstance3D.new()
+	_bar.name = "EnemyBar"
+	_bar.mesh = _bar_mesh
+	_bar.material_override = _bar_mat
+	_bar.position = Vector3(0.0, 2.35, 0.0)
+	_bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_bar.visible = false
+	add_child(_bar)
+	if not health_changed.is_connected(_on_bar_health):
+		health_changed.connect(_on_bar_health)
+
+
+func _on_bar_health(_cur: float, _max: float) -> void:
+	_update_enemy_bar()
+
+
+func _update_enemy_bar() -> void:
+	if _bar == null:
+		return
+	var elite: bool = _elite_mark != null and _elite_mark.visible
+	var hurt: bool = max_health > 0.0 and _current_health < max_health - 0.01
+	var want: bool = not _is_dead and _current_health > 0.0 and (hurt or elite)
+	_bar.visible = want
+	if want:
+		_bar_mat.set_shader_parameter("fill", clampf(_current_health / maxf(max_health, 1.0), 0.0, 1.0))
+		_bar_mat.set_shader_parameter("fill_color", Color(1.0, 0.45, 0.1) if elite else Color(0.85, 0.12, 0.1))
 
 
 func _play_hit_react() -> void:
@@ -645,6 +746,7 @@ func _trigger_death() -> void:
 	elif camera_fx != null:
 		camera_fx.on_death()
 
+	_update_enemy_bar()
 	died.emit()
 	_on_die()
 

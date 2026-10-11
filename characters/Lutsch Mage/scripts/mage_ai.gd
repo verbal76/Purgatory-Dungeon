@@ -150,6 +150,11 @@ var _hit_flash_material    : StandardMaterial3D = null
 var _flash_meshes          : Array[MeshInstance3D] = []
 const FLASH_DURATION       : float = 0.12
 
+# A flinch (a hit landing on the enemy mid-cast / mid-shove) CANCELS that attack: before, the stagger played while the bolt
+# still left the staff half a second later. One switch, so the old behaviour is a one-word revert.
+const CANCEL_ATTACK_ON_FLINCH : bool = true
+var _attack_token : int = 0   # bumped when an in-flight attack is cancelled; every await in an attack re-checks it
+
 # ── Potion drop tuning ─────────────────────────────────────────────────────────
 const POTION_DROP_BASE_PCT     : int = 6  # Base % chance per kill          (was 10)
 const POTION_DROP_SCAVENGE_PCT : int = 3  # Bonus % per scavenge perk level (was 5)
@@ -511,6 +516,7 @@ func take_damage(amount: float, _source: Node = null) -> void:
 	_last_damage_source = _source   # Required for kill-credit in _trigger_death()
 	_current_health -= amount
 	health_changed.emit(_current_health, max_health)
+	_juice_enemy_hit(amount, _source)
 	if _current_health <= 0:
 		_trigger_death()
 	else:
@@ -520,6 +526,12 @@ func take_damage(amount: float, _source: Node = null) -> void:
 func _play_hit_react() -> void:
 	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	if anim_player == null: return
+	if CANCEL_ATTACK_ON_FLINCH and (_is_attacking or _is_shoving):
+		_attack_token += 1
+		_attack_cooldown_timer = maxf(_attack_cooldown_timer, attack_cooldown)
+		if _is_shoving:
+			_shove_cooldown_timer = maxf(_shove_cooldown_timer, enemy_shove_cooldown * 0.5)
+		_is_shoving = false
 	_is_reacting  = true
 	_is_attacking = false
 	velocity.x    = 0.0
@@ -581,7 +593,8 @@ func _on_die() -> void:
 	if main and main.has_method("register_enemy_kill"):
 		main.register_enemy_kill()
 
-	if death_sound != null and has_node("/root/AudioManager"):
+	# Only a kill the player earned is heard: a day-cull / room-lock cull / trap death of a far-off enemy is silent.
+	if _credited_kill and death_sound != null and has_node("/root/AudioManager"):
 		AudioManager.play_3d_one_shot(death_sound, global_position, 8.0, randf_range(0.65, 0.8))
 
 	if PotionPickupScript != null and SaveManager.current_profile_is_valid():
@@ -624,11 +637,23 @@ func _on_die() -> void:
 	await get_tree().create_timer(_current_anim_length()).timeout
 	if not is_instance_valid(self): return
 	if _life != _life_id: return
+	await _dissolve()
+	if not is_instance_valid(self) or _life != _life_id: return
 
 	if _pool_return.is_valid():
 		_pool_return.call()
 	else:
 		queue_free()
+
+
+# The corpse sinks and shrinks away over 0.3 s with a puff of dust instead of vanishing on a frame (reset_for_pool restores the scale).
+func _dissolve() -> void:
+	if mesh_root == null or not is_inside_tree():
+		return
+	Juice.burst("poof", global_position + Vector3(0.0, 0.3, 0.0), Vector3.UP, 0.5)
+	var tw : Tween = create_tween()
+	tw.tween_property(mesh_root, "scale", Vector3.ONE * MESH_SCALE * 0.05, 0.3).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await tw.finished
 
 
 # ── Pool API ──────────────────────────────────────────────────────────────────
@@ -647,6 +672,9 @@ func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -
 	max_health       = _base_max_health
 	_current_health  = max_health
 	_is_dead         = false
+	_credited_kill   = false
+	_attack_token   += 1
+	_reset_juice_state()
 	_is_stunned      = false
 	_is_reacting     = false
 	_stun_timer      = 0.0
@@ -1000,14 +1028,17 @@ func _physics_tick(delta: float) -> void:
 
 func _do_spell_attack(player: Node3D) -> void:
 	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
+	var token : int = _attack_token   # abort if a flinch cancels this cast
 	_is_attacking = true
+	# The tell: a rising charge sound and a glow of magic at the staff while the arm winds up (it was silent and dark).
+	_cast_tell()
 	var player_mod : float = float(player.enemy_speed_modifier) if "enemy_speed_modifier" in player else 1.0
 	_play_anim(pick_attack())
 	anim_player.speed_scale = attack_speed_scale * player_mod
 	var anim_len : float = _current_anim_length() / (attack_speed_scale * player_mod)
 
 	await get_tree().create_timer(anim_len * 0.85).timeout
-	if _life != _life_id: return
+	if _life != _life_id or token != _attack_token: return
 
 	if not _is_stunned and not _is_dead and is_instance_valid(player):
 		var flat_to_player := Vector3(player.global_position.x - global_position.x, 0.0, player.global_position.z - global_position.z)
@@ -1030,6 +1061,10 @@ func _do_spell_attack(player: Node3D) -> void:
 				var true_aim_dir : Vector3 = (target_pos - spawn_pos).normalized()
 				fireball.global_position = spawn_pos
 				fireball.look_at(target_pos, Vector3.UP)
+				# Release: the cast sound (positional, so the player can place it) and a burst at the hand.
+				if has_node("/root/AudioManager"):
+					AudioManager.play_sfx_3d("fireball_cast", spawn_pos, 0.0, 0.92, 1.08, 30.0, 1)
+				Juice.burst("ember", spawn_pos, true_aim_dir, 0.7)
 
 				var player_damage_mod : float = float(player.enemy_damage_modifier) if "enemy_damage_modifier" in player else 1.0
 				var final_damage : float = spell_damage * player_damage_mod * _cached_damage_mod
@@ -1041,14 +1076,19 @@ func _do_spell_attack(player: Node3D) -> void:
 					fireball.setup(final_damage, true_aim_dir)
 
 	await get_tree().create_timer(anim_len * 0.15).timeout
-	if _life != _life_id: return
+	if _life != _life_id or token != _attack_token: return
 	_is_attacking = false; _attack_cooldown_timer = attack_cooldown
 
 
 func _do_ai_shove(player: Node3D) -> void:
 	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
+	var token : int = _attack_token   # abort if a flinch cancels this shove
 	_is_shoving   = true
 	_is_attacking = true
+	# The tell: a low heavy swish and dust as it lunges (the lunge had no sound at all).
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("swing_whoosh", global_position + Vector3(0.0, 1.0, 0.0), 1.0, 0.55, 0.7, 22.0, 1)
+	Juice.burst("dust", global_position + Vector3(0.0, 0.15, 0.0), Vector3.UP, 0.6)
 
 	# Sprint impulse toward the player — decays naturally via stop_acceleration
 	# each tick once _is_attacking blocks further movement control.
@@ -1066,7 +1106,7 @@ func _do_ai_shove(player: Node3D) -> void:
 	var anim_len : float = _current_anim_length()
 
 	await get_tree().create_timer(anim_len * 0.55).timeout
-	if _life != _life_id: return
+	if _life != _life_id or token != _attack_token: return
 
 	if not _is_dead and is_instance_valid(player):
 		var dist : float = global_position.distance_to(player.global_position)
@@ -1083,7 +1123,7 @@ func _do_ai_shove(player: Node3D) -> void:
 				player.take_knockback(push_dir, enemy_shove_force, enemy_shove_stun)
 
 	await get_tree().create_timer(anim_len * 0.45).timeout
-	if _life != _life_id: return
+	if _life != _life_id or token != _attack_token: return
 	_is_shoving          = false
 	_is_attacking        = false
 	_shove_cooldown_timer = enemy_shove_cooldown
@@ -1092,6 +1132,16 @@ func _do_ai_shove(player: Node3D) -> void:
 func _set_horizontal_velocity(target: Vector3, accel: float, delta: float) -> void:
 	velocity.x = move_toward(velocity.x, target.x, accel * delta)
 	velocity.z = move_toward(velocity.z, target.z, accel * delta)
+
+
+# The windup of a cast: a soft rising charge sound and magic motes at the staff hand.
+func _cast_tell() -> void:
+	var hand : Vector3 = global_position + Vector3(0.0, fireball_spawn_y, 0.0)
+	if _skeleton != null and _right_hand_bone_idx >= 0:
+		hand = (_skeleton.global_transform * _skeleton.get_bone_global_pose(_right_hand_bone_idx)).origin
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("fireball_cast", hand, -9.0, 0.6, 0.7, 20.0, 0)
+	Juice.burst("magic", hand, Vector3.UP, 0.5)
 
 
 func _find_player() -> Node3D:
