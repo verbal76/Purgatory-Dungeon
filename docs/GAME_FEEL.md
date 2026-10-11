@@ -43,6 +43,11 @@ punch by rarity, day-change banner ("FINAL DAY" on the last), run-start objectiv
 menu button hover/press feel + hover sound, scene arrival wipe, health-bar heal sweep + low-health pulse, touch press spring + haptic tick +
 cooldown-ready pop, Vibration slider.
 
+**Pooling (project rule).** The Mage's bolts (the single cast and the dome's ring of 16) are pre-built `Area3D`s reused from a pool (active = named
+`MageFireball_<n>`, idle = `MageBolt_Idle_<id>`, hidden), scorch decals are moved rather than freed and rebuilt once the 20-mark cap is reached, the kill-flash
+lights and every hit/pickup/trap effect come from the shared pool, the Repulse ring is one reused mesh, the potion-blast dome shares one compiled shader, and
+audio uses fixed voice pools.
+
 **World.** Ambient dust motes, torch flicker (budget `flicker_amount` 0.09, stepped at 14 Hz; 0 in the light-budget tests), trap telegraph
 and consequence (click, dust, red flicker, volley bang, ember impacts), prop kick thud + dust, portal opening event (sting, tremor,
 burst) and the white step-through, globe wake + collect cues by rarity, pause / buff-pick low-pass, cave bed + torch crackle + water drips.
@@ -71,7 +76,7 @@ is not smoothed. This replaces the idea of turning on `physics/common/physics_in
 `CameraFx` scale-0 reduced motion, hit-stop restore (not `Engine.time_scale`, not over another speed), FOV cap, vignette scaling, smoothing bounds
 and teleports, dip spring, death camera, pool no-growth over 120 effects, light cap, banner layer, and in the real run: the pool/banner exist, footsteps
 sound, a hit tints/shakes/starts low-health, landing dips, enemy bars/numbers/elite mark/flinch cancel/credited kill/size restore, wallet pop, torch flicker.
-Existing suites cover the unchanged contracts (fireball pool, enemy pooling, chests, room locks, light budget, touch art/controls).
+Existing suites cover the unchanged contracts (fireball pool, enemy pooling, chests, room locks, light budget, touch art/controls); `test_attack_gesture` now counts a bolt when a pooled one is activated (renamed `MageFireball_*`) instead of when a node enters the tree.
 
 ## 7. Regenerating the sounds
 
@@ -92,8 +97,6 @@ the music at default volumes; the scene wipe on slow storage. Screen Shake 0 sho
 
 ## 10. Deferred (not in this pass)
 
-- Pooling the player Mage's bolts / dome bolts (`mage_player._launch_fireball` still builds an `Area3D` per bolt; `test_mage_aim` and
-  `test_attack_gesture` count the `MageFireball_*` nodes, so this needs a coordinated change).
 - Combat-intensity music layers, per-room reverb, footstep surface variants.
 - `physics/common/physics_interpolation` in `project.godot` (native; replaced by the camera smoothing above).
 - Design items kept out on purpose (owner decisions): a real choice at the buff pick, positive globes, a fairer fireball mine / start-area

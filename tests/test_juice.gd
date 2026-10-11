@@ -417,6 +417,44 @@ func _game_tests() -> void:
 			_check(e._is_dead and e._credited_kill, label + ": the player's kill is credited")
 			_check(e._bar == null or not e._bar.visible, label + ": a dead enemy shows no bar")
 
+	# The Mage's bolts are pooled: a ring of 16 (the dome) builds no node, and every bolt returns to the pool.
+	if cls == "mage":
+		var pool_n: int = player._bolt_pool.size()
+		_check(pool_n >= 18, "the bolt pool is pre-built (%d)" % pool_n)
+		for i in 16:
+			var a: float = TAU * float(i) / 16.0
+			player._launch_fireball(player.global_position + Vector3(0, 1.4, 0), Vector3(sin(a), 0.0, cos(a)))
+		await get_tree().physics_frame
+		var active := 0
+		for b in player._bolt_pool:
+			if b.visible:
+				active += 1
+		_check(active == 16, "16 bolts are in flight (%d)" % active)
+		_check(player._bolt_pool.size() == pool_n, "and the pool did not have to grow for them")
+		# Impacts leave scorch decals, but the cap holds and the oldest decal is moved rather than freed + rebuilt.
+		var marks_before: int = player._scorch_pool.size()
+		_check(marks_before <= player.MAX_SCORCH_MARKS, "scorch marks are capped (%d)" % marks_before)
+		var names_ok := true
+		for b in player._bolt_pool:
+			if b.visible and not str(b.name).begins_with("MageFireball_"):
+				names_ok = false
+			if not b.visible and not str(b.name).begins_with("MageBolt_Idle_"):
+				names_ok = false
+		_check(names_ok, "flying bolts are named MageFireball_*, idle ones MageBolt_Idle_*")
+		await get_tree().create_timer(2.2).timeout
+		active = 0
+		for b in player._bolt_pool:
+			if b.visible:
+				active += 1
+		_check(active == 0, "every bolt has returned to the pool (%d still flying)" % active)
+		player._launch_fireball(player.global_position + Vector3(0, 1.4, 0), Vector3(0, 0, -1))
+		await get_tree().physics_frame
+		active = 0
+		for b in player._bolt_pool:
+			if b.visible:
+				active += 1
+		_check(active == 1, "a bolt can be fired again from the pool")
+
 	# Wallet bump.
 	PlayerWallet.show_hud()
 	PlayerWallet._set_row("potions", 3)

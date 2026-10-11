@@ -266,6 +266,7 @@ func _on_ready() -> void:
 	connect("health_changed", _on_health_changed)
 
 	prepare_repulse_ring()
+	call_deferred("_prewarm_bolts")   # the bolt pool (the world node may still be busy adding its children right now)
 
 	# SURGICAL ADD: Apply hub-purchased perks from the save profile before the run starts.
 	_apply_hub_perks()
@@ -892,20 +893,29 @@ func _spawn_projectile(two_handed: bool) -> void:
 		_launch_fireball(spawn_l, (aim_target - spawn_l).normalized())
 
 
-# Creates a self-propelled fireball at origin heading in direction.
-# The fireball is a runtime Area3D — no external scene required.
-# It moves via coroutine each process frame and despawns on hit or
-# when it has traveled spell_range metres.
-func _launch_fireball(origin: Vector3, direction: Vector3, penetrate_walls: bool = false, max_range: float = -1.0) -> void:
-	# ── Collision area ─────────────────────────────────────────────────────────
+# ── Bolt pool ─────────────────────────────────────────────────────────────────
+# Every bolt (the single cast, the dome's ring of 16) is a pre-built Area3D (collision shape, bolt body, light) parented to the world and
+# REUSED: a cast activates an idle one (visible = false means idle) instead of building an Area3D, a shape, ~5 mesh nodes, a material and a
+# light, which on a phone was a visible hitch for the dome. An active bolt is named "MageFireball_<n>" (idle ones "MageBolt_Idle_<id>"), so
+# anything looking for flying bolts by name (the tests) sees exactly the active ones.
+const BOLT_PREWARM : int = 18   # one cast + the dome at +4 Magnitude perk levels' worth; the pool grows if ever more are needed
+var _bolt_pool : Array[Area3D] = []
+var _bolt_seq : int = 0
+
+
+func _prewarm_bolts() -> void:
+	for i in BOLT_PREWARM:
+		_bolt_pool.append(_build_bolt())
+
+
+func _build_bolt() -> Area3D:
 	var fireball       := Area3D.new()
-	var fb_name        := "MageFireball_" + str(Time.get_ticks_usec()) + "_" + str(randi() % 1000)
-	fireball.name       = fb_name
 	fireball.collision_layer = 0             # Fireball doesn't need to be detected by others
 	fireball.collision_mask  = 0xFFFFFFFF    # Hit everything — _on_fireball_hit filters by take_damage
 	fireball.monitorable     = false         # Other areas can't detect this fireball
 	fireball.monitoring      = false         # Off at spawn — fireball is inside the player's own CollisionShape3D
-											# and would self-destruct immediately. Enabled after first travel step.
+	                                         # and would self-destruct immediately. Enabled after first travel step.
+	fireball.visible         = false
 
 	var shape_node    := CollisionShape3D.new()
 	var sphere        := SphereShape3D.new()
@@ -916,10 +926,7 @@ func _launch_fireball(origin: Vector3, direction: Vector3, penetrate_walls: bool
 	# ── Shaped bolt cylinder + glow corona ───────────────────────────────────
 	fireball.add_child(_build_bolt_body())
 
-	# OmniLight3D so the bolt illuminates dungeon walls. Runs on every
-	# difficulty — cluster budget at 4096 has plenty of room for a handful
-	# of transient projectile lights, and it meaningfully improves the
-	# "cast a spell and light up the room" readability.
+	# OmniLight3D so the bolt illuminates dungeon walls (only while the bolt is active: an idle bolt is invisible).
 	var l              := OmniLight3D.new()
 	l.name              = "BoltLight"
 	l.light_color       = Color(0.5, 0.75, 1.0)
@@ -928,9 +935,54 @@ func _launch_fireball(origin: Vector3, direction: Vector3, penetrate_walls: bool
 	l.shadow_enabled    = false
 	fireball.add_child(l)
 
-	# ── Add to scene and position ──────────────────────────────────────────────
 	get_parent().add_child(fireball)
+	fireball.name = "MageBolt_Idle_" + str(fireball.get_instance_id())
+	# One connection for the bolt's whole life; the shot's own numbers are read from its meta when it hits.
+	fireball.body_entered.connect(_on_fireball_hit.bind(fireball))
+	return fireball
+
+
+func _acquire_bolt() -> Area3D:
+	for b in _bolt_pool:
+		if is_instance_valid(b) and not b.visible:
+			return b
+	var nb := _build_bolt()
+	_bolt_pool.append(nb)
+	return nb
+
+
+func _release_bolt(b: Area3D) -> void:
+	if not is_instance_valid(b):
+		return
+	# At the end of the frame, like the queue_free() it replaces: a hit is reported from inside the physics step, and the bolt must still
+	# be a whole node until that step's other callbacks have run.
+	b.set_meta("hit_processed", true)
+	b.set_deferred("monitoring", false)
+	b.call_deferred("hide")
+	b.call_deferred("set_name", "MageBolt_Idle_" + str(b.get_instance_id()))
+
+
+# Launches one pooled fireball at origin heading in direction. It moves via a coroutine each process frame and returns to the pool on hit
+# or when it has traveled spell_range metres.
+func _launch_fireball(origin: Vector3, direction: Vector3, penetrate_walls: bool = false, max_range: float = -1.0) -> void:
+	var fireball : Area3D = _acquire_bolt()
+	_bolt_seq += 1
+	var gen : int = _bolt_seq
+	fireball.name = "MageFireball_" + str(Time.get_ticks_usec()) + "_" + str(gen)
+	fireball.monitoring = false   # (see _build_bolt: enabled after the first travel step)
+
+	# ── Shot data for the hit callback ─────────────────────────────────────────
+	# attack_damage is the flat bonus/penalty applied by buffs (Berserker, Blunted, etc.)
+	var damage_val : float = maxf(0.0, spell_damage + attack_damage + get_low_health_attack_bonus())
+	fireball.set_meta("gen", gen)
+	fireball.set_meta("hit_processed", false)
+	fireball.set_meta("dmg", damage_val)
+	fireball.set_meta("dir", direction)          # so _on_fireball_hit can place a scorch mark at the impact surface
+	fireball.set_meta("penetrate", penetrate_walls)
+
+	# ── Position and activate ──────────────────────────────────────────────────
 	fireball.global_position = origin
+	fireball.visible = true
 
 	# ── Orient bolt along travel axis like an arrow ───────────────────────────
 	var safe_up : Vector3 = Vector3.UP if abs(direction.dot(Vector3.UP)) < 0.99 else Vector3.RIGHT
@@ -940,19 +992,13 @@ func _launch_fireball(origin: Vector3, direction: Vector3, penetrate_walls: bool
 	if fireball_cast_sound != null and has_node("/root/AudioManager"):
 		AudioManager.play_one_shot(fireball_cast_sound, 0.0, randf_range(0.92, 1.08))
 
-	# ── Hit detection — passing unique string to avoid Lambda capture bugs ─────
-	# attack_damage is the flat bonus/penalty applied by buffs (Berserker, Blunted, etc.)
-	var damage_val : float = maxf(0.0, spell_damage + attack_damage + get_low_health_attack_bonus())
-	# direction is bound so _on_fireball_hit can place a scorch mark at the impact surface.
-	fireball.body_entered.connect(_on_fireball_hit.bind(fb_name, damage_val, direction, penetrate_walls))
-
 	# ── Coroutine travel loop ──────────────────────────────────────────────────
 	# Orientation was set once with look_at() before the loop — direction is constant
 	# so the basis never changes in flight.  Calling look_at every frame introduced
 	# floating-point drift that occasionally flipped the transform 90°.
 	var range_limit : float = max_range if max_range > 0.0 else spell_range
 	var traveled : float = 0.0
-	while traveled < range_limit and is_instance_valid(fireball):
+	while traveled < range_limit and is_instance_valid(fireball) and fireball.visible and int(fireball.get_meta("gen", -1)) == gen:
 		var step : Vector3 = direction * fireball_speed * get_process_delta_time()
 		fireball.global_position += step
 		traveled                 += step.length()
@@ -962,19 +1008,25 @@ func _launch_fireball(origin: Vector3, direction: Vector3, penetrate_walls: bool
 			fireball.monitoring = true
 		await get_tree().process_frame
 
-	# Max range reached — clean up if not already freed by a hit.
-	if is_instance_valid(fireball):
-		fireball.queue_free()
+	# Max range reached — back to the pool if not already returned by a hit.
+	if is_instance_valid(fireball) and fireball.visible and int(fireball.get_meta("gen", -1)) == gen:
+		_release_bolt(fireball)
 
 
-# Safe callback for fireball hits. By passing a string ID instead of the Node
-# reference itself, we completely avoid Godot's "Lambda capture freed" engine panic.
-func _on_fireball_hit(body: Node3D, fb_name: String, damage_val: float, travel_dir: Vector3, penetrate_walls: bool = false) -> void:
+# Callback for a pooled bolt's hits. The shot's numbers live in the bolt's meta (set at launch), so the signal is connected once and
+# never captures a freed node.
+func _on_fireball_hit(body: Node3D, fb: Area3D) -> void:
 	# Guard: ignore the caster. The fireball spawns at the hand bone which sits
 	# inside the player's own CharacterBody3D. Without this check the fireball
 	# would self-destruct the moment monitoring is enabled.
 	if body == self:
 		return
+	# An idle bolt, or one that already processed a hit this frame, does nothing.
+	if not is_instance_valid(fb) or not fb.visible or bool(fb.get_meta("hit_processed", true)):
+		return
+	var damage_val : float = float(fb.get_meta("dmg", 0.0))
+	var travel_dir : Vector3 = fb.get_meta("dir", Vector3.FORWARD)
+	var penetrate_walls : bool = bool(fb.get_meta("penetrate", false))
 
 	# Wall-penetrating bolts: skip destruction when hitting geometry
 	# that has no take_damage method (i.e. walls/floor/ceiling).
@@ -985,16 +1037,10 @@ func _on_fireball_hit(body: Node3D, fb_name: String, damage_val: float, travel_d
 		if t == null or not t.has_method("take_damage"):
 			return
 
-	var fb : Node = get_parent().get_node_or_null(NodePath(fb_name))
-
-	# If the fireball is already gone or already processed a hit this frame, do nothing.
-	if not is_instance_valid(fb) or fb.has_meta("hit_processed"):
-		return
-
 	fb.set_meta("hit_processed", true)
 	fb.set_deferred("monitoring", false)
 
-	# Scorch mark at impact point — placed before queue_free so position is still valid.
+	# Scorch mark at impact point — placed before the bolt returns to the pool so position is still valid.
 	_spawn_scorch_mark(fb.global_position, travel_dir)
 	# Impact: a magic burst + a short light + a bang at the hit point (the bolt used to vanish silently).
 	Juice.burst("magic", fb.global_position, -travel_dir + Vector3.UP * 0.3, 0.8)
@@ -1009,7 +1055,7 @@ func _on_fireball_hit(body: Node3D, fb_name: String, damage_val: float, travel_d
 		target = target.get_parent() as Node3D
 
 	# Fireball / lightning bolt contact with a kickable prop: kick the prop and end the projectile.
-	# (fb.queue_free() below handles the "end on contact" half.)
+	# (the release below handles the "end on contact" half.)
 	if target != null and target != self and target.has_method("apply_kick"):
 		target.apply_kick(travel_dir, damage_val * 4.0)
 	elif target != null and target != self and target.has_method("take_damage"):
@@ -1028,7 +1074,7 @@ func _on_fireball_hit(body: Node3D, fb_name: String, damage_val: float, travel_d
 			camera_fx.hit_stop(0.06, target)
 			Juice.haptic(30)
 
-	fb.queue_free()
+	_release_bolt(fb)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1080,16 +1126,22 @@ func _spawn_scorch_mark(impact_pos: Vector3, travel_dir: Vector3) -> void:
 	if scene_root == null:
 		return
 
-	var decal      := Decal.new()
-	decal.name      = "ScorchMark"
-	# Projection volume: 0.7 m wide/tall, 0.3 m deep so it reaches slightly into walls.
-	decal.size      = Vector3(0.7, 0.3, 0.7)
-	decal.texture_albedo = _get_scorch_texture()
-	# Lower emission so the mark reads as darkness, not a glow.
-	decal.emission_energy = 0.0
-	decal.albedo_mix = 0.85
-
-	scene_root.add_child(decal)
+	# Once MAX_SCORCH_MARKS exist the OLDEST decal is moved to the new impact instead of being freed and a new one built.
+	var decal : Decal = null
+	if _scorch_pool.size() >= MAX_SCORCH_MARKS:
+		var oldest = _scorch_pool.pop_front()
+		if is_instance_valid(oldest) and (oldest as Node).is_inside_tree():
+			decal = oldest as Decal
+	if decal == null:
+		decal           = Decal.new()
+		decal.name      = "ScorchMark"
+		# Projection volume: 0.7 m wide/tall, 0.3 m deep so it reaches slightly into walls.
+		decal.size      = Vector3(0.7, 0.3, 0.7)
+		decal.texture_albedo = _get_scorch_texture()
+		# Lower emission so the mark reads as darkness, not a glow.
+		decal.emission_energy = 0.0
+		decal.albedo_mix = 0.85
+		scene_root.add_child(decal)
 
 	# Position: pull back half the projection depth so the decal volume straddles
 	# the surface instead of sitting entirely on one side of it.
@@ -1104,12 +1156,8 @@ func _spawn_scorch_mark(impact_pos: Vector3, travel_dir: Vector3) -> void:
 	var z_axis : Vector3 = x_axis.cross(y_axis).normalized()
 	decal.global_transform.basis = Basis(x_axis, y_axis, z_axis)
 
-	# Pool management: enqueue and evict the oldest mark when limit is reached.
+	# Pool management: the newest mark goes to the back of the queue.
 	_scorch_pool.append(decal)
-	if _scorch_pool.size() > MAX_SCORCH_MARKS:
-		var oldest = _scorch_pool.pop_front()
-		if is_instance_valid(oldest):
-			oldest.queue_free()
 
 
 # One-shot muzzle burst at the palm when a bolt is cast.

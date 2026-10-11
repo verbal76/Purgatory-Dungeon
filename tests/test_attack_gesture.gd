@@ -580,6 +580,8 @@ var _was_attacking: bool = false
 var _player: Node = null
 
 
+# A bolt is "fired" when a pooled bolt is activated: it is renamed "MageFireball_<n>" (idle ones are "MageBolt_Idle_<id>"). A bolt that is
+# built on demand (the pool grows) enters the tree under its idle name and is renamed at once, so the rename is the one signal for both.
 func _on_child(n: Node) -> void:
 	if n.name.begins_with("MageFireball_"):
 		_bolts += 1
@@ -643,7 +645,7 @@ func _player_tests(cls: String) -> void:
 	tc.now_override_ms = -1   # real time
 	tc._relayout()
 	_check(tc.is_twin(), "[%s] twin-stick (default)" % cls)
-	_player.get_parent().child_entered_tree.connect(_on_child)
+	get_tree().node_renamed.connect(_on_child)
 	var c: Vector2 = (tc.buttons["attack"] as TouchButton).center
 	await _wait(0.5)
 
