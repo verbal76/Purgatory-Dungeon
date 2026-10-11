@@ -60,7 +60,10 @@ is not smoothed. This replaces the idea of turning on `physics/common/physics_in
   nothing. Lights: 3 flash lights (0.1-0.5 s each) on top of the 16-torch budget. Dust motes: 48 particles at 15 fps.
 - Audio: 8 + 8 voices, fixed. No `AudioStreamPlayer` is created while playing.
 - No per-frame allocation was added; `CameraFx._process` is a handful of float operations.
-- Not measured on a phone: this was built and validated headless. Physical-device checks are listed in section 9.
+- Measured (headless, CPU side only, `tests/perf_probe.tscn`, three interleaved runs per build, an idle player in a populated dungeon with 10-14 live
+  enemies): median `_process` 3.89 ms before (v8.3 source) vs 3.40 ms after, median `_physics_process` 4.63 ms vs 4.42 ms: no regression beyond the
+  run-to-run noise (about +-0.4 ms). Static memory rose about 10 MB (322 vs 312 MB: the sounds, the effect pool, the dust motes). NOT measured:
+  GPU / rendering cost, a fight with many simultaneous effects, anything on a phone. Physical-device checks are listed in section 9.
 
 ## 6. Tests
 
