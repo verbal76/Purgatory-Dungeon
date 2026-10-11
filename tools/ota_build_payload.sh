@@ -215,7 +215,10 @@ BOUNDARY="$TMP/base/ota/boundary.json"; [[ -f "$BOUNDARY" ]] || BOUNDARY="$ROOT/
 GUARD=(); [[ -n "$ACCEPT" ]] && GUARD=(--accept-guarded "$ACCEPT")
 python3 "$OTA/payload_check.py" "$TMP/payload.pck" --base "$TMP/base.pck" --boundary "$BOUNDARY" \
   --files-out "$OUT/files.json" --report-out "$TMP/check_report.json" "${GUARD[@]}" || die "the payload was refused (see above)"
-python3 "$OTA/pck.py" list "$TMP/payload.pck" --base "$TMP/base.pck" | head -60
+# (listed to a file first: `list | head -60` under `set -o pipefail` killed the whole step with exit 141 (SIGPIPE) as soon as a payload
+# had more than 60 entries; a failing reader must still fail the step)
+python3 "$OTA/pck.py" list "$TMP/payload.pck" --base "$TMP/base.pck" > "$TMP/payload_list.txt" || die "the PCK reader could not list the payload"
+head -60 "$TMP/payload_list.txt"
 
 cp "$TMP/payload.pck" "$OUT/payload.pck"
 [[ "$EMIT_BASE" == "1" ]] && cp "$TMP/base.pck" "$OUT/base.pck"
