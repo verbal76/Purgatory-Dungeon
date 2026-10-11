@@ -45,6 +45,12 @@ func _ready() -> void:
 	pause.close_menu()
 	_check(not get_tree().paused and not pause.is_menu_open(), "resume unpauses")
 
+	# Controller only (Steam Deck): the pause menu opens with Resume focused, so A resumes without touching a mouse.
+	pause.open_menu()
+	await _frames(3)
+	_check(get_viewport().gui_get_focus_owner() == pause.resume_button, "pause opens with Resume focused for a controller (%s)" % [get_viewport().gui_get_focus_owner()])
+	pause.close_menu()
+
 	# Pause -> Options
 	pause.open_menu()
 	pause._on_options_button_pressed()
@@ -63,6 +69,7 @@ func _ready() -> void:
 	await _frames(3)
 	_check(pause.get_node_or_null("OptionsOverlay") == null, "overlay removed after Back")
 	_check(pause.is_menu_open() and get_tree().paused, "back returns to the pause menu, still paused")
+	_check(get_viewport().gui_get_focus_owner() == pause.resume_button, "back from Options puts focus on Resume again")
 
 	# Resume
 	pause.close_menu()

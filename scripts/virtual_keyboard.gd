@@ -62,6 +62,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 
+	# B / Escape on a controller or keyboard closes the keyboard without changing the text.
+	if event.is_action_pressed("ui_cancel"):
+		cancelled.emit()
+		hide()
+		get_viewport().set_input_as_handled()
+		return
+
 	if event is InputEventKey and event.pressed and not event.echo:
 		var key_event: InputEventKey = event as InputEventKey
 
