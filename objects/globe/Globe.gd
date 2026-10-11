@@ -12,6 +12,8 @@
 
 extends CharacterBody3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 const RARITY_COLORS : Dictionary = {
 	"common"    : Color(0.45, 0.65, 1.0),
 	"rare"      : Color(0.65, 0.25, 1.0),
@@ -166,6 +168,12 @@ func activate() -> void:
 	visible = true
 	if _mist_particles != null:
 		_mist_particles.emitting = true
+	# It wakes: a swell of its own colour and a rising tone, so a globe that starts drifting toward you is noticed.
+	var tint : Color = RARITY_COLORS.get(_rarity, Color.WHITE)
+	Juice.burst("magic", global_position + Vector3(0.0, 0.5, 0.0), Vector3.UP, 0.8)
+	Juice.flash(global_position + Vector3(0.0, 0.8, 0.0), tint, 2.0, 0.3, 4.0)
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("pop_soft", global_position, 0.0, 0.6, 0.7, 30.0, 1)
 
 func is_dormant() -> bool:
 	return _state == GlobeState.DORMANT
@@ -184,6 +192,10 @@ func _tick_chasing(delta: float) -> void:
 	if player == null:
 		return
 	_cached_player = player
+	# A dead player cannot collect globes: the death screen has just converted kills into
+	# potions, and a late "Grave Whispers" globe wiped them.
+	if player.get("_is_dead") == true:
+		return
 
 	var to_player : Vector3 = player.global_position - global_position
 	var dist      : float   = Vector3(to_player.x, 0.0, to_player.z).length()
@@ -251,9 +263,29 @@ func _collect() -> void:
 	_state = GlobeState.COLLECTED
 	if _mist_particles != null:
 		_mist_particles.emitting = false
+	_effect = GlobeManager.resolve_effect_for_pickup(_effect)   # never hand out a curse that cannot bite
 	GlobeManager.announce_collection(_effect)
+	_collect_feedback()
 	_apply_effect()
 	call_deferred("queue_free")
+
+
+# Taking a globe: a burst in its colour where it was, the screen washed with that colour, and a sound that says how good (or bad) it was.
+func _collect_feedback() -> void:
+	var tint : Color = RARITY_COLORS.get(_rarity, Color.WHITE)
+	Juice.burst("magic", global_position + Vector3(0.0, 0.5, 0.0), Vector3.UP, 1.0)
+	Juice.flash(global_position + Vector3(0.0, 0.8, 0.0), tint, 3.0, 0.25, 5.0)
+	var fx : Node = Juice.cam_fx(_cached_player)
+	if fx != null:
+		fx.flash_screen(tint, 0.3)
+		fx.add_trauma(0.2 if _rarity != "legendary" else 0.5)
+	if has_node("/root/AudioManager"):
+		match _rarity:
+			"legendary": AudioManager.play_sfx("legend_sting", 0.0, 1.0, 1.0, 2)
+			"rare":      AudioManager.play_sfx("ready_ding", -2.0, 1.0, 1.0, 2)
+			"cursed":    AudioManager.play_sfx("trap_click", 0.0, 0.7, 0.7, 2)
+			_:           AudioManager.play_sfx("pop_soft", -2.0, 1.0, 1.0, 1)
+		AudioManager.haptic(35)
 
 func _apply_effect() -> void:
 	var effect_type : String = _effect.get("effect_type", "")

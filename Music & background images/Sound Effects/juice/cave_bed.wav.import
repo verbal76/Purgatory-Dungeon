@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://bbmu4o2mvy7qe"
+path="res://godot/imported/cave_bed.wav-26d62902410713de58d2c530b09c6932.sample"
+
+[deps]
+
+source_file="res://Music & background images/Sound Effects/juice/cave_bed.wav"
+dest_files=["res://godot/imported/cave_bed.wav-26d62902410713de58d2c530b09c6932.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

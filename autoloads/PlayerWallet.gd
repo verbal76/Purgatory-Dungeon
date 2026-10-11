@@ -9,56 +9,110 @@ extends Node
 signal wallet_changed(new_count: int)
 
 const KEY_COLORS : Array[String] = ["bronze", "silver", "gold"]
-const _KEY_LABEL_COLORS : Dictionary = {
-	"bronze": Color(0.85, 0.55, 0.30),
-	"silver": Color(0.85, 0.85, 0.90),
-	"gold":   Color(1.00, 0.85, 0.20),
-}
 
 var _hud_layer : CanvasLayer = null
-var _potion_text : Label = null
-var _key_labels : Dictionary = {}   # color → Label
+var _grid : GridContainer = null
+var _potion_text : Label = null     # potion count (HudValue)
+var _key_labels : Dictionary = {}   # color → Label (key count, HudValue)
+var _rows : Dictionary = {}         # "potions" | color → [icon, name label, count label]
+var _shown : Dictionary = {}        # row id → count currently displayed (text is only rewritten on change)
 
 func _ready() -> void:
 	_build_hud()
 	# Listen for the SaveManager to finish loading before updating the HUD
 	SaveManager.connect("profile_loaded", Callable(self, "refresh_hud"))
 
+# Compact rows, no box: [icon] [name] [count] in outlined HUD type. A key icon is tinted with its metal
+# (PUI.key_tint); a count of zero dims the row. Desktop: bottom-right, gold on top, potions last.
 func _build_hud() -> void:
 	_hud_layer = CanvasLayer.new()
 	_hud_layer.layer = 5
 	add_child(_hud_layer)
 
-	_potion_text = Label.new()
-	_potion_text.add_theme_font_size_override("font_size", 22)
-	_potion_text.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
-	_potion_text.add_theme_constant_override("outline_size", 4)
-	_potion_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_potion_text.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_potion_text.offset_left = -250.0
-	_potion_text.offset_right = -20.0
-	_potion_text.offset_top = -60.0
-	_hud_layer.add_child(_potion_text)
+	_grid = GridContainer.new()
+	_grid.name = "WalletRows"
+	_grid.columns = 3
+	_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_grid.add_theme_constant_override("h_separation", PUI.S2)
+	_grid.add_theme_constant_override("v_separation", PUI.S1)
+	_hud_layer.add_child(_grid)
 
-	# Three key counters stacked above the potions line, colour-coded.
-	var y_offset : float = -90.0
+	_add_row("potions", "potion", PUI.BONE, "Potions")
 	for color in KEY_COLORS:
-		var lbl := Label.new()
-		lbl.add_theme_font_size_override("font_size", 18)
-		lbl.add_theme_color_override("font_color", _KEY_LABEL_COLORS[color])
-		lbl.add_theme_constant_override("outline_size", 4)
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		lbl.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-		lbl.offset_left  = -250.0
-		lbl.offset_right = -20.0
-		lbl.offset_top   = y_offset
-		_hud_layer.add_child(lbl)
-		_key_labels[color] = lbl
-		y_offset -= 24.0
+		_add_row(color, "key", PUI.key_tint(color), "%s key" % color.capitalize())
+	_potion_text = _rows["potions"][2]
+	for color in KEY_COLORS:
+		_key_labels[color] = _rows[color][2]
+
+	_apply_layout(TouchControls.is_touch_platform())
+	var vp := get_viewport()
+	if vp != null and not vp.size_changed.is_connected(_on_view_changed):
+		vp.size_changed.connect(_on_view_changed)
 
 	# SURGICAL ADD: Hide by default. Only the dungeon scene calls show_hud().
 	# Menus have their own potion displays and don't need this overlay.
 	_hud_layer.visible = false
+
+
+func _add_row(id: String, icon_kind: String, tint: Color, caption: String) -> void:
+	var icon := PUIIcon.make(icon_kind, HudKit.icon_px(), tint)
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var name_lbl := HudKit.caption_label(caption)
+	name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	var count := HudKit.value_label("0")
+	count.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	count.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	count.custom_minimum_size = Vector2(PUI.S6 + PUI.S2, HudKit.ROW_KILLS_H)
+	_grid.add_child(icon)
+	_grid.add_child(name_lbl)
+	_grid.add_child(count)
+	_rows[id] = [icon, name_lbl, count]
+
+
+func _on_view_changed() -> void:
+	_apply_layout(TouchControls.is_touch_platform())
+
+
+# Desktop: bottom-right corner, the order gold, silver, bronze, potions (top to bottom).
+# Phones: the lower-right corner belongs to the action cluster, so potions and keys sit top-right,
+# left of the pause/map buttons and under the day counter (order: potions, bronze, silver, gold).
+func _apply_layout(phone: bool) -> void:
+	if _grid == null:
+		return
+	var order: Array = ["gold", "silver", "bronze", "potions"]
+	if phone:
+		order = ["potions", "bronze", "silver", "gold"]
+	var idx := 0
+	for id in order:
+		for node in _rows[id]:
+			_grid.move_child(node as Node, idx)
+			idx += 1
+	var vp := get_viewport()
+	var ins: Vector4 = HudKit.insets(vp)
+	_grid.anchor_left = 1.0
+	_grid.anchor_right = 1.0
+	_grid.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	if phone:
+		_grid.anchor_top = 0.0
+		_grid.anchor_bottom = 0.0
+		_grid.grow_vertical = Control.GROW_DIRECTION_END
+		_grid.offset_right = -(150.0 + ins.z)    # clear of the pause / map buttons
+		_grid.offset_left = _grid.offset_right
+		_grid.offset_top = HudKit.EDGE + ins.y + HudKit.ROW_HEALTH_H + PUI.S2   # under the day counter
+		_grid.offset_bottom = _grid.offset_top
+	else:
+		_grid.anchor_top = 1.0
+		_grid.anchor_bottom = 1.0
+		_grid.grow_vertical = Control.GROW_DIRECTION_BEGIN
+		_grid.offset_right = -HudKit.EDGE
+		_grid.offset_left = _grid.offset_right
+		_grid.offset_top = -HudKit.EDGE
+		_grid.offset_bottom = _grid.offset_top
+
+
+# Kept for callers and tests that force the phone placement.
+func _move_for_phone() -> void:
+	_apply_layout(true)
 
 
 # Shows the wallet overlay. Call from the dungeon main game file after player spawns.
@@ -80,11 +134,14 @@ func add_potions(amount: int) -> void:
 	_update_hud()
 	emit_signal("wallet_changed", SaveManager.current_profile["meta_currency"])
 
-func spend_potions(amount: int) -> bool:
+# save = false lets a caller that changes more of the profile in the same step (the Alchemist
+# also bumps a perk) write it once, after both changes, instead of twice.
+func spend_potions(amount: int, save: bool = true) -> bool:
 	var current = SaveManager.current_profile.get("meta_currency", 0)
 	if current < amount: return false
 	SaveManager.current_profile["meta_currency"] = current - amount
-	SaveManager.save_profile()
+	if save:
+		SaveManager.save_profile()
 	_update_hud()
 	emit_signal("wallet_changed", SaveManager.current_profile["meta_currency"])
 	return true
@@ -94,12 +151,52 @@ func _update_hud() -> void:
 		var count = 0
 		if not SaveManager.current_profile.is_empty():
 			count = SaveManager.current_profile.get("meta_currency", 0)
-		_potion_text.text = "Potions: %d" % count
+		_set_row("potions", int(count))
 
 	for color in KEY_COLORS:
 		if _key_labels.has(color):
-			var lbl : Label = _key_labels[color]
-			lbl.text = "%s Key × %d" % [color.capitalize(), get_key_count(color)]
+			_set_row(color, get_key_count(color))
+
+
+# Rewrites a row only when its count changed; a zero count dims the row (icon + number).
+func _set_row(id: String, count: int) -> void:
+	var before: int = int(_shown.get(id, -1))
+	if before == count:
+		return
+	_shown[id] = count
+	var row: Array = _rows[id]
+	(row[2] as Label).text = str(count)
+	if before >= 0 and _hud_layer != null and _hud_layer.visible:
+		_bump(id, count > before)
+	var has: bool = count > 0
+	(row[0] as Control).modulate.a = 1.0 if has else 0.45
+	var lbl := row[2] as Label
+	if has:
+		lbl.remove_theme_color_override("font_color")
+	else:
+		lbl.add_theme_color_override("font_color", PUI.BONE_FAINT)
+
+# A change in a count is felt: the number pops (bigger and brighter on a gain, a quick dip on a spend) and settles. One tween per
+# row, replaced when another change arrives.
+var _bump_tweens : Dictionary = {}
+
+func _bump(id: String, gain: bool) -> void:
+	var row: Array = _rows[id]
+	var lbl := row[2] as Label
+	var icon := row[0] as Control
+	if _bump_tweens.has(id) and (_bump_tweens[id] as Tween).is_valid():
+		(_bump_tweens[id] as Tween).kill()
+	lbl.pivot_offset = lbl.size * 0.5
+	icon.pivot_offset = icon.size * 0.5
+	var peak: float = 1.45 if gain else 0.8
+	lbl.scale = Vector2.ONE * peak
+	icon.scale = Vector2.ONE * (1.3 if gain else 0.85)
+	var tw: Tween = create_tween().set_parallel(true)
+	tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(lbl, "scale", Vector2.ONE, 0.32)
+	tw.tween_property(icon, "scale", Vector2.ONE, 0.32)
+	_bump_tweens[id] = tw
+
 
 # Call this when the save slot changes or a new run starts
 # so the HUD re-reads from the current profile.

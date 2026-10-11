@@ -13,6 +13,8 @@
 
 extends Node3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 @export var orb_count     : int   = 10
 @export var heal_amount   : float = 25.0
 @export var respawn_time  : float = 60.0
@@ -48,51 +50,67 @@ var _exhausted_spawn_points : Dictionary = {}
 #  INITIALISATION
 # ══════════════════════════════════════════════════════════════
 
-func _ready() -> void:
-	await get_tree().process_frame
-	await get_tree().process_frame
+# Staged population (see Purgatory_Dungeon_main_game_file.gd). Modules are visited in random order; every
+# module that has a clear point contributes a spawn point, and the first `orb_count` of them get their orb
+# at once (`stage_near_done`), the rest are only collected for the respawn / relocation draws. The old pass
+# computed a safe point for ALL ~330 modules before placing 10 orbs.
+var stage_near_done : bool = true
+var stage_done : bool = true
 
+
+func stage_begin(_origin: Vector3) -> void:
+	stage_near_done = false
+	stage_done = false
+	call("_stage_run")   # dynamic call: runs as a background coroutine
+
+
+func _entry_mark(label: String) -> void:
+	var main : Node = get_parent()
+	if main != null and main.has_method("entry_mark"):
+		main.entry_mark(label)
+
+
+func _stage_run() -> void:
+	var main : Node = get_parent()
 	# ── Easy difficulty: more frequent orbs ───────────────────────────────────
 	if has_node("/root/GlobalRunData") and GlobalRunData.difficulty == "easy":
 		orb_count    = int(orb_count * 1.6)
 		respawn_time = respawn_time * 0.5
 
-	_collect_spawn_points()
-	_spawn_all_orbs()
-
-
-func _collect_spawn_points() -> void:
-	var gen : Node = get_parent().get_node_or_null("DungeonGenerationFunction")
+	var gen : Node = main.get_node_or_null("DungeonGenerationFunction")
+	var modules : Array = []
 	if gen == null:
 		push_warning("HealthOrbManager: DungeonGenerationFunction not found.")
-		return
-
-	var modules : Array = gen.get("placed_modules") if gen.get("placed_modules") != null else []
-	if modules.is_empty():
-		push_warning("HealthOrbManager: placed_modules is empty.")
-		return
-
+	else:
+		modules = (gen.get("placed_modules") as Array).duplicate() if gen.get("placed_modules") != null else []
+		if modules.is_empty():
+			push_warning("HealthOrbManager: placed_modules is empty.")
+	modules.shuffle()
+	var want : int = 0 if GlobalRunData.debug_no_health_orbs else orb_count
+	_entry_mark("orbs_begin")
+	if want <= 0:
+		modules.clear()
+		stage_near_done = true
+	var created : int = 0
 	for mod in modules:
-		if mod is Node3D and gen.has_method("get_random_safe_interior_point"):
+		if mod is Node3D and is_instance_valid(mod):
 			# Margin 2.0 (up from default 1.25) keeps the larger FBX model clear of walls.
 			var safe_point : Vector3 = gen.get_random_safe_interior_point(mod as Node3D, orb_height, 2.0)
 			if safe_point != Vector3.ZERO:
 				_spawn_points.append(safe_point)
-
-	_spawn_points.shuffle()
-
-
-func _spawn_all_orbs() -> void:
-	if GlobalRunData.debug_no_health_orbs:
-		return
-
-	if _spawn_points.is_empty():
+				if created < want:
+					_create_orb(safe_point)
+					created += 1
+					if created >= want:
+						stage_near_done = true
+						_entry_mark("orbs_placed")
+		if main.has_method("stage_over") and main.stage_over():
+			await get_tree().process_frame
+	if want > 0 and created == 0:
 		push_warning("HealthOrbManager: no spawn points — orbs not placed.")
-		return
-
-	var count : int = mini(orb_count, _spawn_points.size())
-	for i in count:
-		_create_orb(_spawn_points[i])
+	stage_near_done = true
+	stage_done = true
+	_entry_mark("orbs_end")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -262,8 +280,13 @@ func _on_body_entered(body: Node3D, data: OrbData) -> void:
 
 	body.receive_heal(heal_amount)
 
+	# The orb pops (a green burst at the orb, a floating "+25" over the player); the player's own heal feedback (screen wash,
+	# rising motes, chime) comes from CharacterBase.receive_heal.
+	if is_instance_valid(data.root):
+		Juice.burst("heal", data.root.global_position, Vector3.UP, 1.0)
+	Juice.number((body as Node3D).global_position + Vector3(0.0, 1.9, 0.0), "+%d" % int(heal_amount), Color(0.4, 1.0, 0.5), 1.1)
 	if has_node("/root/AudioManager"):
-		AudioManager.play_buff_choice()
+		AudioManager.play_sfx("pop_soft", -2.0, 0.95, 1.05, 1)
 
 	_deactivate_orb(data)
 
@@ -329,5 +352,15 @@ func _pick_fresh_spawn_point() -> Vector3:
 		if not _exhausted_spawn_points.has(str(pt)):
 			fresh_list.append(pt)
 	if fresh_list.is_empty():
-		return Vector3.ZERO
+		# Every point has been used once (long/Legendary runs): start a new cycle instead
+		# of permanently ending orb respawns. Points currently holding a live orb stay used.
+		_exhausted_spawn_points.clear()
+		for o in _orbs:
+			if o.is_active:
+				_exhausted_spawn_points[str(o.spawn_pos)] = true
+		for pt in _spawn_points:
+			if not _exhausted_spawn_points.has(str(pt)):
+				fresh_list.append(pt)
+		if fresh_list.is_empty():
+			return Vector3.ZERO
 	return fresh_list[randi() % fresh_list.size()]

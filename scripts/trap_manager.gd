@@ -13,7 +13,7 @@
 #   trap_trigger_height — how tall the trigger box is above the tile (default 0.4)
 #   acid_damage_per_sec — damage per second from the acid pool effect (default 1.0)
 #   acid_duration       — seconds the acid lasts (default 15.0)
-#   effect_day_duration — in-game days the "1 day" effects last (default 1)
+#   effect_day_duration — in-game days the "1 day" effects (Heavy Gravity) last (default 1)
 #   homing_fireball_speed — speed of the mine fireballs (default 10.0)
 #   homing_fireball_damage — damage each homing fireball deals (default 15.0)
 #
@@ -24,6 +24,8 @@
 # ==============================================================================
 
 extends Node3D
+
+const Juice := preload("res://scripts/juice.gd")
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 @export var trap_count            : int   = 50    # Traps per run (was 5 — spread across 125 rooms means almost none)
@@ -85,12 +87,26 @@ func _ready() -> void:
 		get_tree().root.add_child(_banner_hud)
 
 
+# The banner HUD is parented to the scene root (so it renders over gameplay), which means it
+# would otherwise outlive this manager: one leaked CanvasLayer per run.
+func _exit_tree() -> void:
+	if is_instance_valid(_banner_hud):
+		_banner_hud.queue_free()
+
+
 # ── Boot ──────────────────────────────────────────────────────────────────────
+
+# Staged arming (see Purgatory_Dungeon_main_game_file.gd): traps are invisible triggers, so they never gate the
+# hand-over (`stage_near_done` stays true); each trap is armed in its own budgeted step.
+var stage_near_done : bool = true
+var stage_done : bool = true
+
 
 # Called from Purgatory_Dungeon_main_game_file.gd after dungeon generation.
 func boot_traps(dungeon_gen: Node, player: Node3D,
 		jumpscare_texture: Texture2D = null,
-		jumpscare_sound: AudioStream = null) -> void:
+		jumpscare_sound: AudioStream = null,
+		_origin: Vector3 = Vector3.ZERO) -> void:
 	_dungeon_gen       = dungeon_gen
 	_player            = player
 	_jumpscare_texture = jumpscare_texture
@@ -107,10 +123,19 @@ func boot_traps(dungeon_gen: Node, player: Node3D,
 		push_warning("TrapManager: dungeon_gen not valid — no traps spawned.")
 		return
 
+	stage_done = false
+	call("_stage_arm")   # dynamic call: runs as a background coroutine
+
+
+func _stage_arm() -> void:
+	var main : Node = get_parent()
+	var budgeted : bool = main != null and main.has_method("stage_over")
 	var candidates : Array[Node3D] = _dungeon_gen.get_trap_candidates(trap_count)
 	for tile in candidates:
 		if is_instance_valid(tile):
 			_arm_trap(tile)
+		if budgeted and main.stage_over():
+			await get_tree().process_frame
 
 	# ── Forced fireball-mine traps ─────────────────────────────────────────────
 	# A separate request for fireball_trap_count additional tiles; these always
@@ -120,6 +145,9 @@ func boot_traps(dungeon_gen: Node, player: Node3D,
 		for tile in fb_candidates:
 			if is_instance_valid(tile):
 				_arm_trap(tile, EFFECT_FIREBALL_MINE)
+			if budgeted and main.stage_over():
+				await get_tree().process_frame
+	stage_done = true
 
 
 # ── Trap arming ───────────────────────────────────────────────────────────────
@@ -195,6 +223,13 @@ func _on_trap_body_entered(body: Node3D, area: Area3D) -> void:
 	area.set_meta("armed", false)
 	area.set_deferred("monitoring", false)
 
+	# The tile clicks underfoot: a sharp click, a puff of dust off the slab and a red flicker (a trap used to spring silently; the
+	# first sign was its effect).
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("trap_click", area.global_position, 2.0, 0.95, 1.05, 30.0, 2)
+	Juice.burst("dust", area.global_position + Vector3(0.0, 0.1, 0.0), Vector3.UP, 0.8)
+	Juice.flash(area.global_position + Vector3(0.0, 0.5, 0.0), Color(1.0, 0.2, 0.1), 2.0, 0.18, 4.0)
+
 	# Remove the orange tint now that it has fired.
 	var tile = area.get_meta("tile_node", null)
 	if tile != null and is_instance_valid(tile) and tile.material_override != null:
@@ -218,9 +253,13 @@ func _apply_effect(player: Node3D, effect: String, trap_pos: Vector3) -> void:
 	# ── Banner notification ────────────────────────────────────────────────────
 	if _banner_hud != null and _banner_hud.has_method("show_trap"):
 		match effect:
-			"reversed_view", "heavy_gravity":
+			"heavy_gravity":
 				_banner_hud.show_trap(effect, -1.0, effect_day_duration)
-			"drunk", "reversed_controls":
+			"reversed_view":
+				_banner_hud.show_trap(effect, BruteCharacter.STATUS_REVERSED_VIEW_SECONDS)
+			"drunk":
+				_banner_hud.show_trap(effect, BruteCharacter.STATUS_DRUNK_SECONDS)
+			"reversed_controls":
 				_banner_hud.show_trap(effect, 30.0)
 			"acid_pool":
 				_banner_hud.show_trap(effect, acid_duration)
@@ -233,9 +272,10 @@ func _apply_effect(player: Node3D, effect: String, trap_pos: Vector3) -> void:
 
 		EFFECT_REVERSED_VIEW:
 			# Flip the camera X by PI so the player sees upside-down.
-			# Lasts effect_day_duration in-game days — reset on day_changed.
+			# Lasts as long as Intoxicated (BruteCharacter.STATUS_REVERSED_VIEW_SECONDS, owned by the player): a full
+			# in-game day of it was far too long. The day argument is ignored by the player.
 			if player.has_method("apply_status"):
-				player.apply_status("reversed_view", effect_day_duration)
+				player.apply_status("reversed_view", 0)
 
 		EFFECT_HEAVY_GRAVITY:
 			# Halves jump velocity for effect_day_duration days.
@@ -255,7 +295,7 @@ func _apply_effect(player: Node3D, effect: String, trap_pos: Vector3) -> void:
 		EFFECT_ACID_POOL:
 			# Ticking damage for acid_duration seconds. Handled by player.
 			if player.has_method("apply_status"):
-				player.apply_status("acid_pool", 0)
+				player.apply_status("acid_pool", int(acid_duration), acid_damage_per_sec)
 
 		EFFECT_FIREBALL_MINE:
 			# Half health immediately, then homing fireballs from coursec nodes.
@@ -266,16 +306,11 @@ func _apply_effect(player: Node3D, effect: String, trap_pos: Vector3) -> void:
 
 		EFFECT_SCHIZOPHRENIA:
 			# Attach the auditory hallucination script to the player for
-			# schizophrenia_duration seconds, then detach it cleanly.
-			# Routes through BuffManager._handle_schizophrenia() so the same
-			# node management logic is reused — no duplicate code.
+			# schizophrenia_duration seconds (game time), then detach it cleanly.
+			# BuffManager reference-counts the shared node, so triggering a second trap while the
+			# first is active extends the effect rather than being cut short by the first timer.
 			if has_node("/root/BuffManager"):
-				BuffManager._handle_schizophrenia(true)
-				get_tree().create_timer(schizophrenia_duration).timeout.connect(
-					func() -> void:
-						if has_node("/root/BuffManager"):
-							BuffManager._handle_schizophrenia(false)
-				)
+				BuffManager.begin_timed_schizophrenia(schizophrenia_duration)
 
 		EFFECT_JUMPSCARE:
 			# Only fire once per run — subsequent traps do nothing.
@@ -286,7 +321,7 @@ func _apply_effect(player: Node3D, effect: String, trap_pos: Vector3) -> void:
 			# scene's Inspector, add to scene root so it covers the full screen.
 			# setup() is called before add_child so resources are ready when
 			# _ready() fires and builds the overlay.
-			var scare_script := load("res://scripts/jumpscare.gd")
+			var scare_script := load("res://scripts/Jumpscare.gd")
 			if scare_script != null:
 				var scare : CanvasLayer = CanvasLayer.new()
 				scare.set_script(scare_script)
@@ -313,6 +348,13 @@ func _spawn_homing_fireballs(player: Node3D, trap_pos: Vector3) -> void:
 
 	for origin in origins:
 		_launch_homing_fireball(origin, player)
+		Juice.burst("ember", origin + Vector3(0.0, 1.0, 0.0), Vector3.UP, 0.8)
+	# They are loosed together: one bang for the volley (not one per fireball).
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("explosion", -3.0, 0.8, 0.9, 2)
+	var fx : Node = Juice.cam_fx(player)
+	if fx != null:
+		fx.add_trauma(0.6)
 
 
 func _launch_homing_fireball(origin: Vector3, player: Node3D) -> void:
@@ -368,8 +410,16 @@ func _fly_homing(fb: Area3D, player: Node3D) -> void:
 		var tree := get_tree()
 		if tree == null:
 			break
-		var dt := get_process_delta_time()
-		lifetime -= dt
+		# This manager is PROCESS_MODE_ALWAYS, so without this the fireball keeps flying
+		# (and aging) behind the pause menu, then hits the moment the game resumes.
+		if tree.paused:
+			await tree.process_frame
+			continue
+		var raw_dt := get_process_delta_time()
+		lifetime -= raw_dt
+		# A long frame (load hitch, phone resume) must not teleport the fireball into the player's
+		# face: advance at most 0.1 s of flight per frame (1 m at the default speed).
+		var dt := minf(raw_dt, 0.1)
 
 		if not fb.monitoring:
 			fb.monitoring = true   # Enable after first step (escape origin overlap)
@@ -390,13 +440,20 @@ func _on_homing_hit(body: Node3D, fb: Area3D, damage_val: float) -> void:
 		return
 	if fb.has_meta("hit"):
 		return
+	# A trap fireball is aimed at the player. Enemies share the player's collision layers, so
+	# the mask cannot separate them: let it fly through enemies instead of exploding on (and
+	# damaging) the first one in its path.
+	if body.is_in_group("enemy") or body.is_in_group("enemies"):
+		return
 	fb.set_meta("hit", true)
 
-	var target := body
-	if not target.has_method("take_damage") and target.get_parent() != null:
-		target = target.get_parent()
-	if target != null and target.has_method("take_damage"):
-		target.take_damage(damage_val, null)
+	Juice.burst("ember", fb.global_position, Vector3.UP, 1.0)
+	Juice.flash(fb.global_position, Color(1.0, 0.3, 0.1), 2.5, 0.14, 4.0)
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("fireball_impact", fb.global_position, 0.0, 0.9, 1.05, 30.0, 2)
+
+	if body.is_in_group("player") and body.has_method("take_damage"):
+		body.take_damage(damage_val, null)
 
 	if is_instance_valid(fb):
 		fb.queue_free()

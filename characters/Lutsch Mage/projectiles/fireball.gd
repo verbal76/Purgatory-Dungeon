@@ -21,6 +21,8 @@
 # ==============================================================================
 extends Area3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 @export var speed              : float = 15.0   # Metres per second travel speed
 @export var max_lifetime       : float = 5.0    # Failsafe: destroy after this many seconds
 @export var particle_fade_time : float = 1.5    # Match your Kenney particle lifetime
@@ -103,6 +105,9 @@ func activate(damage: float, dir: Vector3) -> void:
 	visible = true
 	set_physics_process(true)
 
+	# mage_ai's pool turns monitoring off while a fireball is idle; without
+	# turning it back on, body_entered never fires and the bolt does no damage.
+	set_deferred("monitoring", true)
 	if _collision_shape != null:
 		_collision_shape.set_deferred("disabled", false)
 	if _particles != null:
@@ -134,6 +139,14 @@ func _physics_process(delta: float) -> void:
 
 		var hit := space.intersect_ray(_wall_query)
 		if not hit.is_empty():
+			# The sweep ray uses mask 1, which also contains the player. If the
+			# ray reaches the player before the overlap does, count it as a hit
+			# instead of detonating harmlessly.
+			var collider = hit.get("collider")
+			if collider is Node and collider.is_in_group("player") \
+					and collider.has_method("take_damage"):
+				collider.take_damage(_damage, self)
+			_impact(hit.get("position", global_position))
 			_deactivate()
 			return
 
@@ -151,7 +164,17 @@ func _on_body_entered(body: Node3D) -> void:
 	if body.has_method("apply_kick"):
 		body.apply_kick(_direction, _damage * 3.0)
 
+	_impact(global_position)
 	_deactivate()
+
+
+# The bolt's end (a wall, the player, a prop): an ember burst, a short light and a bang, positional. (A bolt that simply runs out of
+# range fades quietly: no _impact.) Pooled burst / light / audio voices: nothing is created here.
+func _impact(pos: Vector3) -> void:
+	Juice.burst("ember", pos, -_direction + Vector3.UP * 0.4, 0.8)
+	Juice.flash(pos, Color(1.0, 0.55, 0.1), 2.5, 0.14, 4.5)
+	if Engine.get_main_loop() is SceneTree and (Engine.get_main_loop() as SceneTree).root.has_node("AudioManager"):
+		(Engine.get_main_loop() as SceneTree).root.get_node("AudioManager").play_sfx_3d("fireball_impact", pos, -1.0, 0.92, 1.08, 30.0, 1)
 
 
 func _on_timeout() -> void:
@@ -164,6 +187,7 @@ func _on_timeout() -> void:
 func _deactivate() -> void:
 	_is_active = false
 	_lifetime_timer.stop()
+	set_deferred("monitoring", false)
 	if _collision_shape != null:
 		_collision_shape.set_deferred("disabled", true)
 	if _particles != null:

@@ -7,7 +7,7 @@
 #  MOD NOTES: Added _handle_schizophrenia() hook to dynamically
 #  attach/detach the auditory hallucination script to the player.
 #  Also plays buff_choice_sound via AudioManager.
-#  Rarity system: common (green) / rare (yellow) / legendary (purple).
+#  Rarity system: common / rare / legendary, shown as a text tag plus the card edge (PUI.rarity_card).
 #  Weighted pick, slot-machine cycling display, slowdown-on-stop.
 #
 #  SLOT MACHINE CHANGE: Replaced the 2-choice card pick with a single
@@ -48,20 +48,12 @@ const PERK_CYCLE_SLOWDOWN_DURATION : float = 1.4
 const PERK_CYCLE_VISUAL_HOLD_TIME : float = 0.7
 
 # ── Card / slot UI layout ──────────────────────────────────
+# Look comes from the shared design system (PUI): ScreenTitle / CardTitle / body / WarningLabel roles on an
+# iron card whose edge carries the rarity (PUI.rarity_card). Only the geometry lives here.
 
-const CARD_WIDTH         : float = 280.0
-const CARD_HEIGHT        : float = 260.0
-const TITLE_FONT_SIZE    : int   = 28
-const DAY_FONT_SIZE      : int   = 16
-const NAME_FONT_SIZE     : int   = 22
-const DESC_FONT_SIZE     : int   = 14
-const TRADEOFF_FONT_SIZE : int   = 13
-const PROMPT_FONT_SIZE   : int   = 16
-const RARITY_TAG_FONT_SIZE : int = 11
-
-const TRADEOFF_COLOR   : Color = Color(1.0, 0.6,  0.2)
-const DAY_LABEL_COLOR  : Color = Color(0.8, 0.8,  0.8)
-const PROMPT_COLOR     : Color = Color(0.7, 0.7,  0.7)
+const CARD_WIDTH         : float = 560.0
+const CARD_HEIGHT        : float = 320.0
+const TRADEOFF_PREFIX    : String = "Tradeoff: "
 
 # ── Card animation ─────────────────────────────────────────
 
@@ -71,22 +63,15 @@ const CARD_EXIT_DURATION   : float = 0.35
 
 # ── Rarity ─────────────────────────────────────────────────
 
-const RARITY_COLOR_COMMON    : Color = Color(0.25, 0.85, 0.25)
-const RARITY_COLOR_RARE      : Color = Color(1.0,  0.82, 0.12)
-const RARITY_COLOR_LEGENDARY : Color = Color(0.72, 0.15, 0.92)
 # Weights: roughly common 10x, rare 4x, legendary 1x
 const RARITY_WEIGHTS : Dictionary = { "common": 10, "rare": 4, "legendary": 1 }
-const RARITY_SQUARE_SIZE : float = 22.0
 
 # ── Buff HUD ───────────────────────────────────────────────
 
-const HUD_FONT_SIZE         : int   = 14
-const HUD_PERM_COLOR        : Color = Color(0.5, 0.9, 0.5)
-const HUD_TEMP_COLOR        : Color = Color(0.5, 0.7, 1.0)
-const HUD_DEBUFF_COLOR      : Color = Color(1.0, 0.45, 0.35)
+const HUD_WIDTH             : float = 280.0
 const HUD_MARGIN_X          : float = 20.0
 const HUD_START_Y           : float = 50.0
-const HUD_LINE_SPACING      : float = 20.0
+const HUD_LINE_SPACING      : float = 12.0
 const COUNTDOWN_UPDATE_RATE : float = 0.5
 
 # ── Slot machine states ────────────────────────────────────
@@ -110,8 +95,9 @@ var _slot_name_label     : Label     = null
 var _slot_desc_label     : Label     = null
 var _slot_rarity_label   : Label     = null
 var _slot_tradeoff_label : Label     = null
-var _slot_border_rect    : ColorRect = null
-var _slot_rarity_square  : ColorRect = null
+var _slot_panel          : PanelContainer = null
+var _slot_rarity_key     : String    = ""
+var _rarity_boxes        : Dictionary = {}   # rarity -> cached StyleBox (swapping them allocates nothing)
 
 # UI containers (needed for entry animation + close)
 var _ui_layer  : CanvasLayer = null
@@ -178,6 +164,10 @@ func _process(delta: float) -> void:
 		# Skip timed-buff expiry while the pick is open — same as old system.
 		return
 
+	# Timed buffs must not run down while the pause menu (or any other pause) is open.
+	if get_tree().paused:
+		return
+
 	# ── Timed buff expiry ──────────────────────────────────────
 	var any_expired : bool = false
 	for i in range(_active_buffs.size() - 1, -1, -1):
@@ -225,18 +215,31 @@ func _on_day_changed(_day: int) -> void:
 func _build_buff_hud() -> void:
 	_hud_layer       = CanvasLayer.new()
 	_hud_layer.layer = 5
+	# Small persistent HUD text: keeps the HUD roles' own sizes instead of the phone menu minimums.
+	_hud_layer.add_to_group("no_mobile_ui")
 	add_child(_hud_layer)
 
 	_hud_container = VBoxContainer.new()
 	_hud_container.add_theme_constant_override("separation", int(HUD_LINE_SPACING))
+	_hud_container.mouse_filter  = Control.MOUSE_FILTER_IGNORE
 	_hud_container.anchor_left   = 1.0
 	_hud_container.anchor_right  = 1.0
 	_hud_container.anchor_top    = 0.0
 	_hud_container.anchor_bottom = 0.0
-	_hud_container.offset_left   = -250.0 - HUD_MARGIN_X
+	_hud_container.offset_left   = -HUD_WIDTH - HUD_MARGIN_X
 	_hud_container.offset_right  = -HUD_MARGIN_X
-	_hud_container.offset_top    = HUD_START_Y
+	_hud_container.offset_top    = HUD_START_Y + 22.0   # clear of the day counter row
+	if TouchControls.is_touch_platform():
+		# Phones: the top-right belongs to the day counter, the wallet and the pause/map buttons, so the active
+		# buffs list under the left vitals cluster instead.
+		var o: Vector2 = HudKit.origin(get_viewport())
+		_hud_container.anchor_left   = 0.0
+		_hud_container.anchor_right  = 0.0
+		_hud_container.offset_left   = o.x
+		_hud_container.offset_right  = o.x + HUD_WIDTH
+		_hud_container.offset_top    = o.y + HudKit.kills_row_top() + float(HudKit.ROW_KILLS_H) + float(PUI.S4)
 
+	PUI.adopt(_hud_container)
 	_hud_layer.add_child(_hud_container)
 	_hud_layer.visible = false
 
@@ -256,7 +259,7 @@ func _rebuild_buff_list() -> void:
 			_hud_container.add_child(_build_hud_entry(
 				buff.get("name", "???"),
 				buff.get("description", ""),
-				HUD_PERM_COLOR, null
+				PUI.BONE, null
 			))
 
 	for buff in _active_buffs:
@@ -267,31 +270,31 @@ func _rebuild_buff_list() -> void:
 			is_neg = float(buff.get("value", 0)) < 0.0
 		if buff.get("effect_type") == "schizophrenia":
 			is_neg = true
-		var color : Color = HUD_DEBUFF_COLOR if is_neg else HUD_TEMP_COLOR
+		var color : Color = PUI.BLOOD_BRIGHT if is_neg else PUI.EMBER_BRIGHT
 		var box := _build_hud_entry(_format_timed_entry(buff), buff.get("description", ""), color, null)
 		_hud_container.add_child(box)
 		_timed_labels.append({ "label": box.get_child(0) as Label, "buff": buff })
 
+# One small outlined HUD entry (name in HudLabel, description in CaptionLabel). Colour meaning:
+# permanent = bone, timed = ember (active), timed penalty = blood. No plates: the dungeon stays dominant.
 func _build_hud_entry(name_text: String, desc_text: String,
 		name_color: Color, _unused) -> VBoxContainer:
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 1)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_theme_constant_override("separation", 0)
 
-	var name_lbl := Label.new()
-	name_lbl.text = name_text
-	name_lbl.add_theme_font_size_override("font_size", HUD_FONT_SIZE)
+	var name_lbl := PUI.label(name_text, "HudLabel")
 	name_lbl.add_theme_color_override("font_color", name_color)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(name_lbl)
 
 	if desc_text != "":
-		var desc_lbl := Label.new()
-		desc_lbl.text = desc_text
-		desc_lbl.add_theme_font_size_override("font_size", HUD_FONT_SIZE - 2)
-		var dc := name_color; dc.a = 0.65
-		desc_lbl.add_theme_color_override("font_color", dc)
+		var desc_lbl := PUI.label(desc_text, "CaptionLabel")
+		desc_lbl.add_theme_constant_override("outline_size", 3)
 		desc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		desc_lbl.autowrap_mode        = TextServer.AUTOWRAP_WORD_SMART
+		desc_lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
 		box.add_child(desc_lbl)
 
 	return box
@@ -339,6 +342,8 @@ func _on_buff_pick_triggered() -> void:
 	_is_picking   = true
 
 	get_tree().paused = true
+	if has_node("/root/AudioManager"):
+		AudioManager.set_pause_muffle(true)   # the world dulls behind the reel
 	_show_slot_ui()
 
 
@@ -348,7 +353,17 @@ func _on_buff_pick_triggered() -> void:
 # the final landed result — no separate winner pre-selection needed.
 func _build_slot_pool() -> void:
 	_slot_pool.clear()
+	# Only offer buffs this character can actually use (every stat the buff touches must exist on
+	# the player): a Mage is never offered Wrath Expansion, a Barbarian never Lightning Caller, and
+	# a buff whose stat exists on no player (an unimplemented one) is never offered at all.
+	var player : Node = get_tree().get_first_node_in_group("player")
+	var offerable : Array = []
 	for buff in _buff_pool:
+		if buff_is_applicable(buff, player):
+			offerable.append(buff)
+	if offerable.is_empty():
+		offerable = _buff_pool   # never leave the player without a card
+	for buff in offerable:
 		var w : int = RARITY_WEIGHTS.get(buff.get("ranking", "common"), 10)
 		for _j in w:
 			_slot_pool.append(buff)
@@ -367,29 +382,34 @@ func _show_slot_ui() -> void:
 	_ui_root              = Control.new()
 	_ui_root.process_mode = Node.PROCESS_MODE_ALWAYS
 	_ui_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Nothing here takes the tap: the whole screen is the "stop" button (see _unhandled_input).
+	_ui_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	PUI.adopt(_ui_root)   # a CanvasLayer child does not inherit the root theme
 	_ui_layer.add_child(_ui_root)
 
-	# Title
-	var title := Label.new()
-	title.text = "Choose Your Fate"
-	title.add_theme_font_size_override("font_size", TITLE_FONT_SIZE)
+	# A light veil keeps the frozen dungeon behind the card from competing with it.
+	_ui_root.add_child(PUI.background("veil"))
+
+	# Header: title + day.
+	var header := VBoxContainer.new()
+	header.name = "Header"
+	header.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	header.offset_top = float(PUI.S7)
+	header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header.add_theme_constant_override("separation", PUI.S1)
+	_ui_root.add_child(header)
+
+	var title := PUI.label("Choose Your Fate", "ScreenTitle")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	title.position.y = 80.0
-	_ui_root.add_child(title)
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header.add_child(title)
 
-	# Day label
-	var day_label := Label.new()
-	day_label.text = "Day %d" % GameClock.current_day
-	day_label.add_theme_font_size_override("font_size", DAY_FONT_SIZE)
-	day_label.modulate = DAY_LABEL_COLOR
+	var day_label := PUI.label("Day %d" % GameClock.current_day, "StatLabel")
 	day_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	day_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	day_label.position.y = 120.0
-	_ui_root.add_child(day_label)
+	day_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header.add_child(day_label)
 
-	# Centered card — same anchor math as the old two-card layout,
-	# but positioned at screen centre instead of offset left/right.
+	# Centered card.
 	var sw     : float = get_viewport_rect().size.x
 	var sh     : float = get_viewport_rect().size.y
 	var card_x : float = (sw * 0.5) - (CARD_WIDTH * 0.5)
@@ -397,14 +417,23 @@ func _show_slot_ui() -> void:
 
 	_build_slot_card(card_x, card_y)
 
-	# Prompt
-	var prompt := Label.new()
-	prompt.text = "Ⓐ Stop"
-	prompt.add_theme_font_size_override("font_size", PROMPT_FONT_SIZE)
-	prompt.add_theme_color_override("font_color", PROMPT_COLOR)
+	# Prompt. Touch: large and ember so "TAP to stop" is unmissable; otherwise a quiet hint with the
+	# glyph of the active input scheme.
+	var prompt : Label
+	if InputManager.is_touch():
+		prompt = PUI.label("TAP to stop", "SectionHeading")
+		prompt.add_theme_font_size_override("font_size", int(round(PUI.fs("card_title") * 1.15)))
+		prompt.add_theme_color_override("font_color", PUI.EMBER_BRIGHT)
+	else:
+		prompt = PUI.label("Press %s to stop" % InputManager.glyph("ui_accept"), "SecondaryLabel")
+	prompt.name = "StopPrompt"
+	prompt.add_theme_constant_override("outline_size", 4)
 	prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	prompt.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	prompt.position.y = -60.0
+	prompt.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	prompt.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	prompt.offset_top    = -float(PUI.S7 + PUI.S6)
+	prompt.offset_bottom = -float(PUI.S5)
 	_ui_root.add_child(prompt)
 
 	_update_slot_display()
@@ -414,59 +443,50 @@ func _show_slot_ui() -> void:
 func _build_slot_card(x: float, y: float) -> void:
 	var buff    : Dictionary = _slot_pool[_slot_index]
 	var ranking : String     = buff.get("ranking", "common")
-	var col     : Color      = _get_rarity_color(ranking)
 
-	# Border
-	var border       := ColorRect.new()
-	border.position   = Vector2(x - 4.0, y - 4.0 + CARD_ENTRY_OFFSET_Y)
-	border.size       = Vector2(CARD_WIDTH + 8.0, CARD_HEIGHT + 8.0)
-	border.color      = col
-	border.modulate.a = 0.0
-	_ui_root.add_child(border)
-	_slot_border_rect = border
-
-	# Panel
-	var panel                := PanelContainer.new()
+	var panel := PanelContainer.new()
 	panel.name                = "SlotPanel"
-	panel.position            = Vector2(x, y + CARD_ENTRY_OFFSET_Y)
+	panel.mouse_filter        = Control.MOUSE_FILTER_IGNORE
 	panel.custom_minimum_size = Vector2(CARD_WIDTH, CARD_HEIGHT)
+	panel.size                = Vector2(CARD_WIDTH, CARD_HEIGHT)
+	panel.position            = Vector2(x, y + CARD_ENTRY_OFFSET_Y)
 	panel.modulate.a          = 0.0
+	_slot_panel = panel
+	_slot_rarity_key = ""   # forces the rarity material to be applied by _update_slot_display
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_theme_constant_override("separation", PUI.S2)
 
-	# Rarity tag
-	var rarity_lbl := Label.new()
-	rarity_lbl.text = ranking.to_upper()
-	rarity_lbl.add_theme_font_size_override("font_size", RARITY_TAG_FONT_SIZE)
-	rarity_lbl.add_theme_color_override("font_color", col)
-	rarity_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	# Rarity tag (text + colour, never colour alone)
+	var rarity_lbl := PUI.label(ranking.capitalize(), "StatLabel")
+	rarity_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(rarity_lbl)
 	_slot_rarity_label = rarity_lbl
 
 	# Name
-	var name_lbl := Label.new()
-	name_lbl.text = buff.get("name", "???")
-	name_lbl.add_theme_font_size_override("font_size", NAME_FONT_SIZE)
+	var name_lbl := PUI.label(buff.get("name", "???"), "CardTitle")
+	name_lbl.add_theme_font_size_override("font_size", int(round(PUI.fs("card_title") * 1.3)))
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(name_lbl)
 	_slot_name_label = name_lbl
 
-	# Description
-	var desc_lbl := Label.new()
-	desc_lbl.text = buff.get("description", "")
-	desc_lbl.add_theme_font_size_override("font_size", DESC_FONT_SIZE)
+	vbox.add_child(PUI.divider())
+
+	# Description takes the spare height so the tradeoff always sits at the foot of the card.
+	var desc_lbl := PUI.label(buff.get("description", ""))
 	desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	desc_lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	desc_lbl.size_flags_vertical  = Control.SIZE_EXPAND_FILL
 	vbox.add_child(desc_lbl)
 	_slot_desc_label = desc_lbl
 
 	# Tradeoff
-	var td_lbl := Label.new()
+	var td_lbl := PUI.label("", "WarningLabel")
 	var tradeoff = buff.get("tradeoff", null)
-	td_lbl.text = "⚠ " + (tradeoff.get("description", "") if tradeoff != null else "")
-	td_lbl.add_theme_font_size_override("font_size", TRADEOFF_FONT_SIZE)
-	td_lbl.modulate = TRADEOFF_COLOR
+	td_lbl.text = (TRADEOFF_PREFIX + tradeoff.get("description", "")) if tradeoff != null else ""
 	td_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	td_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	td_lbl.visible = (tradeoff != null)
@@ -476,40 +496,19 @@ func _build_slot_card(x: float, y: float) -> void:
 	panel.add_child(vbox)
 	_ui_root.add_child(panel)
 
-	# Rarity square badge — bottom-right
-	var sq        := ColorRect.new()
-	sq.size        = Vector2(RARITY_SQUARE_SIZE, RARITY_SQUARE_SIZE)
-	sq.position    = Vector2(
-		x + CARD_WIDTH  - RARITY_SQUARE_SIZE - 6.0,
-		y + CARD_HEIGHT - RARITY_SQUARE_SIZE - 6.0 + CARD_ENTRY_OFFSET_Y)
-	sq.color       = col
-	sq.modulate.a  = 0.0
-	_ui_root.add_child(sq)
-	_slot_rarity_square = sq
-
 
 func _animate_slot_card_in(_card_x: float, card_y: float) -> void:
 	if _ui_root == null:
 		return
-	var panel  : Control = _ui_root.get_node_or_null("SlotPanel")
-	var border : Control = _slot_border_rect
-	var sq     : Control = _slot_rarity_square
-	if panel == null or border == null or sq == null:
+	var panel : Control = _ui_root.get_node_or_null("SlotPanel")
+	if panel == null:
 		return
-
-	var tgt_panel_y  : float = card_y
-	var tgt_border_y : float = card_y - 4.0
-	var tgt_sq_y     : float = card_y + CARD_HEIGHT - RARITY_SQUARE_SIZE - 6.0
 
 	var t := self.create_tween()
 	t.set_process_mode(Tween.TWEEN_PROCESS_IDLE)
 	t.set_parallel(true)
-	t.tween_property(panel,  "position:y", tgt_panel_y,  CARD_ENTRY_DURATION).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-	t.tween_property(border, "position:y", tgt_border_y, CARD_ENTRY_DURATION).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-	t.tween_property(sq,     "position:y", tgt_sq_y,     CARD_ENTRY_DURATION).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-	t.tween_property(panel,  "modulate:a", 1.0, CARD_ENTRY_DURATION * 0.75)
-	t.tween_property(border, "modulate:a", 1.0, CARD_ENTRY_DURATION * 0.75)
-	t.tween_property(sq,     "modulate:a", 1.0, CARD_ENTRY_DURATION * 0.75)
+	t.tween_property(panel, "position:y", card_y, CARD_ENTRY_DURATION).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	t.tween_property(panel, "modulate:a", 1.0, CARD_ENTRY_DURATION * 0.75)
 
 # ══════════════════════════════════════════════════════════════
 #  SLOT MACHINE — CYCLING
@@ -518,6 +517,11 @@ func _animate_slot_card_in(_card_x: float, card_y: float) -> void:
 func _advance_slot() -> void:
 	_slot_index = (_slot_index + 1) % _slot_pool.size()
 	_update_slot_display()
+	# The reel ticks (it was silent): quiet while it spins, stepping up in pitch and level as it slows toward a stop.
+	if has_node("/root/AudioManager"):
+		var slowing : bool = _slot_state == SlotState.SLOWING
+		var k : float = clampf(_slot_elapsed / PERK_CYCLE_SLOWDOWN_DURATION, 0.0, 1.0) if slowing else 0.0
+		AudioManager.play_sfx("tick", -14.0 + 8.0 * k, 0.9 + 0.35 * k, 0.9 + 0.35 * k, 0)
 
 
 # Pushes the current buff's name, description, rarity, and tradeoff
@@ -527,14 +531,13 @@ func _update_slot_display() -> void:
 		return
 	var buff     : Dictionary = _slot_pool[_slot_index]
 	var ranking  : String     = buff.get("ranking", "common")
-	var col      : Color      = _get_rarity_color(ranking)
 
 	if is_instance_valid(_slot_name_label):
 		_slot_name_label.text = buff.get("name", "???")
 
 	if is_instance_valid(_slot_rarity_label):
-		_slot_rarity_label.text = ranking.to_upper()
-		_slot_rarity_label.add_theme_color_override("font_color", col)
+		_slot_rarity_label.text = ranking.capitalize()
+		_slot_rarity_label.add_theme_color_override("font_color", PUI.rarity_text(ranking))
 
 	if is_instance_valid(_slot_desc_label):
 		_slot_desc_label.text = buff.get("description", "")
@@ -542,17 +545,19 @@ func _update_slot_display() -> void:
 	if is_instance_valid(_slot_tradeoff_label):
 		var tradeoff = buff.get("tradeoff", null)
 		if tradeoff != null:
-			_slot_tradeoff_label.text    = "⚠ " + tradeoff.get("description", "")
+			_slot_tradeoff_label.text    = TRADEOFF_PREFIX + tradeoff.get("description", "")
 			_slot_tradeoff_label.visible = true
 		else:
 			_slot_tradeoff_label.text    = ""
 			_slot_tradeoff_label.visible = false
 
-	if is_instance_valid(_slot_border_rect):
-		_slot_border_rect.color = col
-
-	if is_instance_valid(_slot_rarity_square):
-		_slot_rarity_square.color = col
+	# The card's edge (and, for the top tiers, its base glow) carries the rarity. Materials are built once
+	# per rarity and only swapped when the rarity actually changes.
+	if is_instance_valid(_slot_panel) and ranking != _slot_rarity_key:
+		_slot_rarity_key = ranking
+		if not _rarity_boxes.has(ranking):
+			_rarity_boxes[ranking] = PUI.rarity_card(ranking)
+		_slot_panel.add_theme_stylebox_override("panel", _rarity_boxes[ranking])
 
 # ══════════════════════════════════════════════════════════════
 #  INPUT — A PRESS TO STOP
@@ -564,7 +569,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Only accept input during ROLLING — once slowing starts, lock out further presses.
 	if _slot_state != SlotState.ROLLING:
 		return
-	if event.is_action_pressed("ui_accept") or event.is_action_pressed("equip"):
+	# Touch: the whole screen is the button (the touch layer is hidden while the game is paused).
+	var tapped: bool = event is InputEventScreenTouch and (event as InputEventScreenTouch).pressed
+	if tapped or event.is_action_pressed("ui_accept") or event.is_action_pressed("equip"):
 		_slot_state   = SlotState.SLOWING
 		_slot_elapsed = 0.0
 		_slot_timer   = 0.0
@@ -580,6 +587,7 @@ func _award_slot_perk() -> void:
 
 	if has_node("/root/AudioManager"):
 		AudioManager.play_buff_choice()
+	_landing_feedback(String(buff.get("ranking", "common")))
 
 	_apply_buff(buff)
 	emit_signal("buff_chosen", buff)
@@ -589,6 +597,32 @@ func _award_slot_perk() -> void:
 		func() -> void:
 			_animate_slot_exit(buff),
 		CONNECT_ONE_SHOT)
+
+
+# The reel stops on its card: the card thumps (a quick scale and brightness punch), and the sound says how good it was.
+func _landing_feedback(ranking: String) -> void:
+	if is_instance_valid(_slot_panel):
+		_slot_panel.pivot_offset = _slot_panel.size * 0.5
+		_slot_panel.scale = Vector2.ONE * 1.12
+		_slot_panel.modulate = Color(1.6, 1.6, 1.6, 1.0)
+		var t := self.create_tween()
+		t.set_process_mode(Tween.TWEEN_PROCESS_IDLE)
+		t.set_parallel(true)
+		t.tween_property(_slot_panel, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		t.tween_property(_slot_panel, "modulate", Color.WHITE, 0.45)
+	if has_node("/root/AudioManager"):
+		match ranking:
+			"legendary":
+				AudioManager.play_sfx("legend_sting", 0.0, 1.0, 1.0, 2)
+			"epic":
+				AudioManager.play_sfx("ready_ding", -2.0, 0.85, 0.85, 2)
+			"rare":
+				AudioManager.play_sfx("ready_ding", -4.0, 1.0, 1.0, 2)
+			"cursed":
+				AudioManager.play_sfx("trap_click", 0.0, 0.7, 0.7, 2)
+			_:
+				AudioManager.play_sfx("pop_soft", -2.0, 1.0, 1.0, 2)
+		AudioManager.haptic(30 if ranking in ["epic", "legendary"] else 16)
 
 
 func _animate_slot_exit(buff: Dictionary) -> void:
@@ -607,6 +641,8 @@ func _animate_slot_exit(buff: Dictionary) -> void:
 func _finalize_close(_buff: Dictionary) -> void:
 	_destroy_ui()
 	get_tree().paused = false
+	if has_node("/root/AudioManager"):
+		AudioManager.set_pause_muffle(false)
 	_is_picking = false
 	GameClock.resume()
 
@@ -654,8 +690,8 @@ func _destroy_ui() -> void:
 	_slot_desc_label     = null
 	_slot_rarity_label   = null
 	_slot_tradeoff_label = null
-	_slot_border_rect    = null
-	_slot_rarity_square  = null
+	_slot_panel          = null
+	_slot_rarity_key     = ""
 	_slot_pool.clear()
 
 # ══════════════════════════════════════════════════════════════
@@ -711,6 +747,72 @@ func _apply_effect_dict(effect: Dictionary, apply: bool) -> void:
 		if t_stat != "":
 			_apply_single_stat(t_stat, t_val, apply)
 
+# Stats whose buff value is a FRACTION of the stat's base value for this player (0.25 = +25%),
+# matching the card text. Every other stat is an absolute amount (+9 attack damage) or already
+# a multiplier / fraction by its own definition (attack_speed 1.0, damage_reduction 0.0).
+const PERCENT_OF_BASE_STATS : Array[String] = [
+	"move_speed", "move_acceleration", "spell_damage", "spell_range", "fireball_speed",
+	"shove_force", "kick_force", "block_knockback_force",
+	"head_bob_intensity", "react_anim_speed", "footstep_interval_seconds",
+]
+# The player's value for each percent stat the first time a buff touched it. Percentages stack
+# additively on that base (+25% and +25% = +50%) and are removed exactly when a timed buff ends.
+var _stat_base       : Dictionary = {}
+var _stat_base_owner : int        = 0
+
+
+func _percent_base(player: Node, stat_name: String) -> float:
+	var pid : int = player.get_instance_id()
+	if pid != _stat_base_owner:
+		_stat_base.clear()
+		_stat_base_owner = pid
+	if not _stat_base.has(stat_name):
+		_stat_base[stat_name] = float(player.get(stat_name))
+	return float(_stat_base[stat_name])
+
+
+# Every stat a buff or curse entry touches (main effect and tradeoff, single or multi-effect).
+func buff_stat_names(buff: Dictionary) -> Array[String]:
+	var names : Array[String] = []
+	var effects : Array = buff.get("effects", [buff]) if buff.has("effects") else [buff]
+	for effect in effects:
+		if not (effect is Dictionary):
+			continue
+		if str(effect.get("effect_type", "")) in ["stat_modifier", "on_kill", "max_health"]:
+			var st : String = str(effect.get("stat", ""))
+			if st != "":
+				names.append(st)
+		var tradeoff = effect.get("tradeoff", null)
+		if tradeoff is Dictionary and str(tradeoff.get("stat", "")) != "":
+			names.append(str(tradeoff.get("stat", "")))
+	return names
+
+
+# True when every stat the entry touches exists on `player` (a null player accepts everything).
+func buff_is_applicable(buff: Dictionary, player: Node) -> bool:
+	if player == null:
+		return true
+	for st in buff_stat_names(buff):
+		if not (st in player):
+			return false
+	return true
+
+
+# Modifier curses (data key `requires_any_positive`) only change an opt-in effect, so they are only
+# meaningful while the player holds at least one of those stats above zero. Entries without the
+# key are always usable.
+func buff_prerequisites_met(buff: Dictionary, player: Node) -> bool:
+	var needs = buff.get("requires_any_positive", [])
+	if not (needs is Array) or needs.is_empty():
+		return true
+	if player == null:
+		return false
+	for st in needs:
+		if str(st) in player and float(player.get(str(st))) > 0.0:
+			return true
+	return false
+
+
 func _apply_single_stat(stat_name: String, value: float, apply: bool) -> void:
 	var player = get_tree().get_first_node_in_group("player")
 	if player == null or not (stat_name in player):
@@ -718,7 +820,10 @@ func _apply_single_stat(stat_name: String, value: float, apply: bool) -> void:
 		return
 
 	var current_val : float = float(player.get(stat_name))
-	var change      : float = value if apply else -value
+	var amount      : float = value
+	if stat_name in PERCENT_OF_BASE_STATS:
+		amount = value * _percent_base(player, stat_name)
+	var change      : float = amount if apply else -amount
 	player.set(stat_name, current_val + change)
 
 	if stat_name == "max_health":
@@ -729,23 +834,34 @@ func _apply_single_stat(stat_name: String, value: float, apply: bool) -> void:
 			var new_max : float = float(player.get("max_health"))
 			if hp > new_max:
 				player.set("_current_health", new_max)
-			if player.has_user_signal("health_changed"):
+			if player.has_signal("health_changed"):
 				player.emit_signal("health_changed", player.get("_current_health"), new_max)
 		elif not apply:
 			var hp      = player.get("_current_health")
 			var new_max = player.get("max_health")
 			if hp > new_max:
 				player.set("_current_health", new_max)
-			if player.has_user_signal("health_changed"):
+			if player.has_signal("health_changed"):
 				player.emit_signal("health_changed", player.get("_current_health"), new_max)
 
 # ── Custom effect handlers ─────────────────────────────────
 
+# The hallucination node is shared by every source (the timed buff, each schizophrenia trap), so
+# it is reference-counted: it stays attached until the LAST source ends. Re-triggering a trap while
+# it is active therefore extends the effect instead of the first timer cutting it short.
+var _schizo_refs : int = 0
+# Bumped by reset(): a trap timer left over from a previous run must not end this run's effect.
+var _run_serial  : int = 0
+
 func _handle_schizophrenia(apply: bool) -> void:
+	if apply:
+		_schizo_refs += 1
+	else:
+		_schizo_refs = maxi(_schizo_refs - 1, 0)
 	var player = get_tree().get_first_node_in_group("player")
 	if player == null:
 		return
-	if apply:
+	if _schizo_refs > 0:
 		if player.get_node_or_null("SchizophreniaEffect") == null:
 			var s = load("res://schizophrenia_audio.gd")
 			if s:
@@ -757,15 +873,18 @@ func _handle_schizophrenia(apply: bool) -> void:
 		if existing != null:
 			existing.queue_free()
 
+
+# Schizophrenia trap: hallucinations for `seconds` of game time (pauses with the game).
+func begin_timed_schizophrenia(seconds: float) -> void:
+	_handle_schizophrenia(true)
+	var serial : int = _run_serial
+	get_tree().create_timer(seconds, false).timeout.connect(func() -> void:
+		if serial == _run_serial:
+			_handle_schizophrenia(false))
+
 # ══════════════════════════════════════════════════════════════
 #  HELPERS
 # ══════════════════════════════════════════════════════════════
-
-func _get_rarity_color(ranking: String) -> Color:
-	match ranking:
-		"rare":      return RARITY_COLOR_RARE
-		"legendary": return RARITY_COLOR_LEGENDARY
-		_:           return RARITY_COLOR_COMMON
 
 # ══════════════════════════════════════════════════════════════
 #  PUBLIC API
@@ -774,8 +893,17 @@ func _get_rarity_color(ranking: String) -> Color:
 func get_active_buffs() -> Array:
 	return _active_buffs.duplicate()
 
+func is_picking() -> bool:
+	return _is_picking
+
+
 func reset() -> void:
 	_active_buffs.clear()
+	_schizo_refs = 0
+	_run_serial += 1
+	_stat_base.clear()
+	_stat_base_owner = 0
+	_queued_picks = 0
 	if _is_picking:
 		get_tree().paused = false
 	_is_picking   = false

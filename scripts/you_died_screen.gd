@@ -1,4 +1,6 @@
 extends CanvasLayer
+
+const DungeonEntry = preload("res://scripts/dungeon_entry.gd")   # threaded dungeon load (no global class name)
 # ══════════════════════════════════════════════════════════════
 #  FILE:         you_died_screen.gd
 #  PATH:         res://scripts/you_died_screen.gd
@@ -24,7 +26,7 @@ extends CanvasLayer
 #    MENU_SCENE          — scene to load when the player presses menu
 #
 #  SURGICAL CHANGES:
-#    - Shop label: removed "✕ / " prefix — now reads "Press A to visit..."
+#    - Shop label: removed "✕ / " prefix — now reads "Press <glyph> to visit..."
 #    - Added _restart_label: "Press X to start a new run".
 #    - KEY_X moved from shop handler to quick-restart handler.
 #    - JOY_BUTTON_X added so controller X/Square button also triggers restart.
@@ -62,6 +64,8 @@ var _label           : Label     = null
 var _prompt_label    : Label     = null
 var _shop_label      : Label     = null
 var _restart_label   : Label     = null
+var _prompts         : VBoxContainer = null
+var _touch_row       : HBoxContainer = null
 var _timer           : float     = 0.0
 var _phase           : int       = 0
 var _prompt_timer    : float     = 0.0
@@ -72,7 +76,17 @@ var _exiting         : bool      = false
 var _hidden_compass  : CanvasItem = null
 
 
+# The run's numbers, read before the profile bookkeeping resets the kill counter; revealed (counted up) under the title.
+var _run_kills : int = 0
+var _run_potions : int = 0
+var _run_day : int = 1
+var _stats_label : Label = null
+
+
 func _ready() -> void:
+	_run_kills = CharacterBase.GLOBAL_KILL_COUNT
+	_run_potions = _run_kills / 50
+	_run_day = GameClock.current_day if has_node("/root/GameClock") else 1
 	if not SaveManager.current_profile.is_empty():
 		SaveManager.current_profile["death_count"] = \
 			int(SaveManager.current_profile.get("death_count", 0)) + 1
@@ -107,52 +121,115 @@ func _ready() -> void:
 
 	# ── Black overlay ──────────────────────────────────────────
 	_overlay       = ColorRect.new()
-	_overlay.color = Color(0.0, 0.0, 0.0, 0.0)
+	_overlay.color = Color(PUI.VOID, 0.0)
 	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_overlay)
 
 	# ── "YOU DIED" label ───────────────────────────────────────
-	_label      = Label.new()
-	_label.text = "YOU DIED"
-	_label.add_theme_font_size_override("font_size", 72)
-	_label.add_theme_color_override("font_color", Color(0.85, 0.1, 0.1, 0.0))
+	# Display face (Cinzel Black, the GameTitle role) in blood-bright; fade and heartbeat animate the
+	# label's modulate alpha (no theme overrides per frame).
+	_label      = PUI.label("YOU DIED", "GameTitle")
+	_label.add_theme_font_size_override("font_size", int(round(PUI.fs("game_title") * 1.5)))
+	_label.add_theme_color_override("font_color", PUI.BLOOD_BRIGHT)
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 	_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_label.offset_bottom = -float(PUI.S7 + PUI.S4)   # title sits a little above centre
+	_label.mouse_filter  = Control.MOUSE_FILTER_IGNORE
+	_label.modulate.a    = 0.0
+	PUI.adopt(_label)   # a CanvasLayer child does not inherit the root theme
 	add_child(_label)
 
-	# ── Menu prompt ────────────────────────────────────────────
-	_prompt_label      = Label.new()
-	_prompt_label.text = "Press ☰ to view character stats"
-	_prompt_label.add_theme_font_size_override("font_size", 22)
-	_prompt_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7, 0.0))
-	_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_prompt_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_prompt_label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_prompt_label.offset_top = 100.0
-	add_child(_prompt_label)
+	# ── Key prompts (desktop / controller): quiet hierarchy, glyphs from InputManager ─────────
+	_prompts = VBoxContainer.new()
+	_prompts.name = "KeyPrompts"
+	_prompts.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_prompts.anchor_top = 0.5
+	_prompts.offset_top = float(PUI.S7 + PUI.S6 + PUI.S4)   # first line starts a clear gap below the title and the stats line
+	_prompts.alignment  = BoxContainer.ALIGNMENT_BEGIN
+	_prompts.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_prompts.add_theme_constant_override("separation", PUI.S2)
+	_prompts.modulate.a = 0.0
+	PUI.adopt(_prompts)
+	add_child(_prompts)
 
-	# ── Alchemist shortcut — A/Cross only ──────────────────────
-	_shop_label = Label.new()
-	_shop_label.text = "Press A to visit the Alchemist's Lab"
-	_shop_label.add_theme_font_size_override("font_size", 20)
-	_shop_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, 0.0))
-	_shop_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_shop_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_shop_label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_shop_label.offset_top = 155.0
-	add_child(_shop_label)
+	# ── Stats line: counts up under the title once it has faded in ─────────────────────────
+	_stats_label = PUI.label("", "StatLabel")
+	_stats_label.name = "RunStats"
+	_stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_stats_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_stats_label.anchor_top = 0.5
+	_stats_label.offset_top = float(PUI.S5)
+	_stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_stats_label.modulate.a = 0.0
+	PUI.adopt(_stats_label)
+	add_child(_stats_label)
+	_reveal_stats()
 
-	# ── Quick restart — keyboard X or controller X/Square ──────
-	_restart_label = Label.new()
-	_restart_label.text = "Press X to start a new run"
-	_restart_label.add_theme_font_size_override("font_size", 20)
-	_restart_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, 0.0))
-	_restart_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_restart_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_restart_label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_restart_label.offset_top = 210.0
-	add_child(_restart_label)
+	_prompt_label = _prompt_line("Press %s to view character stats" % InputManager.glyph("ui_menu"), "MetaLabel")
+	_shop_label = _prompt_line("Press %s to visit the Alchemist's Lab" % InputManager.glyph("ui_accept"), "SecondaryLabel")
+	_restart_label = _prompt_line("Press %s to start a new run" % InputManager.glyph("restart"), "SecondaryLabel")
+
+	if TouchControls.is_touch_platform():
+		_build_touch_buttons()
+
+
+# After the title has faded in: the run's numbers appear and count up together (reduced motion: they simply appear).
+func _reveal_stats() -> void:
+	var tw : Tween = create_tween()
+	tw.tween_interval(FADE_DURATION + 0.2)
+	tw.tween_callback(_stats_label.set_modulate.bind(Color(1, 1, 1, 1)))
+	tw.tween_method(_set_stats, 0.0, 1.0, 0.9).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	if has_node("/root/AudioManager"):
+		get_tree().create_timer(FADE_DURATION + 0.2).timeout.connect(func() -> void: AudioManager.play_sfx("tick", -6.0, 0.8, 0.8, 1))
+
+
+func _set_stats(k: float) -> void:
+	_stats_label.text = "Day %d    \u00b7    Kills %d    \u00b7    +%d potions" % [
+			int(round(float(_run_day) * minf(k * 1.5, 1.0))), int(round(float(_run_kills) * k)), int(round(float(_run_potions) * k))]
+
+
+func _prompt_line(text: String, variation: String) -> Label:
+	var l := PUI.label(text, variation)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_prompts.add_child(l)
+	return l
+
+
+# Phones have no keys: the three exits are buttons that appear with the key prompts (which they replace).
+func _build_touch_buttons() -> void:
+	get_tree().call_group(TouchControls.GROUP, "set_enabled", false)
+	_prompts.hide()
+	_touch_row = HBoxContainer.new()
+	_touch_row.name = "TouchExits"
+	_touch_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_touch_row.add_theme_constant_override("separation", PUI.S5)
+	_touch_row.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	_touch_row.offset_top = -170.0
+	_touch_row.offset_bottom = -64.0
+	_touch_row.modulate.a = 0.0
+	PUI.adopt(_touch_row)
+	add_child(_touch_row)
+	# Same button family as every menu; starting over is the one primary action.
+	for spec in [["Main Menu", "menu", "secondary"], ["Alchemist's Lab", "shop", "secondary"], ["New Run", "restart", "primary"]]:
+		var b := PUI.button(spec[0], spec[2])
+		b.name = "Exit_" + spec[1]
+		b.custom_minimum_size = Vector2(300, 88)
+		b.pressed.connect(_on_touch_exit.bind(spec[1]))
+		_touch_row.add_child(b)
+
+
+func _on_touch_exit(which: String) -> void:
+	if not _can_exit or _exiting:
+		return
+	match which:
+		"menu": _leave_to(MENU_SCENE)
+		"shop": _leave_to(ALCHEMIST_SCENE)
+		"restart":
+			_exiting = true
+			_do_quick_restart()
 
 
 func _process(delta: float) -> void:
@@ -161,7 +238,7 @@ func _process(delta: float) -> void:
 	if _phase == 0:
 		var pct : float = clampf(_timer / FADE_DURATION, 0.0, 1.0)
 		_overlay.color.a = pct
-		_label.add_theme_color_override("font_color", Color(0.85, 0.1, 0.1, pct))
+		_label.modulate.a = pct
 
 		if _timer >= FADE_DURATION:
 			_phase        = 1
@@ -171,18 +248,16 @@ func _process(delta: float) -> void:
 	elif _phase == 1:
 		var pulse_raw : float = (sin(_timer * PULSE_SPEED * TAU) + 1.0) * 0.5
 		var alpha     : float = lerp(PULSE_MIN_ALPHA, PULSE_MAX_ALPHA, pulse_raw)
-		_label.add_theme_color_override("font_color", Color(0.85, 0.1, 0.1, alpha))
+		_label.modulate.a = alpha
 
 		_prompt_timer += delta
 		if _prompt_timer >= PROMPT_FADE_DELAY:
 			var prompt_pct : float = clampf(
 				(_prompt_timer - PROMPT_FADE_DELAY) / PROMPT_FADE_TIME, 0.0, 1.0
 			)
-			_prompt_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7, prompt_pct))
-			if _shop_label    != null:
-				_shop_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, prompt_pct))
-			if _restart_label != null:
-				_restart_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0, prompt_pct))
+			_prompts.modulate.a = prompt_pct
+			if _touch_row != null:
+				_touch_row.modulate.a = prompt_pct
 
 			if prompt_pct >= 1.0:
 				_can_exit = true
@@ -204,28 +279,14 @@ func _input(event: InputEvent) -> void:
 			is_menu_press = true
 
 	if is_menu_press:
-		_exiting = true
 		get_viewport().set_input_as_handled()
-		get_tree().paused = false
-		GameClock.hide_hud()
-		BuffManager.reset()
-		GlobeManager.reset()
-		PlayerWallet.hide_hud()
-		get_tree().change_scene_to_file(MENU_SCENE)
-		queue_free()
+		_leave_to(MENU_SCENE)
 		return
 
 	# ── A/Cross — Alchemist store ──────────────────────────────
 	if event.is_action_pressed("ui_accept"):
-		_exiting = true
 		get_viewport().set_input_as_handled()
-		get_tree().paused = false
-		GameClock.hide_hud()
-		BuffManager.reset()
-		GlobeManager.reset()
-		PlayerWallet.hide_hud()
-		get_tree().change_scene_to_file(ALCHEMIST_SCENE)
-		queue_free()
+		_leave_to(ALCHEMIST_SCENE)
 		return
 
 	# ── X key / X button — quick restart ──────────────────────
@@ -242,6 +303,17 @@ func _input(event: InputEvent) -> void:
 		_do_quick_restart()
 
 
+func _leave_to(scene: String) -> void:
+	_exiting = true
+	get_tree().paused = false
+	GameClock.hide_hud()
+	BuffManager.reset()
+	GlobeManager.reset()
+	PlayerWallet.hide_hud()
+	get_tree().change_scene_to_file(scene)
+	queue_free()
+
+
 func _do_quick_restart() -> void:
 	get_viewport().set_input_as_handled()
 	get_tree().paused = false
@@ -249,16 +321,15 @@ func _do_quick_restart() -> void:
 	if not SaveManager.current_profile.is_empty():
 		SaveManager.current_profile["run_count"] = \
 			int(SaveManager.current_profile.get("run_count", 0)) + 1
+		RunLifecycle.grant_starter_potion()
 		SaveManager.save_profile()
 
+	RunLifecycle.sync_run_data_from_profile()
 	var run_data := get_node_or_null("/root/GlobalRunData")
 	if run_data != null:
 		run_data.seed_hash = 0
 
-	GameClock.hide_hud()
-	BuffManager.reset()
-	GlobeManager.reset()
-	PlayerWallet.hide_hud()
+	RunLifecycle.end_run_cleanup()
 
-	get_tree().change_scene_to_file(QUICK_RESTART_SCENE)
+	DungeonEntry.start(get_tree(), QUICK_RESTART_SCENE)
 	queue_free()

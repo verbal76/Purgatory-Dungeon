@@ -139,6 +139,27 @@ data = PackedVector3Array(200, -200, 0, 200, 200, 0, -200, -200, 0, -200, 200, 0
 
 [node name="new_rectangle_4_opening" unique_id=1397440881 instance=ExtResource("1_hr3w4")]
 
+; Floor seam fix: the glb puts this row of six floor tiles 0.029865 m off the 4 m grid (centre z -16.029865, every
+; other row sits on the grid), which left a 3 cm see-through slot across the whole hall. Moved so the row overlaps
+; its neighbour by 5 mm (coplanar) instead: no slot, and no hairline from float error at large world coordinates.
+[node name="template-floor_005" parent="." index="12"]
+transform = Transform3D(0.01, 0, 0, 0, 0, -0.01, 0, 0.01, 0, -4, 0, -15.995)
+
+[node name="template-floor_006" parent="." index="13"]
+transform = Transform3D(0.01, 0, 0, 0, 0, -0.01, 0, 0.01, 0, -8, 0, -15.995)
+
+[node name="template-floor_007" parent="." index="14"]
+transform = Transform3D(0.01, 0, 0, 0, 0, -0.01, 0, 0.01, 0, -12, 0, -15.995)
+
+[node name="template-floor_004" parent="." index="29"]
+transform = Transform3D(0.01, 0, 0, 0, 0, -0.01, 0, 0.01, 0, 0, 0, -15.995)
+
+[node name="template-floor_010" parent="." index="30"]
+transform = Transform3D(0.01, 0, 0, 0, 0, -0.01, 0, 0.01, 0, 4, 0, -15.995)
+
+[node name="template-floor_011" parent="." index="31"]
+transform = Transform3D(0.01, 0, 0, 0, 0, -0.01, 0, 0.01, 0, 8, 0, -15.995)
+
 [node name="StaticBody3D" type="StaticBody3D" parent="template-corner_003" parent_id_path=PackedInt32Array(1841104906) index="0" unique_id=544032420]
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="template-corner_003/StaticBody3D" index="0" unique_id=950167499]

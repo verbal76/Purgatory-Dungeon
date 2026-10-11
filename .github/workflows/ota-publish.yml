@@ -1,0 +1,546 @@
+name: OTA publish
+
+# Publishes the game layer as a signed, IMMUTABLE over-the-air patch for the installed Android app (docs/OTA.md
+# section 11). Nothing here builds an APK, creates a "Purgatory Dungeon vN" release, moves a tag named v*, or touches Latest.
+#
+# TRANSPORT. The source repository is PUBLIC, so the releases of THIS repository are the OTA host: devices download them
+# anonymously from https://github.com/<REPO>/releases/download/<tag>/<asset> (REPO baked into scripts/boot/ota_config.gd).
+# They are created with the automatic ${{ github.token }} of this run (permission contents: write on the publish job only).
+# There is no personal access token, no second repository, no Pages site and no other host. Per OTA one immutable release
+# `ota-<channel>-<seq>` titled "Purgatory Dungeon v7.K (OTA #000001)" (never Latest: Latest is always the native
+# "Purgatory Dungeon vN" release) holds purgatory-<id>.pck, manifest.json and manifest.json.sig; one mutable PRERELEASE
+# `ota-channel-<channel>` holds latest.json (the forward-only pointer).
+#
+# AUTHORIZATION IS THE BRANCH NAME. Only a push to `ota/<channel>/<full 40-hex sha>` whose head commit IS that sha runs
+# this workflow (a moving branch name can never publish an unreviewed commit); any other `ota/**` branch fails at step 01
+# and publishes nothing. In order, each step failing closed:
+#   01 pin the SHA            02a public-repo + baked-REPO gate   02b identity (channel, seq)   02c baseline tag v<VERSION>
+#   03 native baseline (the published release + APK, read-only)
+#   04 classify vs baseline   05 runtime gate                     05b look for a VERIFIED green suite result of this exact SHA (reuse)
+#   06 full test suite on the SHA (ota-tests.yml) - run ONLY when 05b could not verify a reusable result; never skipped otherwise
+#   07 build the payload      07b app_minor from the LIVE pointer 08 build the manifest  09 signing key  10 key == embedded key  11 sign
+#   12 inspect (client code)  13 create the immutable release     14 anonymous re-download + verify
+#   15 anonymous reachability + signature with the compiled-in key 16 advance the pointer (forward only) + confirm it is live      17 receipt
+# VERSIONING (owner rule): whole numbers are real native APKs (v6, v7, v8 ...), decimals are OTAs on that APK generation. The
+# first OTA on the v7 APK runs as v7.1, the second as v7.2; v8 only ever comes from a new APK. The native version is the
+# baseline's build_info.public_version, app_minor comes from the live pointer (publish_gates.py next-minor), seq is only the
+# internal forward-only channel sequence (shown to people as #000001). Four identities, never conflated: native APK version,
+# owner-facing running version, OTA update id, native runtime id + fingerprint.
+# COST (docs/RELEASES.md "CI cost", docs/OTA.md 11a): the full suite is the expensive step (~15 billed minutes). Step 05b asks the GitHub API
+# (tools/ota/proven_suite.py) whether the same suite already passed, in this repository's ci.yml or an earlier OTA publish run, on exactly this
+# commit (head_sha, workflow path, attempt 1, completed + success on the whole required job, suite step and exact-tree attestation step). Only
+# then is step 06 skipped and the receipt says so (suite.mode = reused + the source run). Any doubt or API problem runs the suite as before.
+# Any failure before step 16 leaves nothing new visible to devices. A private source repository, a REPO that differs from this
+# repository, or a missing signing key ends in a receipt with published=false (never a failed-looking half publication).
+# TOKEN. GH_TOKEN is set only on the steps that create, upload to or clobber a release (13, 16) and on the signing-key step 09;
+# reads of published objects are anonymous on purpose (that is what a phone does). Configuration (nothing is created here):
+#   variable OTA_NATIVE_BASE_TAG  OPTIONAL. The baseline is the published release "Purgatory Dungeon v<N>" (N = VERSION at the pinned
+#                                 commit, so 7 -> tag v7, APK Purgatory-Dungeon-v7.apk). When the variable is set it must equal
+#                                 that tag, otherwise the run refuses. Nothing has to be configured by the owner.
+#   secret   OTA_SIGNING_KEY_PEM_BASE64  signing key (preferred), else the private draft release "OTA signing key (do not delete)"
+#   variable OTA_ACCEPT_GUARDED   non-empty reason to allow guarded save/settings code in the payload
+on:
+  push:
+    branches:
+      - 'ota/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ota-publish          # one publication at a time: sequence numbers are allocated inside the run
+  cancel-in-progress: false   # never cancel a publication half way
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  OTA_NATIVE_BASE_TAG_OVERRIDE: ${{ vars.OTA_NATIVE_BASE_TAG }}   # optional; must equal v$(cat VERSION) when set (step 02c)
+  OTA_ACCEPT_GUARDED: ${{ vars.OTA_ACCEPT_GUARDED }}
+
+jobs:
+  # ------------------------------------------------------------------------------------------------ steps 01-05
+  prepare:
+    name: Pin, identity, classify, runtime gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15   # typical: 1 minute
+    permissions:
+      contents: read
+      actions: read   # read-only: 05b lists earlier runs and their jobs
+    outputs:
+      proceed: ${{ steps.repo.outputs.ok }}
+      suite_reuse: ${{ steps.suite.outputs.reuse }}
+      suite_source_url: ${{ steps.suite.outputs.source_run_url }}
+      native_apk_sha256: ${{ steps.base.outputs.native_apk_sha256 }}
+      channel: ${{ steps.pin.outputs.channel }}
+      sha: ${{ steps.pin.outputs.sha }}
+      seq: ${{ steps.ident.outputs.seq }}
+      ota_id: ${{ steps.ident.outputs.ota_id }}
+      tag: ${{ steps.ident.outputs.tag }}
+      base_sha: ${{ steps.base.outputs.base_sha }}
+      runtime_id: ${{ steps.base.outputs.runtime_id }}
+      runtime_fingerprint: ${{ steps.base.outputs.runtime_fingerprint }}
+      native_version: ${{ steps.base.outputs.native_version }}
+      native_tag: ${{ steps.nbt.outputs.tag }}
+    env:
+      DL_BASE: https://github.com/${{ github.repository }}/releases/download
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the native baseline commit (and the release tags) must be resolvable
+          persist-credentials: false
+
+      - name: 01 Pin the exact commit (branch must be ota/<channel>/<40-hex sha> and github.sha must equal it)
+        id: pin
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          python3 tools/ota/publish_gates.py parse-branch "$REF_NAME" "$EVENT_SHA" | tee -a "$GITHUB_OUTPUT"
+          test "$(git rev-parse HEAD)" = "$EVENT_SHA" || { echo "::error::the checkout is not the pushed commit"; exit 1; }
+
+      - name: 02a Gate the host (this repository must be PUBLIC, read anonymously, and equal REPO in ota_config.gd)
+        id: repo
+        run: |
+          # no Authorization header: this is exactly what a phone sees
+          python3 tools/ota/publish_gates.py repo-gate --repo "$GITHUB_REPOSITORY" --config scripts/boot/ota_config.gd | tee repo.out
+          cat repo.out >> "$GITHUB_OUTPUT"
+          if grep -q '^ok=0' repo.out; then
+            echo "::warning::NOT PUBLISHING ($(sed -n 's/^reason=//p' repo.out))"
+          fi
+
+      - name: 02b Resolve identity (seq = highest published ota-<channel>-NNNNNN + 1, never reused)
+        id: ident
+        if: steps.repo.outputs.ok == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}   # read-only here (job permission is contents: read)
+          CHANNEL: ${{ steps.pin.outputs.channel }}
+        run: |
+          { gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name'; git tag -l 'ota-*'; } > tags.txt
+          seq="$(python3 tools/ota/publish_gates.py next-seq "$CHANNEL" < tags.txt)"
+          id="$(printf '%s-%06d' "$CHANNEL" "$seq")"
+          {
+            echo "seq=$seq"
+            echo "ota_id=$id"
+            echo "tag=ota-$id"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing $id from ${GITHUB_SHA} to $GITHUB_REPOSITORY"
+
+      - name: 02c Native baseline tag (v<VERSION> of the pinned commit; OTA_NATIVE_BASE_TAG is optional and must agree)
+        id: nbt
+        if: steps.repo.outputs.ok == '1'
+        run: |
+          python3 tools/ota/publish_gates.py base-tag --version-file VERSION --var "$OTA_NATIVE_BASE_TAG_OVERRIDE" | tee nbt.out
+          cat nbt.out >> "$GITHUB_OUTPUT"
+          echo "OTA_NATIVE_BASE_TAG=$(sed -n 's/^tag=//p' nbt.out)" >> "$GITHUB_ENV"
+          echo "NATIVE_NUMBER=$(sed -n 's/^version=//p' nbt.out)" >> "$GITHUB_ENV"
+
+      - name: 03 Native baseline (the published release Purgatory Dungeon v<N> and its APK, downloaded anonymously)
+        id: base
+        if: steps.repo.outputs.ok == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}   # read-only here (job permission is contents: read): release metadata only
+          CHANNEL: ${{ steps.pin.outputs.channel }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/native"
+          apk="Purgatory-Dungeon-${OTA_NATIVE_BASE_TAG}.apk"
+          # a draft, a prerelease, a wrong title or a missing APK stops here (nothing is published)
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$OTA_NATIVE_BASE_TAG" > "$RUNNER_TEMP/native/release.json"
+          python3 tools/ota/publish_gates.py native-release --json "$RUNNER_TEMP/native/release.json" --tag "$OTA_NATIVE_BASE_TAG"
+          # the bytes are fetched exactly like a phone would: no token
+          curl -fsSL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/native/$apk" "$DL_BASE/$OTA_NATIVE_BASE_TAG/$apk"
+          # the publish job downloads the APK again for the byte comparison and must get EXACTLY these bytes (checked there)
+          echo "native_apk_sha256=$(sha256sum "$RUNNER_TEMP/native/$apk" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          python3 tools/ota/native_check.py extract --platform android --native "$RUNNER_TEMP/native/$apk" \
+            --path build_info.json --out "$RUNNER_TEMP/native/build_info.json"
+          python3 tools/ota/publish_gates.py baseline "$RUNNER_TEMP/native/build_info.json" --channel "$CHANNEL" \
+            --expect-native-version "$NATIVE_NUMBER" | tee -a "$GITHUB_OUTPUT"
+          tagged="$(git rev-parse --verify --quiet "refs/tags/${OTA_NATIVE_BASE_TAG}^{commit}" || true)"
+          built="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$RUNNER_TEMP/native/build_info.json")"
+          if [ -n "$tagged" ] && [ "$tagged" != "$built" ]; then
+            echo "::warning::tag $OTA_NATIVE_BASE_TAG points at $tagged but the shipped APK was built from $built; the APK is the baseline"
+          fi
+
+      - name: 04 Classify against the native baseline (APK-required or guarded stops here)
+        if: steps.repo.outputs.ok == '1'
+        env:
+          BASE_SHA: ${{ steps.base.outputs.base_sha }}
+        run: |
+          rc=0
+          python3 tools/ota/classify.py "$BASE_SHA" "$GITHUB_SHA" ${OTA_ACCEPT_GUARDED:+--accept-guarded "$OTA_ACCEPT_GUARDED"} || rc=$?
+          if [ "$rc" -eq 10 ]; then echo "::error::this change set needs a new APK (native boundary touched); nothing is published"; fi
+          if [ "$rc" -eq 11 ]; then echo "::error::guarded save/settings code changed; set OTA_ACCEPT_GUARDED to a reason to allow it"; fi
+          exit "$rc"
+
+      - name: 05 Runtime gate (ota_runtime.py --check, and this commit's fingerprint == the baseline's)
+        if: steps.repo.outputs.ok == '1'
+        run: |
+          python3 tools/ota_runtime.py --check
+          python3 tools/ota_runtime.py --print --json > "$RUNNER_TEMP/runtime.json"
+          python3 tools/ota/publish_gates.py same-runtime --baseline "$RUNNER_TEMP/native/build_info.json" --current "$RUNNER_TEMP/runtime.json"
+
+      - name: 05b Look for a VERIFIED green suite result of this exact SHA (reuse it, else step 06 runs the suite)
+        id: suite
+        if: steps.repo.outputs.ok == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}   # read-only here (job permissions: contents + actions read): lists runs and jobs of this repository
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: |
+          # never fails the job: no proof (or any doubt, or an API problem) simply means reuse=0 and the suite runs in step 06
+          python3 tools/ota/proven_suite.py find --repo "$GITHUB_REPOSITORY" --sha "$SHA" --run-id "$GITHUB_RUN_ID" > suite.out || echo "reuse=0" > suite.out
+          cat suite.out
+          grep -E '^(reuse|reason|source_run_url)=' suite.out >> "$GITHUB_OUTPUT" || echo "reuse=0" >> "$GITHUB_OUTPUT"
+          if grep -qx 'reuse=1' suite.out; then
+            echo "::notice::step 06 is skipped: the suite already passed on exactly this commit ($(sed -n 's/^source_run_url=//p' suite.out))"
+          else
+            echo "::notice::the full suite runs in step 06 ($(sed -n 's/^reason=//p' suite.out | cut -c1-300))"
+          fi
+
+      - name: Receipt (prepare stage; written when nothing could be published)
+        if: ${{ always() && (failure() || steps.repo.outputs.ok == '0') }}
+        env:
+          REASON: ${{ steps.repo.outputs.reason || 'a pre-publication gate failed (see the failed step)' }}
+          CHANNEL: ${{ steps.pin.outputs.channel }}
+        run: |
+          mkdir -p receipt
+          python3 tools/ota/publish_gates.py receipt --out receipt/receipt.json --published 0 --reason "$REASON" \
+            --channel "$CHANNEL" --source-sha "$GITHUB_SHA" --native-base-tag "${OTA_NATIVE_BASE_TAG:-}" \
+            --run-id "$GITHUB_RUN_ID" --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null || true
+          { echo "## OTA publication receipt (prepare stage)"; echo '```json'; cat receipt/receipt.json 2>/dev/null || echo '{}'; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the prepare-stage receipt
+        if: ${{ always() && (failure() || steps.repo.outputs.ok == '0') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ota-receipt-prepare-${{ github.run_id }}
+          path: receipt/receipt.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ------------------------------------------------------------------------------------------------ step 06
+  tests:
+    name: Full test suite on the exact SHA
+    needs: prepare
+    # skipped ONLY when step 05b verified an earlier green result of the same suite on exactly this commit
+    if: needs.prepare.outputs.proceed == '1' && needs.prepare.outputs.suite_reuse != '1'
+    uses: ./.github/workflows/ota-tests.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+
+  # ------------------------------------------------------------------------------------------------ steps 07-17
+  publish:
+    name: Build, sign, publish, verify, advance the pointer
+    needs: [prepare, tests]
+    # !cancelled() lets the job run when the tests job was SKIPPED (verified reuse); every other path needs prepare AND the suite to have succeeded
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.proceed == '1' && (needs.tests.result == 'success' || (needs.tests.result == 'skipped' && needs.prepare.outputs.suite_reuse == '1')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45   # typical: 5-12 minutes (a hung step must not bill the default 6 hours)
+    permissions:
+      contents: write   # the ONLY job with write access: creates the ota-* releases of this repository and uploads latest.json
+    env:
+      CHANNEL: ${{ needs.prepare.outputs.channel }}
+      SHA: ${{ needs.prepare.outputs.sha }}
+      SEQ: ${{ needs.prepare.outputs.seq }}
+      OTA_ID: ${{ needs.prepare.outputs.ota_id }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+      RUNTIME_ID: ${{ needs.prepare.outputs.runtime_id }}
+      RUNTIME_FINGERPRINT: ${{ needs.prepare.outputs.runtime_fingerprint }}
+      NATIVE_VERSION: ${{ needs.prepare.outputs.native_version }}
+      OTA_NATIVE_BASE_TAG: ${{ needs.prepare.outputs.native_tag }}
+      NATIVE_APK_SHA256: ${{ needs.prepare.outputs.native_apk_sha256 }}
+      SUITE_MODE: ${{ needs.tests.result == 'success' && 'own-run' || (needs.prepare.outputs.suite_reuse == '1' && 'reused' || '') }}
+      SUITE_SOURCE_URL: ${{ needs.prepare.outputs.suite_source_url }}
+      DL_BASE: https://github.com/${{ github.repository }}/releases/download
+      OUT: ${{ github.workspace }}/ota-out
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Exact commit
+        run: |
+          test "$(git rev-parse HEAD)" = "$SHA" && test "$SHA" = "$GITHUB_SHA" || { echo "::error::checkout is not the pinned commit"; exit 1; }
+          echo "OTA_STAGE=pin" >> "$GITHUB_ENV"
+
+      - name: Engine version of the runtime (ci.yml GODOT_RELEASE via ota/boundary.json)
+        id: engine
+        run: |
+          ver="$(python3 tools/ota_runtime.py --engine)"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "release=${ver}-stable" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Godot editor + Android export templates
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ steps.engine.outputs.release }}-android-templates-v1
+
+      - name: Install Godot ${{ steps.engine.outputs.release }} + Android templates
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        env:
+          GODOT_RELEASE: ${{ steps.engine.outputs.release }}
+          GODOT_VERSION: ${{ steps.engine.outputs.version }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}"
+          mkdir -p ~/godot-bin && cd ~/godot-bin
+          curl -fsSL -O "${base}/SHA512-SUMS.txt"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          grep -E "Godot_v${GODOT_RELEASE}_(linux.x86_64.zip|export_templates.tpz)$" SHA512-SUMS.txt | sha512sum -c -
+          unzip -q "Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          tpl="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$tpl"
+          unzip -q "Godot_v${GODOT_RELEASE}_export_templates.tpz" 'templates/android_*' 'templates/version.txt' -d tmp
+          mv tmp/templates/* "$tpl"/
+          rm -rf tmp *.zip *.tpz
+
+      - name: Locate and verify Godot
+        env:
+          GODOT_RELEASE: ${{ steps.engine.outputs.release }}
+          GODOT_VERSION: ${{ steps.engine.outputs.version }}
+        run: |
+          echo "GODOT=$HOME/godot-bin/Godot_v${GODOT_RELEASE}_linux.x86_64" >> "$GITHUB_ENV"
+          "$HOME/godot-bin/Godot_v${GODOT_RELEASE}_linux.x86_64" --version | grep -q "^${GODOT_VERSION}.stable"
+
+      - name: 03b Native baseline APK again (for the byte comparison; anonymous download of the public release)
+        run: |
+          mkdir -p "$RUNNER_TEMP/native"
+          apk="Purgatory-Dungeon-${OTA_NATIVE_BASE_TAG}.apk"
+          curl -fsSL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/native/$apk" "$DL_BASE/$OTA_NATIVE_BASE_TAG/$apk"
+          # the baseline the gates of the prepare job validated and the baseline the payload is compared with are the SAME bytes
+          test -n "$NATIVE_APK_SHA256" && test "$(sha256sum "$RUNNER_TEMP/native/$apk" | cut -d' ' -f1)" = "$NATIVE_APK_SHA256" \
+            || { echo "::error::the baseline APK changed between the prepare job and the publish job"; exit 1; }
+          python3 tools/ota/native_check.py extract --platform android --native "$RUNNER_TEMP/native/$apk" \
+            --path build_info.json --out "$RUNNER_TEMP/native/build_info.json"
+          python3 tools/ota/publish_gates.py baseline "$RUNNER_TEMP/native/build_info.json" --channel "$CHANNEL" > /dev/null
+          echo "NATIVE_APK=$RUNNER_TEMP/native/$apk" >> "$GITHUB_ENV"
+          echo "BASELINE_INFO=$RUNNER_TEMP/native/build_info.json" >> "$GITHUB_ENV"
+
+      - name: 07 Build the payload (baseline pack from base_source_sha, byte comparison with the shipped APK, cumulative patch)
+        run: |
+          echo "OTA_STAGE=payload" >> "$GITHUB_ENV"
+          tools/ota_build_payload.sh --godot "$GODOT" --base-sha "$BASE_SHA" --head-sha "$SHA" --native-artifact "$NATIVE_APK" \
+            --native-platform android --out "$OUT/payload" ${OTA_ACCEPT_GUARDED:+--accept-guarded "$OTA_ACCEPT_GUARDED"}
+          if [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["git_host_guard_exceeded"])' "$OUT/payload/payload_report.json")" = "True" ]; then
+            echo "::warning::the payload exceeds the 95 MiB git-host guard: fine for release assets, not mirrorable to a git repository"
+          fi
+          cp "$OUT/payload/payload.pck" "$OUT/purgatory-$OTA_ID.pck"
+
+      - name: 07b Assign app_minor from the LIVE pointer (same native generation -> pointer minor + 1, else 1; v7.1, v7.2 ...)
+        id: minor
+        run: |
+          echo "OTA_STAGE=minor" >> "$GITHUB_ENV"
+          rm -rf "$RUNNER_TEMP/livepointer"; mkdir -p "$RUNNER_TEMP/livepointer"
+          # anonymous, cache-busted read of the live pointer (what a device would see); 404 = no pointer yet
+          python3 tools/ota/publish_gates.py fetch-pointer --url "$DL_BASE/ota-channel-$CHANNEL/latest.json" --out "$RUNNER_TEMP/livepointer/latest.json"
+          python3 tools/ota/publish_gates.py next-minor --native-version "$NATIVE_VERSION" --new-seq "$SEQ" \
+            --current "$RUNNER_TEMP/livepointer/latest.json" | tee "$RUNNER_TEMP/minor.out"
+          echo "APP_MINOR=$(sed -n 's/^app_minor=//p' "$RUNNER_TEMP/minor.out")" >> "$GITHUB_ENV"
+          echo "OWNER_VERSION=$(sed -n 's/^owner_version=//p' "$RUNNER_TEMP/minor.out")" >> "$GITHUB_ENV"
+
+      - name: 08 Build the manifest (client schema 1)
+        run: |
+          echo "OTA_STAGE=manifest" >> "$GITHUB_ENV"
+          python3 tools/ota/tool_project.py "$RUNNER_TEMP/toolproj" --godot "$GODOT"
+          PCK_URL="$DL_BASE/$TAG/purgatory-$OTA_ID.pck"
+          "$GODOT" --headless --path "$RUNNER_TEMP/toolproj" -s res://tools/ota_make_manifest.gd -- \
+            pck="$OUT/purgatory-$OTA_ID.pck" out="$OUT/manifest.json" seq="$SEQ" app_minor="$APP_MINOR" sha="$SHA" base_sha="$BASE_SHA" url="$PCK_URL" \
+            channel="$CHANNEL" platform=android files="$OUT/payload/files.json" build_info="$BASELINE_INFO" \
+            run_id="$GITHUB_RUN_ID" run_number="$GITHUB_RUN_NUMBER" run_attempt="$GITHUB_RUN_ATTEMPT" \
+            run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" | tee "$OUT/manifest.log"
+          grep -q '^MANIFEST OK' "$OUT/manifest.log"
+          cat "$OUT/manifest.json"
+
+      - name: 09 Signing key (secret OTA_SIGNING_KEY_PEM_BASE64, else the private draft release; never created here)
+        id: key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OTA_SIGNING_KEY_PEM_BASE64: ${{ secrets.OTA_SIGNING_KEY_PEM_BASE64 }}
+          OTA_KEYS_NO_CREATE: "1"
+        run: |
+          echo "OTA_STAGE=key" >> "$GITHUB_ENV"
+          # Presence is reported, the value never is. keys.sh runs in a subshell so a missing key ends in published=false, not a crash.
+          if ( source tools/ota/keys.sh --no-create "$RUNNER_TEMP/ota_pub.pem" ); then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::no OTA signing key is available (secret OTA_SIGNING_KEY_PEM_BASE64 or the private draft release): NOT PUBLISHING"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "OTA_NOT_PUBLISHED_REASON=no OTA signing key is available" >> "$GITHUB_ENV"
+          fi
+
+      - name: 10 The key's public half must equal PUBLIC_KEY_PEM in scripts/boot/ota_config.gd
+        if: steps.key.outputs.ok == 'true'
+        run: python3 tools/ota/publish_gates.py key-match --key "$OTA_PRIVATE_KEY_PATH" --config scripts/boot/ota_config.gd
+
+      - name: 11 Sign (RSA SHA-256 PKCS#1 v1.5 over the exact manifest bytes)
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          echo "OTA_STAGE=sign" >> "$GITHUB_ENV"
+          openssl dgst -sha256 -sign "$OTA_PRIVATE_KEY_PATH" -out "$RUNNER_TEMP/manifest.sig.bin" "$OUT/manifest.json"
+          base64 -w0 "$RUNNER_TEMP/manifest.sig.bin" > "$OUT/manifest.json.sig"
+          shred -u "$RUNNER_TEMP/manifest.sig.bin" "$OTA_PRIVATE_KEY_PATH" 2>/dev/null || rm -f "$RUNNER_TEMP/manifest.sig.bin" "$OTA_PRIVATE_KEY_PATH"
+          test -s "$OUT/manifest.json.sig"
+
+      - name: 12 Inspect with the client's own verification code (signature, runtime, package, files[], protected paths, version)
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          echo "OTA_STAGE=inspect" >> "$GITHUB_ENV"
+          "$GODOT" --headless --path "$RUNNER_TEMP/toolproj" -s res://tools/ota_inspect_pack.gd -- manifest="$OUT/manifest.json" \
+            sig="$OUT/manifest.json.sig" pck="$OUT/purgatory-$OTA_ID.pck" build_info="$BASELINE_INFO" files="$OUT/payload/files.json" \
+            expect_source_sha="$SHA" expect_minor="$APP_MINOR" platform=android | tee "$OUT/inspect.log"
+          grep -q '^INSPECT OK' "$OUT/inspect.log"
+
+      - name: 13 Create the immutable release ota-<channel>-<seq> (aborts if the tag exists; never Latest)
+        if: steps.key.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}   # creates the release (contents: write on this job only)
+        run: |
+          echo "OTA_STAGE=release" >> "$GITHUB_ENV"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::$TAG already exists in $GITHUB_REPOSITORY; OTA releases are immutable and sequence numbers are never reused"; exit 1
+          fi
+          title="Purgatory Dungeon ${OWNER_VERSION} (OTA #$(printf '%06d' "$SEQ"))"
+          printf '%s\n' "# $title" "" \
+            "Nothing to download: the Purgatory Dungeon Android app installs this update by itself." "" \
+            "Native APK: v${NATIVE_VERSION}" \
+            "Owner-facing running version: ${OWNER_VERSION}" \
+            "OTA update id: #$(printf '%06d' "$SEQ")" \
+            "Native runtime: ${RUNTIME_ID} / ${RUNTIME_FINGERPRINT}" "" \
+            "---" "Technical provenance (engineers only):" \
+            "- OTA id: $OTA_ID (channel $CHANNEL), immutable" \
+            "- Source commit: $SHA" "- Native baseline commit: $BASE_SHA ($OTA_NATIVE_BASE_TAG)" \
+            "- Built by run $GITHUB_RUN_ID" > "$RUNNER_TEMP/notes.md"
+          # transport-neutral gates on exactly what is about to be published (tools/ota/artifact_gates.py)
+          set -- "$OUT/purgatory-$OTA_ID.pck" "$OUT/manifest.json" "$OUT/manifest.json.sig"
+          python3 tools/ota/artifact_gates.py check-names "$@" --channel "$CHANNEL" --seq "$SEQ"
+          python3 tools/ota/artifact_gates.py scan-secrets "$OUT/manifest.json" "$OUT/manifest.json.sig" "$RUNNER_TEMP/notes.md" --pck "$OUT/purgatory-$OTA_ID.pck"
+          python3 tools/ota/artifact_gates.py immutable --base-url "$DL_BASE/$TAG" "$@"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" --latest=false --title "$title" --notes-file "$RUNNER_TEMP/notes.md" \
+            "$OUT/purgatory-$OTA_ID.pck" "$OUT/manifest.json" "$OUT/manifest.json.sig"
+          echo "OTA_RELEASE_CREATED=1" >> "$GITHUB_ENV"
+
+      - name: 14 Re-download the published objects ANONYMOUSLY and verify them again
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          echo "OTA_STAGE=verify" >> "$GITHUB_ENV"
+          mkdir -p "$OUT/dl"
+          for f in "purgatory-$OTA_ID.pck" manifest.json manifest.json.sig; do
+            python3 tools/ota/artifact_gates.py download --url "$DL_BASE/$TAG/$f" --out "$OUT/dl/$f"
+          done
+          cmp "$OUT/manifest.json" "$OUT/dl/manifest.json"
+          cmp "$OUT/manifest.json.sig" "$OUT/dl/manifest.json.sig"
+          cmp "$OUT/purgatory-$OTA_ID.pck" "$OUT/dl/purgatory-$OTA_ID.pck"
+          test "$(sha256sum "$OUT/dl/purgatory-$OTA_ID.pck" | cut -d' ' -f1)" = "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pck_sha256"])' "$OUT/dl/manifest.json")"
+          "$GODOT" --headless --path "$RUNNER_TEMP/toolproj" -s res://tools/ota_inspect_pack.gd -- manifest="$OUT/dl/manifest.json" \
+            sig="$OUT/dl/manifest.json.sig" pck="$OUT/dl/purgatory-$OTA_ID.pck" build_info="$BASELINE_INFO" files="$OUT/payload/files.json" \
+            expect_source_sha="$SHA" expect_minor="$APP_MINOR" platform=android | tee "$OUT/inspect_dl.log"
+          grep -q '^INSPECT OK' "$OUT/inspect_dl.log"
+
+      - name: 15 Verify the published objects are ANONYMOUSLY reachable (checked before the pointer moves)
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          echo "OTA_STAGE=anonymous" >> "$GITHUB_ENV"
+          base="$DL_BASE/$TAG"
+          # no token on this step and no Authorization header: the gates use urllib without credentials
+          python3 tools/ota/publish_gates.py check-anonymous \
+            --expect "$base/purgatory-$OTA_ID.pck=$(sha256sum "$OUT/purgatory-$OTA_ID.pck" | cut -d' ' -f1):$(stat -c %s "$OUT/purgatory-$OTA_ID.pck")" \
+            --expect "$base/manifest.json=$(sha256sum "$OUT/manifest.json" | cut -d' ' -f1):$(stat -c %s "$OUT/manifest.json")" \
+            --expect "$base/manifest.json.sig=$(sha256sum "$OUT/manifest.json.sig" | cut -d' ' -f1):$(stat -c %s "$OUT/manifest.json.sig")"
+          # size + SHA-256 again, plus the manifest signature with the public key compiled into the app and pck_size/pck_sha256 vs the downloaded pack
+          python3 tools/ota/artifact_gates.py verify-anonymous \
+            --base-url "$base" --config scripts/boot/ota_config.gd "$OUT/purgatory-$OTA_ID.pck" "$OUT/manifest.json" "$OUT/manifest.json.sig"
+          echo "OTA_ANON_ARTIFACTS=1" >> "$GITHUB_ENV"
+
+      - name: 16 Advance the channel pointer (forward only, prerelease, never Latest) and confirm it is live
+        if: steps.key.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}   # creates the pointer prerelease once and clobbers latest.json (contents: write on this job only)
+        run: |
+          echo "OTA_STAGE=pointer" >> "$GITHUB_ENV"
+          PTAG="ota-channel-$CHANNEL"
+          base="$DL_BASE"
+          if ! gh release view "$PTAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$PTAG" --repo "$GITHUB_REPOSITORY" --prerelease --latest=false --title "OTA channel pointer: $CHANNEL" \
+              --notes "Mutable pointer (latest.json) to the newest immutable $CHANNEL OTA. Moves forward only. Do not delete."
+          fi
+          cur=none
+          rm -rf "$RUNNER_TEMP/cur"; mkdir -p "$RUNNER_TEMP/cur"
+          if gh release download "$PTAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir "$RUNNER_TEMP/cur" 2>/dev/null; then
+            cur="$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["seq"]))' "$RUNNER_TEMP/cur/latest.json")"
+          fi
+          python3 tools/ota/publish_gates.py pointer-decision --current-seq "$cur" --new-seq "$SEQ"
+          # the minor was assigned before the manifest was signed; the live pointer must still give the same answer (never two OTAs of one native generation with one minor)
+          python3 tools/ota/publish_gates.py next-minor --native-version "$NATIVE_VERSION" --new-seq "$SEQ" \
+            --current "$RUNNER_TEMP/cur/latest.json" | grep -qx "app_minor=$APP_MINOR" || { echo "::error::the live pointer changed since app_minor $APP_MINOR was assigned"; exit 1; }
+          python3 tools/ota/publish_gates.py make-pointer --channel "$CHANNEL" --ota-id "$OTA_ID" --seq "$SEQ" --runtime-id "$RUNTIME_ID" \
+            --native-version "$NATIVE_VERSION" --app-minor "$APP_MINOR" \
+            --manifest-url "$base/$TAG/manifest.json" --signature-url "$base/$TAG/manifest.json.sig" --out "$OUT/latest.json"
+          python3 tools/ota/artifact_gates.py check-names "$OUT/latest.json"
+          python3 tools/ota/artifact_gates.py scan-secrets "$OUT/latest.json"
+          gh release upload "$PTAG" "$OUT/latest.json" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "OTA_POINTER_UPLOADED=1" >> "$GITHUB_ENV"
+          env -u GH_TOKEN -u GITHUB_TOKEN python3 tools/ota/publish_gates.py pointer-confirm \
+            --url "$base/$PTAG/latest.json" --channel "$CHANNEL" --expect-id "$OTA_ID" --expect-minor "$APP_MINOR"
+          echo "OTA_ANON_POINTER=1" >> "$GITHUB_ENV"
+          echo "OTA_POINTER_MOVED=1" >> "$GITHUB_ENV"
+          echo "OTA_STAGE=done" >> "$GITHUB_ENV"
+
+      - name: 17 Publication receipt (JSON in the job summary and as an artifact)
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$OUT/receipt"
+          published=0; moved=0; created=0
+          [ "${OTA_RELEASE_CREATED:-}" = "1" ] && created=1
+          [ "${OTA_POINTER_MOVED:-}" = "1" ] && moved=1
+          anon=0
+          [ "${OTA_ANON_ARTIFACTS:-}" = "1" ] && [ "${OTA_ANON_POINTER:-}" = "1" ] && anon=1
+          [ "$JOB_STATUS" = "success" ] && [ "$moved" = "1" ] && published=1
+          reason="${OTA_NOT_PUBLISHED_REASON:-}"
+          if [ "$published" = "0" ] && [ -z "$reason" ]; then reason="the publication did not complete (job $JOB_STATUS, stage ${OTA_STAGE:-start})"; fi
+          base="$DL_BASE"
+          sha_of() { [ -f "$1" ] && sha256sum "$1" | cut -d' ' -f1 || true; }
+          args=(--out "$OUT/receipt/receipt.json" --published "$published" --pointer-moved "$moved" --release-created "$created"
+                --channel "$CHANNEL" --ota-id "$OTA_ID" --seq "$SEQ" --native-version "$NATIVE_VERSION" --app-minor "${APP_MINOR:-0}" --source-sha "$SHA" --base-source-sha "$BASE_SHA"
+                --native-base-tag "$OTA_NATIVE_BASE_TAG" --runtime-id "$RUNTIME_ID" --runtime-fingerprint "$RUNTIME_FINGERPRINT"
+                --release-host "$GITHUB_REPOSITORY" --base-url "$base/$TAG" --anonymous-read-verified "$anon" --run-id "$GITHUB_RUN_ID" --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+                --pck-url "$base/$TAG/purgatory-$OTA_ID.pck" --manifest-url "$base/$TAG/manifest.json"
+                --signature-url "$base/$TAG/manifest.json.sig" --pointer-url "$base/ota-channel-$CHANNEL/latest.json")
+          [ -z "$reason" ] || args+=(--reason "$reason")
+          suite_url="$SUITE_SOURCE_URL"
+          [ "$SUITE_MODE" = "own-run" ] && suite_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          [ -z "$SUITE_MODE" ] || args+=(--suite-mode "$SUITE_MODE" --suite-run-url "$suite_url")
+          p="$(sha_of "$OUT/purgatory-$OTA_ID.pck")"; [ -z "$p" ] || args+=(--pck-sha256 "$p" --pck-size "$(stat -c %s "$OUT/purgatory-$OTA_ID.pck")")
+          m="$(sha_of "$OUT/manifest.json")"; [ -z "$m" ] || args+=(--manifest-sha256 "$m")
+          s="$(sha_of "$OUT/manifest.json.sig")"; [ -z "$s" ] || args+=(--signature-sha256 "$s")
+          python3 tools/ota/publish_gates.py receipt "${args[@]}"
+          python3 tools/ota/publish_gates.py summary "$OUT/receipt/receipt.json" > "$OUT/receipt/summary.txt"
+          { echo "## OTA publication receipt"; echo ""; sed 's/$/  /' "$OUT/receipt/summary.txt"; echo ""; echo '```json'; cat "$OUT/receipt/receipt.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the receipt (never the key; the large pack is already a release asset)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ota-receipt-${{ needs.prepare.outputs.ota_id }}
+          path: |
+            ota-out/receipt/receipt.json
+            ota-out/receipt/summary.txt
+            ota-out/manifest.json
+            ota-out/manifest.json.sig
+            ota-out/latest.json
+            ota-out/payload/files.json
+            ota-out/payload/payload_report.json
+            ota-out/payload/classify.json
+          if-no-files-found: ignore
+          retention-days: 14   # the receipt is also in the job summary; the pack itself is a release asset

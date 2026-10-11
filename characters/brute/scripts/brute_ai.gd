@@ -87,6 +87,11 @@ var death_sound : AudioStream = preload("res://Music & background images/Sound E
 
 const FLASH_DURATION : float = 0.12
 
+# A flinch (a hit landing on the enemy mid-attack) CANCELS that attack: before, the animation showed the stagger while the blow
+# still landed half a second later. One switch, so the old behaviour is a one-word revert.
+const CANCEL_ATTACK_ON_FLINCH : bool = true
+var _attack_token : int = 0   # bumped when an in-flight attack is cancelled; every await in an attack re-checks it
+
 # ── Potion drop tuning ─────────────────────────────────────────────────────────
 # All three values are plain constants so they're easy to find and tweak.
 const POTION_DROP_BASE_PCT     : int = 6  # Base % chance per kill          (was 10)
@@ -272,22 +277,20 @@ func _update_los(player: Node3D, delta: float) -> void:
 	_los_query.from    = start
 	_los_query.to      = end
 
-	var result := space.intersect_ray(_los_query)
-	
-	if result.is_empty() or result.get("collider") == player:
+	# Line of sight is blocked by level geometry only. Allies, props and chests between
+	# the brute and the player used to cut sight (the old ally branch set false in both
+	# arms), dropping crowds of brutes to waypoint pathing with a clear view.
+	var player_rid : Array[RID] = []
+	if player is CollisionObject3D:
+		player_rid.append(player.get_rid())
+	var result := PhysicsUtil.ray_world(space, _los_query, player_rid)
+
+	if result.is_empty():
 		if not _has_los:
 			_approach_boost = false   # First sighting — drop the approach speed bonus
 		_has_los = true
 	else:
-		var col = result.get("collider")
-		if col != null and col.is_in_group("enemy"):
-			var ally_speed : float = col.velocity.length() if "velocity" in col else 0.0
-			if ally_speed < 1.5:
-				_has_los = false
-			else:
-				_has_los = false
-		else:
-			_has_los = false
+		_has_los = false
 
 
 func _update_nav_target(player_pos: Vector3, _delta: float) -> void:
@@ -349,6 +352,7 @@ func take_damage(amount: float, _source: Node = null) -> void:
 	_last_damage_source = _source   # Required for kill-credit in _trigger_death()
 	_current_health -= amount
 	health_changed.emit(_current_health, max_health)
+	_juice_enemy_hit(amount, _source)
 	if _current_health <= 0:
 		_trigger_death()
 	else:
@@ -356,7 +360,14 @@ func take_damage(amount: float, _source: Node = null) -> void:
 
 
 func _play_hit_react() -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	if anim_player == null: return
+	if CANCEL_ATTACK_ON_FLINCH and (_is_attacking or _is_kicking_ai):
+		_attack_token += 1
+		_attack_cooldown_timer = maxf(_attack_cooldown_timer, attack_cooldown)
+		if _is_kicking_ai:
+			_kick_cooldown_timer = maxf(_kick_cooldown_timer, enemy_kick_cooldown * 0.5)
+		_is_kicking_ai = false
 	_is_reacting  = true
 	_is_attacking = false
 	velocity.x    = 0.0
@@ -379,6 +390,7 @@ func _play_hit_react() -> void:
 	anim_player.speed_scale = react_anim_speed
 	_play_anim(anim_to_play)
 	await anim_player.animation_finished
+	if _life != _life_id: return
 	anim_player.speed_scale = 1.0
 	_is_reacting = false
 	if not _is_dead:
@@ -448,11 +460,13 @@ func _build_stun_indicator() -> void:
 
 
 func _on_die() -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
 	var main = get_tree().current_scene
 	if main and main.has_method("register_enemy_kill"):
 		main.register_enemy_kill()
 
-	if death_sound != null and has_node("/root/AudioManager"):
+	# Only a kill the player earned is heard: a day-cull / room-lock cull / trap death of a far-off enemy is silent.
+	if _credited_kill and death_sound != null and has_node("/root/AudioManager"):
 		AudioManager.play_3d_one_shot(death_sound, global_position, 8.0, randf_range(0.65, 0.8))
 
 	if PotionPickupScript != null and SaveManager.current_profile_is_valid():
@@ -497,6 +511,9 @@ func _on_die() -> void:
 
 	await get_tree().create_timer(_current_anim_length()).timeout
 	if not is_instance_valid(self): return
+	if _life != _life_id: return
+	await _dissolve(_life)
+	if not is_instance_valid(self) or _life != _life_id: return
 
 	# Pool path: return to EnemyManager's pool instead of freeing.
 	# Falls back to queue_free() if this enemy was not spawned from a pool
@@ -505,6 +522,16 @@ func _on_die() -> void:
 		_pool_return.call()
 	else:
 		queue_free()
+
+
+# The corpse sinks and shrinks away over 0.3 s with a puff of dust instead of vanishing on a frame (reset_for_pool restores the scale).
+func _dissolve(_life: int) -> void:
+	if mesh_root == null or not is_inside_tree():
+		return
+	Juice.burst("poof", global_position + Vector3(0.0, 0.3, 0.0), Vector3.UP, 0.5)
+	var tw : Tween = create_tween()
+	tw.tween_property(mesh_root, "scale", Vector3.ONE * MESH_SCALE * 0.05, 0.3).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await tw.finished
 
 
 # ── Pool API ──────────────────────────────────────────────────────────────────
@@ -516,11 +543,18 @@ func set_pool_return(cb: Callable) -> void:
 # Called by EnemyManager when re-activating this enemy from the pool.
 # Resets all AI and CharacterBase state so the enemy behaves as freshly spawned.
 func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -> void:
+	_life_id += 1                      # invalidate any delayed work from the previous life
+	_state = ""                        # force the idle transition below to actually play
+	if anim_player != null:
+		anim_player.speed_scale = 1.0  # death/react/attack speed must not leak into the new life
 	# ── CharacterBase state ──────────────────────────────────────────────────
 	_buff_multiplier = 1.0
 	max_health       = _base_max_health
 	_current_health  = max_health
 	_is_dead         = false
+	_credited_kill   = false
+	_attack_token   += 1
+	_reset_juice_state()
 	_is_stunned      = false
 	_is_reacting     = false
 	_stun_timer      = 0.0
@@ -544,6 +578,7 @@ func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -
 	_visited_wp_set.clear()
 	_nav_timer             = randf() * nav_refresh_interval
 	_los_timer             = randf() * los_check_interval
+	_frustration_timer     = randf() * 4.0   # a reborn brute must not inherit the old life's stuck timer
 	_last_global_pos       = new_pos
 	_smoothed_actual_speed = 0.0
 	# Reset movement state so stale directions from the previous life don't carry over.
@@ -565,12 +600,29 @@ func reset_for_pool(new_pos: Vector3, _new_rot: Vector3, new_waypoints: Array) -
 		_stun_indicator_root.visible = false
 
 	# ── Re-enable ─────────────────────────────────────────────────────────────
+	if anim_player != null:
+		anim_player.active = true   # EnemyManager._park() deactivates the mixer of a parked enemy
+	add_to_group("enemy")    # a parked enemy sits outside the groups (see EnemyManager._park)
+	add_to_group("enemies")
 	visible = true
 	set_physics_process(true)
 	set_process(true)
 
 	_change_state(_get_idle_state())
 	health_changed.emit(_current_health, max_health)
+
+
+# A brute that has chased for 12 s without ever seeing the player is retired. It used to be freed and the next
+# top-up instantiated a replacement: a free + instantiate pair is a multi-millisecond hitch (many times that on a
+# phone). It now goes back to EnemyManager's pool exactly like a corpse does and is reborn by reset_for_pool().
+func _retire_stuck() -> void:
+	if not _pool_return.is_valid():
+		queue_free()
+		return
+	_is_dead        = true    # EnemyManager's sweep drops dead enemies from its live list; reset_for_pool() revives
+	collision_layer = 0
+	velocity        = Vector3.ZERO
+	_pool_return.call()
 
 
 func _spawn_potion_pickup() -> void:
@@ -674,7 +726,7 @@ func _physics_tick(delta: float) -> void:
 		if _frustration_timer >= 12.0:
 			_frustration_timer = 0.0
 			if not _has_los:
-				queue_free()
+				_retire_stuck()
 				return
 	else:
 		_frustration_timer = 0.0
@@ -692,29 +744,10 @@ func _physics_tick(delta: float) -> void:
 		_change_state(_get_idle_state())
 		return
 
-	# SURGICAL ADD: Rapid Attack awareness. When the player is spinning, the brute
-	# cannot safely attack — it would just walk into the hitbox repeatedly.
-	# Instead it charges straight at the player at full speed, which feels
-	# aggressive and keeps pressure on without the suicidal melee loop.
-	var player_is_rapid_attack : bool = false
-	if is_instance_valid(player) and player.get("_rapid_attack_active") != null:
-		player_is_rapid_attack = player.get("_rapid_attack_active") == true
-
-	if player_is_rapid_attack:
-		# Charge directly at the player — skip waypoints and wall avoidance.
-		# The rapid_attack's AOE will hit them anyway; at least they look threatening.
-		var charge_dir := flat_to_player.normalized()
-		var chase_speed : float = close_speed * _cached_speed_mult * 1.5
-		_set_horizontal_velocity(charge_dir * chase_speed, move_acceleration, delta)
-		if actually_moving:
-			anim_player.speed_scale = _cached_speed_mult * 1.5
-			_change_state("standing_run_forward" if _is_armed else "unarmed_run_forward")
-		return
-
 	# Kick: higher priority than normal melee — interrupts when cooldown is clear.
 	# Random chance gate prevents kick from triggering every available tick.
 	if not _is_attacking and not _is_kicking_ai and _kick_cooldown_timer <= 0.0 \
-			and distance <= enemy_kick_range and not player_is_rapid_attack \
+			and distance <= enemy_kick_range \
 			and randf() < enemy_kick_chance:
 		_do_ai_kick(player)
 		return
@@ -815,7 +848,12 @@ func _set_horizontal_velocity(target: Vector3, accel: float, delta: float) -> vo
 
 
 func _do_attack(player: Node3D) -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
+	var token : int = _attack_token   # abort if a flinch cancels this attack
 	_is_attacking = true
+	# The tell: a swish as the arm goes back, so the player can hear the blow coming (it landed silently before).
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("swing_whoosh", global_position + Vector3(0.0, 1.2, 0.0), -3.0, 0.8, 0.95, 18.0, 1)
 	var player_mod : float = 1.0
 	if player and "enemy_speed_modifier" in player:
 		player_mod = float(player.enemy_speed_modifier)
@@ -825,13 +863,14 @@ func _do_attack(player: Node3D) -> void:
 	var anim_len : float = _current_anim_length() / (attack_speed_scale * player_mod)
 
 	await get_tree().create_timer(anim_len * 0.5).timeout
+	if _life != _life_id or token != _attack_token: return
 
 	# SURGICAL FIX: Re-check range at the moment of impact.
 	# The attack started when the player was in range, but the timer delay
 	# means the player may have moved away by the time damage fires.
 	# A 1.5× tolerance handles the brief overlap at the edge of attack_range
 	# while still blocking phantom hits on players who clearly dodged.
-	if not _is_stunned and player and is_instance_valid(player) and player.has_method("take_damage"):
+	if not _is_dead and not _is_stunned and player and is_instance_valid(player) and player.has_method("take_damage"):
 		var current_dist : float = global_position.distance_to(player.global_position)
 		if current_dist <= attack_range * 1.5:
 			var player_damage_mod : float = 1.0
@@ -840,6 +879,7 @@ func _do_attack(player: Node3D) -> void:
 			player.take_damage(attack_damage * player_damage_mod * _cached_damage_mod, self)
 
 	await get_tree().create_timer(anim_len * 0.5).timeout
+	if _life != _life_id or token != _attack_token: return
 	anim_player.speed_scale = 1.0
 	_is_attacking           = false
 	_attack_cooldown_timer  = attack_cooldown
@@ -847,8 +887,14 @@ func _do_attack(player: Node3D) -> void:
 
 
 func _do_ai_kick(player: Node3D) -> void:
+	var _life : int = _life_id   # abort if this enemy is pooled/reborn while we wait
+	var token : int = _attack_token   # abort if a flinch cancels this kick
 	_is_kicking_ai = true
 	_is_attacking  = true
+	# The tell: a low heavy swish and a kick-up of dust as it lunges (the lunge had no sound at all).
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("swing_whoosh", global_position + Vector3(0.0, 1.0, 0.0), 1.0, 0.55, 0.7, 22.0, 1)
+	Juice.burst("dust", global_position + Vector3(0.0, 0.15, 0.0), Vector3.UP, 0.6)
 
 	# Sprint impulse toward the player — decays via stop_acceleration once
 	# _is_attacking blocks further movement control.
@@ -866,6 +912,7 @@ func _do_ai_kick(player: Node3D) -> void:
 	var anim_len : float = _current_anim_length()
 
 	await get_tree().create_timer(anim_len * 0.50).timeout
+	if _life != _life_id or token != _attack_token: return
 
 	if not _is_dead and is_instance_valid(player):
 		var dist : float = global_position.distance_to(player.global_position)
@@ -882,6 +929,7 @@ func _do_ai_kick(player: Node3D) -> void:
 				player.take_knockback(push_dir, enemy_kick_force, enemy_kick_stun)
 
 	await get_tree().create_timer(anim_len * 0.50).timeout
+	if _life != _life_id or token != _attack_token: return
 	_is_kicking_ai       = false
 	_is_attacking        = false
 	_kick_cooldown_timer  = enemy_kick_cooldown

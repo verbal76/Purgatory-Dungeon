@@ -17,6 +17,8 @@
 
 extends RigidBody3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 const POTION_FBX : String = "res://addons/props/SM_ManaPotion.fbx"
 const _PotionScript = preload("res://scripts/kickable_potion.gd")
 
@@ -281,12 +283,21 @@ func _commit_freeze() -> void:
 # Called by brute_player._on_kick_hit and _check_slide_knockback.
 # direction is a unit Vector3; force is the impulse magnitude to apply.
 func apply_kick(direction: Vector3, force: float) -> void:
+	# A prop that already turned into a potion/curse this frame is gone; a second kick in the
+	# same physics tick (slide + shove) must not roll or spawn again.
+	if is_queued_for_deletion():
+		return
 	# Kicking a solid-steel anvil hurts your foot. Damage the player regardless
 	# of whether the potion roll replaces the anvil below.
 	if _is_anvil:
 		var player : Node = get_tree().get_first_node_in_group("player")
 		if player != null and player.has_method("take_damage"):
 			player.take_damage(ANVIL_KICK_SELF_DAMAGE, self)
+
+	# The hit is felt: a thud and a kick-up of dust where the prop was struck (props were silent).
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("impact_thud", global_position, -3.0, 1.0, 1.35, 22.0, 1)
+	Juice.burst("dust", global_position + Vector3(0.0, 0.2, 0.0), -direction + Vector3.UP * 0.5, 0.7)
 
 	# Any small toppers sitting on top of this prop scatter upward as shrapnel.
 	_shrapnel_kick_toppers(force)
@@ -296,6 +307,9 @@ func apply_kick(direction: Vector3, force: float) -> void:
 	if _can_drop:
 		var roll : float = randf()
 		if roll < POTION_DROP_CHANCE:
+			Juice.burst("gold", global_position + Vector3(0.0, 0.5, 0.0), Vector3.UP, 0.9)
+			if has_node("/root/AudioManager"):
+				AudioManager.play_sfx_3d("pop_soft", global_position, 0.0, 1.1, 1.2, 22.0, 1)
 			_spawn_potion_and_kick(direction, force)
 			queue_free()
 			return
@@ -517,6 +531,9 @@ func _on_contact_body(body: Node) -> void:
 			else clampf(speed * 1.5, 4.0, 15.0)
 		)
 		target.take_damage(dmg, self)
+		Juice.burst("dust", (target as Node3D).global_position + Vector3(0.0, 0.8, 0.0), Vector3.UP, 0.6)
+		if has_node("/root/AudioManager"):
+			AudioManager.play_sfx_3d("impact_thud", global_position, 0.0, 0.8, 0.95, 25.0, 1)
 		# Stun chance — only on enemies that support knockback.
 		if target.is_in_group("enemies") \
 				and target.has_method("take_knockback") \

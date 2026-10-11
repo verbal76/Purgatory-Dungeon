@@ -35,6 +35,11 @@ const TURN_SPEED := 10.0
 const MESH_SCALE := 0.01
 const MESH_FACING := PI
 
+# Game-feel layer (scripts/juice.gd, camera_fx.gd, vfx_pool.gd). Plain preloads (no new global class_name, so an OTA can ship them).
+# Subclasses use `Juice` directly: a second `const Juice` in a child script would be a redeclaration error.
+const Juice := preload("res://scripts/juice.gd")
+const CameraFxScript := preload("res://scripts/camera_fx.gd")
+
 @export var max_health             : float = 100.0
 @export var react_anim_speed       : float = 5.0
 @export var death_anim_speed       : float = 1.0
@@ -66,11 +71,29 @@ var damage_reduction   : float = 0.0
 # Multiplies outgoing damage when the target is below 30% health.
 # Set by the Executioner buff.
 var low_health_damage  : float = 0.0
+# Adrenaline Spike: flat bonus damage added to the player's attacks while at or below
+# LOW_HEALTH_FRACTION of max health (see get_low_health_attack_bonus()).
+var low_hp_attack_bonus : float = 0.0
+const LOW_HEALTH_FRACTION := 0.3
+# Shadow Dancer: +kill_haste (a fraction, 0.18 = +18%) movement speed for KILL_HASTE_SECONDS after
+# each kill. The timer is ticked in the player's _physics_tick, so it freezes while paused.
+var kill_haste          : float = 0.0
+var _kill_haste_timer   : float = 0.0
+const KILL_HASTE_SECONDS := 5.0
+# Globe curses / buffs that scale how hard the dungeon hits back. enemy_*_modifier are multipliers
+# (1.0 = unchanged) read by the enemy AI; they live here so BOTH player classes can carry them.
+var enemy_speed_modifier  : float = 1.0
+var enemy_damage_modifier : float = 1.0
 
 signal health_changed(new_health: float, max_val: float)
 signal died
 
 static var GLOBAL_KILL_COUNT : int = 0
+
+# Incremented every time a pooled enemy is reborn (reset_for_pool). Delayed behaviour
+# (attacks, hit reactions, death-return timers) captures it before awaiting and aborts
+# if it changed, so nothing from a previous life can touch the new one.
+var _life_id : int = 0
 # World position of the most recent enemy kill — used by on-kill effects
 # (spark_damage AOE, poison cloud, light flash) to know where to spawn.
 static var GLOBAL_LAST_KILL_POS : Vector3 = Vector3.ZERO
@@ -104,12 +127,17 @@ var _anim_map : Dictionary = {}
 var camera_3d       : Camera3D          = null
 var footstep_player : AudioStreamPlayer = null
 var _footstep_timer : float = 0.0
+var _fall_speed     : float = 0.0
+var _landing_armed  : bool  = false
+var _was_on_floor   : bool  = true
 var _head_bob_time  : float = 0.0
 var _default_cam_y  : float = 0.0
 var _is_blocking         : bool    = false
 # Tracks the node that dealt the killing blow — used to credit kills only to
 # the player, not to cull sweeps, traps, or other enemies.
 var _last_damage_source  : Node3D  = null
+# True when the player earned this enemy's death (false for culls / traps): the death sound and effects only play for earned kills.
+var _credited_kill       : bool    = false
 # Knockback wall-hit response: armed when take_knockback() fires, consumed the
 # first time a high-speed slide collision is detected during stun.
 var _knockback_hit_fired : bool    = false
@@ -163,8 +191,28 @@ func _ready() -> void:
 	# Done after _on_ready() so the "player" group is already registered.
 	if not is_in_group("player"):
 		_setup_visibility_notifier()
+		_build_enemy_bar()
 	else:
 		_build_damage_direction_fan()
+		_setup_camera_fx()
+
+
+# The player's camera-feel node (shake, FOV punch, hit-stop, render-rate smoothing, screen flashes). See scripts/camera_fx.gd.
+var camera_fx : Node = null
+
+
+func _setup_camera_fx() -> void:
+	if camera_3d == null or camera_fx != null:
+		return
+	camera_fx = CameraFxScript.new()
+	camera_fx.name = "CameraFx"
+	camera_fx.process_mode = Node.PROCESS_MODE_PAUSABLE   # a paused game must not keep interpolating the camera
+	add_child(camera_fx)
+	camera_fx.setup(self, camera_3d, get_node_or_null("SpringArm3D") as Node3D, anim_player)
+	if not health_changed.is_connected(camera_fx.on_health_changed):
+		health_changed.connect(camera_fx.on_health_changed)
+	camera_fx.on_health_changed(_current_health, max_health)
+	add_child(Juice.make_motes())   # faint drifting dust that rides with the player
 
 
 # ══════════════════════════════════════════════════════════════
@@ -403,11 +451,16 @@ func take_damage(amount: float, _source_node: Node3D = null) -> void:
 		CharacterBase.GLOBAL_PLAYER_LAST_DAMAGE_TIME = Time.get_ticks_msec() * 0.001
 		# Apply damage reduction (Iron Will buff).  Cap at 90% so the player
 		# always takes at least 10% of any hit — prevents full immunity stacking.
-		if damage_reduction > 0.0:
-			amount *= maxf(0.1, 1.0 - clampf(damage_reduction, 0.0, 0.9))
+		# A negative value (Pain Mirror, Void Embrace curses) makes the player take MORE damage.
+		if damage_reduction != 0.0:
+			amount *= maxf(0.1, 1.0 - clampf(damage_reduction, -1.0, 0.9))
 
 	_current_health = maxf(_current_health - amount, 0.0)
 	health_changed.emit(_current_health, max_health)
+	if is_in_group("player"):
+		_juice_player_hurt(amount, _source_node)
+	else:
+		_juice_enemy_hit(amount, _source_node)
 
 	if _current_health <= 0.0:
 		_trigger_death()
@@ -421,6 +474,91 @@ func receive_heal(amount: float) -> void:
 
 	_current_health = minf(_current_health + amount, max_health)
 	health_changed.emit(_current_health, max_health)
+	_juice_healed(amount)
+
+
+# ══════════════════════════════════════════════════════════════
+#  GAME FEEL  (presentation only: no gameplay value is read or changed here)
+# ══════════════════════════════════════════════════════════════
+
+## A hit on the player: size-scaled vignette + shake + kick (CameraFx), the hurt grunt, a haptic pulse. Damage that arrives without a
+## source in many small ticks (acid, poison) is a status, not a blow: it tints the screen and nothing else, so it can't strobe.
+func _juice_player_hurt(amount: float, source: Node) -> void:
+	if amount <= 0.0:
+		return
+	var dot: bool = source == null and amount < 2.0
+	if camera_fx != null:
+		camera_fx.on_damage(amount, max_health, dot)
+	if dot or not has_node("/root/AudioManager"):
+		return
+	var grunt: AudioStream = get("hit_grunt_sound") as AudioStream if "hit_grunt_sound" in self else null
+	if grunt != null:
+		AudioManager.play_one_shot(grunt, 0.0, randf_range(0.92, 1.06), 2, 300)
+
+
+## A heal of a real size (an orb, a kill heal): green screen wash, rising motes, a soft chime. Per-tick regeneration stays silent.
+func _juice_healed(amount: float) -> void:
+	if amount < 1.0 or not is_in_group("player"):
+		return
+	if camera_fx != null:
+		camera_fx.on_heal()
+	Juice.burst("heal", global_position + Vector3(0.0, 0.4, 0.0), Vector3.UP, 0.6)
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("heal_chime", -6.0, 0.98, 1.04, 1)
+
+
+## An enemy hurt by the player (melee, bolt, kick, blast): floating damage number and a hit spray. Damage from traps, culls and
+## other enemies is not "your hit", so it stays quiet.
+func _juice_enemy_hit(amount: float, source: Node) -> void:
+	if amount <= 0.0 or source == null or not is_instance_valid(source) or not source.is_in_group("player"):
+		return
+	var chest: Vector3 = global_position + Vector3(0.0, 1.3, 0.0)
+	if amount < 5000.0:   # (the potion blast uses a one-shot-kill amount: a 999999999 floating over every enemy would be noise)
+		var big: float = clampf(amount / maxf(max_health, 1.0), 0.0, 1.0)
+		Juice.number(chest + Vector3(0.0, 0.6, 0.0), str(int(roundf(amount))),
+				Color(1.0, 0.82 - 0.3 * big, 0.45 - 0.3 * big), 0.85 + 0.7 * big)
+	var away: Vector3 = global_position - (source as Node3D).global_position
+	away.y = 0.35
+	Juice.burst("hit", chest, away, 1.0 if amount >= 10.0 else 0.6)
+
+
+## A kill the player earned (not a cull or a trap): a soul wisp rises, dust puffs from the fall.
+func _juice_enemy_kill() -> void:
+	Juice.burst("soul", global_position + Vector3(0.0, 1.0, 0.0), Vector3.UP, 1.0)
+	Juice.burst("poof", global_position + Vector3(0.0, 0.2, 0.0), Vector3.UP, 0.6)
+
+
+# Bonus attack damage that depends on the player's current health (Adrenaline Spike).
+func get_low_health_attack_bonus() -> float:
+	if low_hp_attack_bonus > 0.0 and max_health > 0.0 \
+			and _current_health / max_health < LOW_HEALTH_FRACTION:
+		return low_hp_attack_bonus
+	return 0.0
+
+
+# Kill curses (Blood Thirst: negative health_on_kill; Shattered Spark: negative spark_damage) hurt
+# the player directly. They can drain the player to 1 HP but never kill them outright.
+func _take_curse_damage(amount: float) -> void:
+	if amount <= 0.0 or _is_dead:
+		return
+	var safe : float = minf(amount, _current_health - 1.0)
+	if safe > 0.0:
+		take_damage(safe)
+
+
+# Called by the player after kills are registered (Shadow Dancer).
+func _on_kill_haste_trigger() -> void:
+	if kill_haste > 0.0:
+		_kill_haste_timer = KILL_HASTE_SECONDS
+
+
+func _tick_kill_haste(delta: float) -> void:
+	if _kill_haste_timer > 0.0:
+		_kill_haste_timer = maxf(_kill_haste_timer - delta, 0.0)
+
+
+func kill_haste_multiplier() -> float:
+	return 1.0 + kill_haste if _kill_haste_timer > 0.0 and kill_haste > 0.0 else 1.0
 
 
 func take_knockback(direction: Vector3, force: float, stun_duration: float = 1.0) -> void:
@@ -463,8 +601,108 @@ func _on_buff_applied(_multiplier: float) -> void:
 	pass
 
 
+# Buffed ("elite") enemies get a soft red-orange ring on the floor under them: readable at a glance, and nothing on the body
+# (the old whole-body red overlay was removed on purpose). One quad per enemy, a shared mesh and material.
+static var _elite_mesh : QuadMesh = null
+static var _elite_mat : StandardMaterial3D = null
+var _elite_mark : MeshInstance3D = null
+
+
 func apply_red_glow() -> void:
-	pass
+	if is_in_group("player") or not is_inside_tree():
+		return
+	if _elite_mark == null:
+		if _elite_mesh == null:
+			_elite_mesh = QuadMesh.new()
+			_elite_mesh.size = Vector2(2.4, 2.4)
+			_elite_mesh.orientation = PlaneMesh.FACE_Y
+			_elite_mat = StandardMaterial3D.new()
+			_elite_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			_elite_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			_elite_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+			_elite_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			_elite_mat.albedo_color = Color(1.0, 0.25, 0.1, 0.75)
+			_elite_mat.albedo_texture = load("res://addons/kenney_particle_pack/circle_03.png") as Texture2D
+			_elite_mesh.material = _elite_mat
+		_elite_mark = MeshInstance3D.new()
+		_elite_mark.name = "EliteMark"
+		_elite_mark.mesh = _elite_mesh
+		_elite_mark.position = Vector3(0.0, 0.07, 0.0)
+		_elite_mark.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(_elite_mark)
+	_elite_mark.visible = true
+	_update_enemy_bar()
+
+
+## Called when a pooled enemy is reborn: undo what its last life's death and elite mark did to it.
+func _reset_juice_state() -> void:
+	if mesh_root != null:
+		mesh_root.scale = Vector3.ONE * MESH_SCALE
+	if _elite_mark != null:
+		_elite_mark.visible = false
+	_update_enemy_bar()
+
+
+# ── Enemy health bar ────────────────────────────────────────────────────────────
+# A small camera-facing bar over an enemy, shown only once it is hurt (or while it is an elite) and hidden when it dies: the
+# only read the player had on "how close is it to dead" was the white hit flash. One quad + one shader per enemy, built once.
+const ENEMY_BAR_SHADER := """shader_type spatial;
+render_mode unshaded, cull_disabled, depth_draw_never;
+uniform float fill = 1.0;
+uniform vec4 fill_color : source_color = vec4(0.85, 0.12, 0.1, 1.0);
+uniform vec4 back_color : source_color = vec4(0.04, 0.02, 0.02, 0.85);
+void vertex() {
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
+}
+void fragment() {
+	float inner = step(0.03, UV.x) * step(UV.x, 0.97) * step(0.2, UV.y) * step(UV.y, 0.8);
+	float on = step(UV.x, fill) * inner;
+	ALBEDO = mix(back_color.rgb, fill_color.rgb, on);
+	ALPHA = mix(back_color.a, 1.0, on);
+}
+"""
+static var _bar_shader : Shader = null
+static var _bar_mesh : QuadMesh = null
+var _bar : MeshInstance3D = null
+var _bar_mat : ShaderMaterial = null
+
+
+func _build_enemy_bar() -> void:
+	if _bar != null:
+		return
+	if _bar_shader == null:
+		_bar_shader = Shader.new()
+		_bar_shader.code = ENEMY_BAR_SHADER
+		_bar_mesh = QuadMesh.new()
+		_bar_mesh.size = Vector2(0.95, 0.14)
+	_bar_mat = ShaderMaterial.new()
+	_bar_mat.shader = _bar_shader
+	_bar = MeshInstance3D.new()
+	_bar.name = "EnemyBar"
+	_bar.mesh = _bar_mesh
+	_bar.material_override = _bar_mat
+	_bar.position = Vector3(0.0, 2.35, 0.0)
+	_bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_bar.visible = false
+	add_child(_bar)
+	if not health_changed.is_connected(_on_bar_health):
+		health_changed.connect(_on_bar_health)
+
+
+func _on_bar_health(_cur: float, _max: float) -> void:
+	_update_enemy_bar()
+
+
+func _update_enemy_bar() -> void:
+	if _bar == null:
+		return
+	var elite: bool = _elite_mark != null and _elite_mark.visible
+	var hurt: bool = max_health > 0.0 and _current_health < max_health - 0.01
+	var want: bool = not _is_dead and _current_health > 0.0 and (hurt or elite)
+	_bar.visible = want
+	if want:
+		_bar_mat.set_shader_parameter("fill", clampf(_current_health / maxf(max_health, 1.0), 0.0, 1.0))
+		_bar_mat.set_shader_parameter("fill_color", Color(1.0, 0.45, 0.1) if elite else Color(0.85, 0.12, 0.1))
 
 
 func _play_hit_react() -> void:
@@ -504,7 +742,12 @@ func _trigger_death() -> void:
 				and _last_damage_source.is_in_group("player"):
 			GLOBAL_KILL_COUNT     += 1
 			GLOBAL_LAST_KILL_POS   = global_position
+			_credited_kill = true
+			_juice_enemy_kill()
+	elif camera_fx != null:
+		camera_fx.on_death()
 
+	_update_enemy_bar()
 	died.emit()
 	_on_die()
 
@@ -534,16 +777,8 @@ func _spawn_kill_aoe(kill_pos: Vector3, damage: float) -> void:
 func _spawn_kill_flash(kill_pos: Vector3, range_bonus: float, brightness: float) -> void:
 	if not is_inside_tree():
 		return
-	var light        := OmniLight3D.new()
-	light.omni_range  = 4.0 + range_bonus * 10.0
-	light.light_energy = 3.0 + brightness * 10.0
-	light.light_color  = Color(1.0, 0.88, 0.45)
-	get_tree().current_scene.add_child(light)
-	light.global_position = kill_pos + Vector3(0.0, 0.5, 0.0)
-	# Fade and remove over 0.5 s.
-	var tw := create_tween()
-	tw.tween_property(light, "light_energy", 0.0, 0.5)
-	tw.finished.connect(light.queue_free)
+	# A pooled flash light (the pool fades it out over 0.5 s): no light node is created per kill.
+	Juice.flash(kill_pos + Vector3(0.0, 0.5, 0.0), Color(1.0, 0.88, 0.45), 3.0 + brightness * 10.0, 0.5, 4.0 + range_bonus * 10.0)
 
 
 # Plague Spreader — poison cloud that deals 5 damage every 0.5 s for 5 s.
@@ -694,7 +929,9 @@ func _configure_footstep_player() -> void:
 
 
 func _update_footsteps(delta: float) -> void:
-	if footstep_player == null or not is_on_floor():
+	# (There is no "FootstepPlayer" node in the player scenes, so the old `footstep_player == null` gate made the steps silent.
+	# Steps now play from AudioManager's pooled voices; a scene that does carry a FootstepPlayer keeps using it.)
+	if not is_on_floor():
 		_footstep_timer = 0.0
 		return
 	var h_speed := Vector2(velocity.x, velocity.z).length()
@@ -703,20 +940,48 @@ func _update_footsteps(delta: float) -> void:
 		return
 	_footstep_timer -= delta
 	if _footstep_timer <= 0.0:
-		footstep_player.stop()
-		footstep_player.volume_db   = _get_footstep_db()
-		footstep_player.pitch_scale = randf_range(footstep_pitch_min, footstep_pitch_max)
-		footstep_player.play()
-		_footstep_timer = footstep_interval_seconds / clampf(h_speed / _get_effective_move_speed(), 0.65, 1.35)
+		if footstep_player != null:
+			footstep_player.stop()
+			footstep_player.volume_db   = _get_footstep_db()
+			footstep_player.pitch_scale = randf_range(footstep_pitch_min, footstep_pitch_max)
+			footstep_player.play()
+		elif has_node("/root/AudioManager"):
+			# footstep_volume_db 5.0 is the designed default (-> -6 dB for the synthesised steps); a buff that changes it moves them too.
+			AudioManager.play_footstep(footstep_volume_db - 11.0)
+		# Buffs add to footstep_interval_seconds as an absolute (Footstep Stalker is -0.5 on a 0.38
+		# default), which could go to or below 0 and retrigger the sound every frame. Floor it.
+		_footstep_timer = maxf(footstep_interval_seconds, 0.12) / clampf(h_speed / _get_effective_move_speed(), 0.65, 1.35)
+
+
+## Landing: the fastest downward speed of the fall is remembered while airborne; touching down at speed dips the camera, shakes
+## it a little and thumps. (Called from _apply_head_bob, i.e. once per player physics tick.)
+func _detect_landing() -> void:
+	var on_floor: bool = is_on_floor()
+	if on_floor:
+		# (the first touchdown is the spawn drop onto the starting floor: it is silent, only later landings are felt)
+		if not _was_on_floor and _fall_speed > 6.0 and _landing_armed:
+			var k: float = clampf((_fall_speed - 6.0) / 12.0, 0.0, 1.0)
+			if camera_fx != null:
+				camera_fx.dip(0.07 + 0.12 * k)
+				camera_fx.add_trauma(0.12 + 0.3 * k)
+			if has_node("/root/AudioManager"):
+				AudioManager.play_sfx("landing_thud", -4.0 + 4.0 * k, 0.94, 1.06, 2)
+			Juice.burst("dust", global_position + Vector3(0.0, 0.1, 0.0), Vector3.UP, 0.5 + 0.5 * k)
+		_landing_armed = true
+		_fall_speed = 0.0
+	else:
+		_fall_speed = maxf(_fall_speed, -velocity.y)
+	_was_on_floor = on_floor
 
 
 func _apply_head_bob(delta: float) -> void:
 	if camera_3d == null:
 		return
+	_detect_landing()
 	var h_speed := Vector2(velocity.x, velocity.z).length()
 	if is_on_floor() and h_speed > minimum_movement_for_footsteps and not _is_blocking:
 		_head_bob_time += delta * h_speed * head_bob_speed
-		var bob_offset := sin(_head_bob_time) * head_bob_intensity
+		var bob_offset := sin(_head_bob_time) * maxf(head_bob_intensity, 0.0)   # a buff must not invert the bob
 		camera_3d.position.y = lerp(camera_3d.position.y, _default_cam_y + bob_offset, delta * 10.0)
 	else:
 		_head_bob_time = 0.0
