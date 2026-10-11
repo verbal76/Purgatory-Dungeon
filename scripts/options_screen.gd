@@ -368,6 +368,7 @@ func _build_gameplay_tab() -> void:
 	var t := _new_tab("Gameplay")
 	_section(t, "Feel")
 	_slider(t, "Screen Shake",  "ShakeSlider",  0.0, 100.0, 1.0)
+	_hint(t, "0 switches off camera shake, FOV punches, hit-freeze and screen wipes (reduced motion).")
 	_section(t, "Difficulty", "Takes effect next run")
 	_slider(t, "Enemy Speed",   "SpeedSlider",  50.0, 200.0, 5.0)
 	_slider(t, "Enemy Damage",  "DamageSlider", 50.0, 200.0, 5.0)
@@ -378,6 +379,7 @@ func _build_gameplay_tab() -> void:
 		_slider(t, "Control Opacity",   TouchControls.KEY_OPACITY, 20.0, 100.0, 5.0)
 		_slider(t, "Control Size",      TouchControls.KEY_SCALE,   70.0, 150.0, 5.0)
 		_slider(t, "Look Sensitivity",  TouchControls.KEY_LOOK,    40.0, 250.0, 5.0)
+		_slider(t, "Vibration",         "Vibration",               0.0, 100.0, 5.0)
 
 
 const SCHEME_HINTS : Dictionary = {
@@ -924,7 +926,7 @@ func _load_settings() -> void:
 	var defaults : Dictionary = {
 		"MasterSlider": 100.0, "MusicSlider": 65.0, "SFXSlider": 100.0,
 		"ShakeSlider": 50.0, "SpeedSlider": 100.0, "DamageSlider": 100.0,
-		"TouchOpacity": 70.0, "TouchScale": 100.0, "TouchLookSens": 100.0,
+		"TouchOpacity": 70.0, "TouchScale": 100.0, "TouchLookSens": 100.0, "Vibration": 60.0,
 		"HealthSlider": 100.0, "AmbientBrightness": 0.0,
 	}
 	for key in _sliders.keys():

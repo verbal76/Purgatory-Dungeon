@@ -342,6 +342,8 @@ func _on_buff_pick_triggered() -> void:
 	_is_picking   = true
 
 	get_tree().paused = true
+	if has_node("/root/AudioManager"):
+		AudioManager.set_pause_muffle(true)   # the world dulls behind the reel
 	_show_slot_ui()
 
 
@@ -515,6 +517,11 @@ func _animate_slot_card_in(_card_x: float, card_y: float) -> void:
 func _advance_slot() -> void:
 	_slot_index = (_slot_index + 1) % _slot_pool.size()
 	_update_slot_display()
+	# The reel ticks (it was silent): quiet while it spins, stepping up in pitch and level as it slows toward a stop.
+	if has_node("/root/AudioManager"):
+		var slowing : bool = _slot_state == SlotState.SLOWING
+		var k : float = clampf(_slot_elapsed / PERK_CYCLE_SLOWDOWN_DURATION, 0.0, 1.0) if slowing else 0.0
+		AudioManager.play_sfx("tick", -14.0 + 8.0 * k, 0.9 + 0.35 * k, 0.9 + 0.35 * k, 0)
 
 
 # Pushes the current buff's name, description, rarity, and tradeoff
@@ -580,6 +587,7 @@ func _award_slot_perk() -> void:
 
 	if has_node("/root/AudioManager"):
 		AudioManager.play_buff_choice()
+	_landing_feedback(String(buff.get("ranking", "common")))
 
 	_apply_buff(buff)
 	emit_signal("buff_chosen", buff)
@@ -589,6 +597,32 @@ func _award_slot_perk() -> void:
 		func() -> void:
 			_animate_slot_exit(buff),
 		CONNECT_ONE_SHOT)
+
+
+# The reel stops on its card: the card thumps (a quick scale and brightness punch), and the sound says how good it was.
+func _landing_feedback(ranking: String) -> void:
+	if is_instance_valid(_slot_panel):
+		_slot_panel.pivot_offset = _slot_panel.size * 0.5
+		_slot_panel.scale = Vector2.ONE * 1.12
+		_slot_panel.modulate = Color(1.6, 1.6, 1.6, 1.0)
+		var t := self.create_tween()
+		t.set_process_mode(Tween.TWEEN_PROCESS_IDLE)
+		t.set_parallel(true)
+		t.tween_property(_slot_panel, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		t.tween_property(_slot_panel, "modulate", Color.WHITE, 0.45)
+	if has_node("/root/AudioManager"):
+		match ranking:
+			"legendary":
+				AudioManager.play_sfx("legend_sting", 0.0, 1.0, 1.0, 2)
+			"epic":
+				AudioManager.play_sfx("ready_ding", -2.0, 0.85, 0.85, 2)
+			"rare":
+				AudioManager.play_sfx("ready_ding", -4.0, 1.0, 1.0, 2)
+			"cursed":
+				AudioManager.play_sfx("trap_click", 0.0, 0.7, 0.7, 2)
+			_:
+				AudioManager.play_sfx("pop_soft", -2.0, 1.0, 1.0, 2)
+		AudioManager.haptic(30 if ranking in ["epic", "legendary"] else 16)
 
 
 func _animate_slot_exit(buff: Dictionary) -> void:
@@ -607,6 +641,8 @@ func _animate_slot_exit(buff: Dictionary) -> void:
 func _finalize_close(_buff: Dictionary) -> void:
 	_destroy_ui()
 	get_tree().paused = false
+	if has_node("/root/AudioManager"):
+		AudioManager.set_pause_muffle(false)
 	_is_picking = false
 	GameClock.resume()
 

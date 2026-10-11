@@ -127,6 +127,10 @@ for cls in barbarian mage; do
 done
 # The opening keeps a growing share of the population near the player (far off-screen sleepers are recycled).
 run "res://tests/test_enemy_opening.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_enemy_opening.tscn
+# Game feel (audio pools/priorities, camera shake + hit-stop + smoothing, effect pool, banners, and that the real player / enemies / UI use them).
+for cls in barbarian mage; do
+	JUICE_CLASS="$cls" run "res://tests/test_juice.tscn ($cls)" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_juice.tscn
+done
 # Starting health: Barbarian 200, Mage 135 (v8.2).
 run "res://tests/test_starting_health.tscn" timeout "${TEST_TIMEOUT:-300}" "$GODOT" --headless --path . res://tests/test_starting_health.tscn
 # The player starts facing the open space with the nearest wall behind (pure scoring, synthetic rooms, then the real starter room).

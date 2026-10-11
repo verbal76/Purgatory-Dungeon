@@ -160,11 +160,14 @@ func _update_hud() -> void:
 
 # Rewrites a row only when its count changed; a zero count dims the row (icon + number).
 func _set_row(id: String, count: int) -> void:
-	if _shown.get(id, -1) == count:
+	var before: int = int(_shown.get(id, -1))
+	if before == count:
 		return
 	_shown[id] = count
 	var row: Array = _rows[id]
 	(row[2] as Label).text = str(count)
+	if before >= 0 and _hud_layer != null and _hud_layer.visible:
+		_bump(id, count > before)
 	var has: bool = count > 0
 	(row[0] as Control).modulate.a = 1.0 if has else 0.45
 	var lbl := row[2] as Label
@@ -172,6 +175,28 @@ func _set_row(id: String, count: int) -> void:
 		lbl.remove_theme_color_override("font_color")
 	else:
 		lbl.add_theme_color_override("font_color", PUI.BONE_FAINT)
+
+# A change in a count is felt: the number pops (bigger and brighter on a gain, a quick dip on a spend) and settles. One tween per
+# row, replaced when another change arrives.
+var _bump_tweens : Dictionary = {}
+
+func _bump(id: String, gain: bool) -> void:
+	var row: Array = _rows[id]
+	var lbl := row[2] as Label
+	var icon := row[0] as Control
+	if _bump_tweens.has(id) and (_bump_tweens[id] as Tween).is_valid():
+		(_bump_tweens[id] as Tween).kill()
+	lbl.pivot_offset = lbl.size * 0.5
+	icon.pivot_offset = icon.size * 0.5
+	var peak: float = 1.45 if gain else 0.8
+	lbl.scale = Vector2.ONE * peak
+	icon.scale = Vector2.ONE * (1.3 if gain else 0.85)
+	var tw: Tween = create_tween().set_parallel(true)
+	tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(lbl, "scale", Vector2.ONE, 0.32)
+	tw.tween_property(icon, "scale", Vector2.ONE, 0.32)
+	_bump_tweens[id] = tw
+
 
 # Call this when the save slot changes or a new run starts
 # so the HUD re-reads from the current profile.

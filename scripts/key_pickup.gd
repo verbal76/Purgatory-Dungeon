@@ -10,6 +10,8 @@
 
 extends Area3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 const MESH_BY_COLOR : Dictionary = {
 	"bronze": "res://addons/props/chests and keys/SM_KeyBronze.fbx",
 	"silver": "res://addons/props/chests and keys/SM_KeySilver.fbx",
@@ -62,6 +64,10 @@ func _ready() -> void:
 	body_entered.connect(_on_body_entered)
 	_bob_offset = randf() * TAU
 	_base_y = global_position.y
+	# Loot pop: it springs out of the kill with a glint instead of appearing whole.
+	Juice.burst("gold", global_position, Vector3.UP, 0.6)
+	scale = Vector3.ONE * 0.2
+	create_tween().tween_property(self, "scale", Vector3.ONE, 0.4).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _process(delta: float) -> void:
@@ -78,6 +84,9 @@ func _on_body_entered(body: Node) -> void:
 		return
 	if has_node("/root/PlayerWallet"):
 		PlayerWallet.add_key(_color)
-	if has_node("/root/AudioManager") and AudioManager.has_method("play_buff_choice"):
-		AudioManager.play_buff_choice()
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("key_jingle", -2.0, 0.98, 1.04, 2)
+	Juice.burst("gold", global_position, Vector3.UP, 1.0)
+	Juice.number(global_position + Vector3(0.0, 0.5, 0.0), "+1 %s key" % _color.capitalize(), GLOW_BY_COLOR.get(_color, Color.WHITE), 1.0)
+	Juice.haptic(24)
 	queue_free()

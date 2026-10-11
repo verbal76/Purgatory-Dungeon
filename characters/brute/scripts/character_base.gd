@@ -212,6 +212,7 @@ func _setup_camera_fx() -> void:
 	if not health_changed.is_connected(camera_fx.on_health_changed):
 		health_changed.connect(camera_fx.on_health_changed)
 	camera_fx.on_health_changed(_current_health, max_health)
+	add_child(Juice.make_motes())   # faint drifting dust that rides with the player
 
 
 # ══════════════════════════════════════════════════════════════

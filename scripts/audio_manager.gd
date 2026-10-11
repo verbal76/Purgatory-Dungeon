@@ -101,8 +101,64 @@ func wire_click_sounds(root: Node) -> void:
 		var btn := root as BaseButton
 		if not btn.pressed.is_connected(play_ui_click):
 			btn.pressed.connect(play_ui_click)
+		_wire_button_feel(btn)
 	for child in root.get_children():
 		wire_click_sounds(child)
+
+
+# Hover / focus / press feel for every wired menu button: a soft tick and a small swell on hover (not on touch screens, where there is
+# no hover), a quick squash while pressed. Buttons stay where the layout puts them: only their scale changes, around their centre.
+const BTN_HOVER_SCALE : float = 1.035
+const BTN_PRESS_SCALE : float = 0.965
+
+
+func _wire_button_feel(btn: BaseButton) -> void:
+	if btn.has_meta("feel_wired"):
+		return
+	btn.set_meta("feel_wired", true)
+	btn.mouse_entered.connect(_on_button_hover.bind(btn))
+	btn.mouse_exited.connect(_btn_scale.bind(btn, 1.0, 0.1))
+	btn.focus_entered.connect(_on_button_focus.bind(btn))
+	btn.focus_exited.connect(_btn_scale.bind(btn, 1.0, 0.1))
+	btn.button_down.connect(_btn_scale.bind(btn, BTN_PRESS_SCALE, 0.05))
+	btn.button_up.connect(_on_button_up.bind(btn))
+
+
+func _on_button_hover(btn: BaseButton) -> void:
+	if btn.disabled or _is_touch_screen():
+		return
+	play_ui_hover()
+	_btn_scale(btn, BTN_HOVER_SCALE, 0.08)
+
+
+func _on_button_focus(btn: BaseButton) -> void:
+	if btn.disabled:
+		return
+	if not _is_touch_screen():
+		play_ui_hover()
+	_btn_scale(btn, BTN_HOVER_SCALE, 0.08)
+
+
+func _on_button_up(btn: BaseButton) -> void:
+	_btn_scale(btn, BTN_HOVER_SCALE if btn.is_hovered() and not _is_touch_screen() else 1.0, 0.08)
+
+
+func _is_touch_screen() -> bool:
+	return TouchControls.is_touch_platform()
+
+
+func _btn_scale(btn: BaseButton, target: float, seconds: float) -> void:
+	if not is_instance_valid(btn) or not btn.is_inside_tree():
+		return
+	btn.pivot_offset = btn.size * 0.5
+	if btn.has_meta("feel_tween"):
+		var old: Tween = btn.get_meta("feel_tween") as Tween
+		if old != null and old.is_valid():
+			old.kill()
+	var tw: Tween = btn.create_tween()
+	tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)   # menus run while the tree is paused
+	tw.tween_property(btn, "scale", Vector2.ONE * target, seconds).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	btn.set_meta("feel_tween", tw)
 
 
 func play_menu_music() -> void:

@@ -46,14 +46,38 @@ var mode      : Mode   = Mode.HOLD
 var tier      : Tier   = Tier.COMBAT
 var radius    : float  = 80.0           # drawn radius, virtual px
 var center    : Vector2 = Vector2.ZERO  # in TouchControls space
-var pressed_visual : bool = false
+var pressed_visual : bool = false:
+	set(v):
+		if v and not pressed_visual and is_inside_tree() and has_node("/root/AudioManager"):
+			get_node("/root/AudioManager").haptic(9)   # a tick under the thumb
+		pressed_visual = v
+		if is_inside_tree():
+			set_process(true)   # the press spring is moving
 var toggled_on     : bool = false
-var cooldown       : float = 0.0        # 0..1 fraction remaining (ring over the button)
+var cooldown       : float = 0.0:       # 0..1 fraction remaining (ring over the button)
+	set(v):
+		# A cooldown running out is felt: the button pops and a small ding rings (not on the first assignment / while hidden).
+		if cooldown > 0.001 and v <= 0.001 and is_inside_tree() and is_visible_in_tree():
+			_pop = 1.0
+			set_process(true)
+			if has_node("/root/AudioManager"):
+				get_node("/root/AudioManager").play_sfx("ready_ding", -9.0, 1.3, 1.3, 1)
+		cooldown = v
 var cooldown_text  : String = ""        # remaining whole seconds shown large in the centre ("" = none; Repulse only)
 var badge          : String = ""        # small count in the corner (e.g. potions)
-var highlighted    : bool = false       # onboarding pulse
+var highlighted    : bool = false:      # onboarding pulse
+	set(v):
+		highlighted = v
+		if is_inside_tree():
+			set_process(true)
 var enabled_look   : bool = true
 var unavailable    : bool = false       # drawn in the disabled look (e.g. the flask with no potions); input is unaffected
+
+# Press spring: the whole button sinks to 94% while a finger is on it and springs back with a slight overshoot; a cooldown that
+# finishes pops it to 118%. Scale only (around the centre): the hit test uses `center` and `radius`, never the node's scale.
+var _spring : float = 1.0
+var _spring_vel : float = 0.0
+var _pop : float = 0.0
 
 # Text metrics are cached: shaping a string on every pulse frame would be wasted work.
 var _label_key : String = ""
@@ -82,6 +106,10 @@ func setup(p_action: String, p_icon: String, p_mode: Mode = Mode.HOLD) -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS   # the baked art is drawn at many sizes
 
 
+func _ready() -> void:
+	set_process(false)   # runs only while the spring is moving or the onboarding pulse shows (see _process)
+
+
 func place(p_center: Vector2, p_radius: float) -> void:
 	center = p_center
 	radius = p_radius
@@ -90,9 +118,21 @@ func place(p_center: Vector2, p_radius: float) -> void:
 	queue_redraw()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if highlighted:
 		queue_redraw()   # animate the onboarding pulse
+	var target : float = 0.94 if (pressed_visual or toggled_on) else 1.0
+	target += 0.18 * _pop
+	_pop = maxf(_pop - delta * 4.0, 0.0)
+	# critically-under-damped spring: settles in ~0.25 s with a small overshoot
+	_spring_vel += ((target - _spring) * 380.0 - _spring_vel * 22.0) * delta
+	_spring += _spring_vel * delta
+	if absf(_spring - 1.0) < 0.0008 and absf(_spring_vel) < 0.01 and target == 1.0 and not highlighted:
+		_spring = 1.0
+		_spring_vel = 0.0
+		set_process(false)
+	pivot_offset = size * 0.5
+	scale = Vector2.ONE * _spring
 
 
 func hit(p: Vector2) -> bool:

@@ -21,6 +21,8 @@
 
 extends CanvasLayer
 
+const Juice := preload("res://scripts/juice.gd")
+
 var bg: Control          # PUI void background (near-black + faint warm vignette)
 var label: Label         # "Loading the dungeon" (display face)
 var _dots: Label         # animated dots in their own fixed-width slot so the title never shifts
@@ -189,6 +191,10 @@ func _start_fade_in() -> void:
 	# SURGICAL FIX: Resume gameplay music which was silenced by the load pause.
 	if has_node("/root/AudioManager"):
 		AudioManager.play_gameplay_music()
+
+	# The run's one line of objective, as the screen clears (it used to start with no word at all).
+	if has_node("/root/GameClock"):
+		Juice.banner("SURVIVE %d DAYS" % GameClock.max_days, 3.0, PUI.EMBER_BRIGHT)
 
 	var tween := create_tween()
 	tween.set_parallel(true)

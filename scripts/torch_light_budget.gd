@@ -65,6 +65,14 @@ var _sel_idx : PackedInt32Array = PackedInt32Array()
 var _sel_key : PackedFloat32Array = PackedFloat32Array()
 var _sel_n : int = 0
 
+## Continuous fire flicker: each lit torch's energy wobbles by up to +-`flicker_amount` (a fraction, two incommensurate sines per light so
+## neighbours never pulse together), stepped at ~14 Hz so a light is only rewritten that often. 0 = steady (the default; the game turns it
+## on for a run, tests leave it off so energies stay exact).
+var flicker_amount : float = 0.0
+var _flick_t : float = 0.0
+var _flick_q : float = 0.0
+const FLICKER_HZ : float = 14.0
+
 var _global_energy : float = -1.0      # < 0: every torch uses its own boot energy
 var _dynamic : Array = []              # non-torch OmniLight3D nodes seen (pruned in place)
 var _dynamic_near : int = 0
@@ -227,6 +235,9 @@ func _process(delta: float) -> void:
 	_since_update += delta
 	if _since_update >= UPDATE_INTERVAL:
 		refresh(false)
+	if flicker_amount > 0.0:
+		_flick_t += delta
+		_flick_q = floorf(_flick_t * FLICKER_HZ) / FLICKER_HZ
 	_step_fades(delta)
 
 
@@ -259,6 +270,9 @@ func _apply(i: int) -> void:
 		return
 	var base : float = _global_energy if _global_energy >= 0.0 else _base[i]
 	var e : float = base * _factor[i] * _fade[i]
+	if flicker_amount > 0.0:
+		var fi : float = float(i)
+		e *= 1.0 + flicker_amount * (0.6 * sin(_flick_q * 6.7 + fi * 1.913) + 0.4 * sin(_flick_q * 13.3 + fi * 3.77))
 	var on : bool = _fade[i] > 0.0 and _factor[i] > 0.0
 	if on != l.visible:
 		l.visible = on

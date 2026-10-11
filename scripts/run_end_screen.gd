@@ -90,6 +90,12 @@ func _build_ui() -> void:
 	flavour.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(flavour)
 
+	# The run's numbers (the death screen shows them; a win should at least as much).
+	var stats := PUI.label("Day %d    \u00b7    Kills %d" % [GameClock.current_day if has_node("/root/GameClock") else 30, CharacterBase.GLOBAL_KILL_COUNT], "StatLabel")
+	stats.name = "RunStats"
+	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(stats)
+
 	vbox.add_child(PUI.divider())
 
 	# Leave: the main action.
@@ -133,6 +139,10 @@ func _run_fade() -> void:
 	_fade_rect.color.a = 1.0
 	_fade_done = true
 	_choice_root.visible = true
+	# The moment lands: a victory fanfare (the screen opened in silence).
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("victory_sting", 0.0, 1.0, 1.0, 2)
+		AudioManager.haptic(120)
 	# Give focus to the first button so gamepad A / Enter works immediately.
 	if is_instance_valid(_first_button):
 		_first_button.grab_focus()

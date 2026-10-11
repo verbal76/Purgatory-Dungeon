@@ -40,6 +40,8 @@
 
 extends Node
 
+const Juice := preload("res://scripts/juice.gd")
+
 
 # ── Signals ────────────────────────────────────────────────
 
@@ -207,6 +209,7 @@ func _on_tick() -> void:
 func advance_day() -> void:
 	current_day += 1
 	_refresh_day_label()
+	_day_feedback()
 	emit_signal("day_changed", current_day)
 
 	# Check if a buff pick should fire on this day.
@@ -226,6 +229,23 @@ func advance_day() -> void:
 	if current_day >= max_days and not legendary_mode:
 		pause()
 		_emit_run_ended_once()
+
+
+# The day turning over is felt: the counter pops, a bell tolls, and (on a day with no buff pick, whose own screen announces it)
+# a banner names the day. The last day says so.
+func _day_feedback() -> void:
+	if _day_label != null and _hud_layer != null and _hud_layer.visible:
+		_day_label.pivot_offset = _day_label.size * 0.5
+		_day_label.scale = Vector2.ONE * 1.5
+		create_tween().tween_property(_day_label, "scale", Vector2.ONE, 0.45).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	if has_node("/root/AudioManager") and _hud_layer != null and _hud_layer.visible:
+		AudioManager.play_sfx("day_bell", -3.0, 1.0, 1.0, 1)
+	var buff_day : bool = buff_every_n_days > 0 and current_day % buff_every_n_days == 0 and not GlobalRunData.debug_no_buffs
+	if not buff_day and not legendary_mode and _hud_layer != null and _hud_layer.visible:
+		if current_day >= max_days:
+			Juice.banner("FINAL DAY", 2.4, PUI.BLOOD_BRIGHT)
+		else:
+			Juice.banner("DAY %d" % current_day, 1.6)
 
 
 # Pauses the day timer.

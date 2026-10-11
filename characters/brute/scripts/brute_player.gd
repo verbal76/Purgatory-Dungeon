@@ -623,6 +623,7 @@ func receive_heal(amount: float) -> void:
 		_current_health = max_health
 	emit_signal("health_changed", _current_health, max_health)
 	_refresh_health_bar(_current_health, max_health)
+	_juice_healed(amount)
 
 
 func _on_weapon_hit(collider: Node3D) -> void:

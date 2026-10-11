@@ -12,6 +12,8 @@
 
 extends Node3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 # ── Settings ──────────────────────────────────────────────────────────────────
 const PORTAL_ENEMY_COUNT   : int   = 25
 const PORTAL_BUFF_MULT     : float = 4.0     # 400% base stats
@@ -454,6 +456,12 @@ func _show_end_screen() -> void:
 	# Disable the entry area so it can't fire twice.
 	if _entry_area != null:
 		_entry_area.set_deferred("monitoring", false)
+	# Stepping through: the screen flashes white and a chime rings before the fade to the end screen.
+	var fx : Node = Juice.cam_fx(_player)
+	if fx != null:
+		fx.flash_screen(Color(0.85, 0.7, 1.0), 0.8)
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("unlock_chime", 0.0, 0.8, 0.8, 2)
 
 	var screen_script := load("res://scripts/run_end_screen.gd")
 	if screen_script == null:
@@ -470,6 +478,16 @@ func _show_end_screen() -> void:
 # ── Announce HUD ──────────────────────────────────────────────────────────────
 
 func _show_announce(portal_pos: Vector3) -> void:
+	# The exit opening is an event: a deep sting, a long camera tremor and a burst of violet where it appears.
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("legend_sting", 0.0, 0.85, 0.85, 2)
+	var pfx : Node = Juice.cam_fx(_player)
+	if pfx != null:
+		pfx.add_trauma(0.9)
+		pfx.punch_fov(4.0)
+	Juice.burst("magic", portal_pos + Vector3(0.0, 1.0, 0.0), Vector3.UP, 1.0)
+	Juice.burst("ring_white", portal_pos + Vector3(0.0, 0.1, 0.0), Vector3.UP, 1.0)
+	Juice.haptic(150)
 	_announce_layer        = CanvasLayer.new()
 	_announce_layer.layer  = 12
 	_announce_layer.process_mode = Node.PROCESS_MODE_ALWAYS

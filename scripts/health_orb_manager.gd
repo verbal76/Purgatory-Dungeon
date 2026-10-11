@@ -13,6 +13,8 @@
 
 extends Node3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 @export var orb_count     : int   = 10
 @export var heal_amount   : float = 25.0
 @export var respawn_time  : float = 60.0
@@ -278,8 +280,13 @@ func _on_body_entered(body: Node3D, data: OrbData) -> void:
 
 	body.receive_heal(heal_amount)
 
+	# The orb pops (a green burst at the orb, a floating "+25" over the player); the player's own heal feedback (screen wash,
+	# rising motes, chime) comes from CharacterBase.receive_heal.
+	if is_instance_valid(data.root):
+		Juice.burst("heal", data.root.global_position, Vector3.UP, 1.0)
+	Juice.number((body as Node3D).global_position + Vector3(0.0, 1.9, 0.0), "+%d" % int(heal_amount), Color(0.4, 1.0, 0.5), 1.1)
 	if has_node("/root/AudioManager"):
-		AudioManager.play_buff_choice()
+		AudioManager.play_sfx("pop_soft", -2.0, 0.95, 1.05, 1)
 
 	_deactivate_orb(data)
 

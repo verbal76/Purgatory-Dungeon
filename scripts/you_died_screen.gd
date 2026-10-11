@@ -76,7 +76,17 @@ var _exiting         : bool      = false
 var _hidden_compass  : CanvasItem = null
 
 
+# The run's numbers, read before the profile bookkeeping resets the kill counter; revealed (counted up) under the title.
+var _run_kills : int = 0
+var _run_potions : int = 0
+var _run_day : int = 1
+var _stats_label : Label = null
+
+
 func _ready() -> void:
+	_run_kills = CharacterBase.GLOBAL_KILL_COUNT
+	_run_potions = _run_kills / 50
+	_run_day = GameClock.current_day if has_node("/root/GameClock") else 1
 	if not SaveManager.current_profile.is_empty():
 		SaveManager.current_profile["death_count"] = \
 			int(SaveManager.current_profile.get("death_count", 0)) + 1
@@ -136,7 +146,7 @@ func _ready() -> void:
 	_prompts.name = "KeyPrompts"
 	_prompts.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_prompts.anchor_top = 0.5
-	_prompts.offset_top = float(PUI.S7 + PUI.S2)   # first line starts a clear gap below the title
+	_prompts.offset_top = float(PUI.S7 + PUI.S6 + PUI.S4)   # first line starts a clear gap below the title and the stats line
 	_prompts.alignment  = BoxContainer.ALIGNMENT_BEGIN
 	_prompts.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_prompts.add_theme_constant_override("separation", PUI.S2)
@@ -144,12 +154,40 @@ func _ready() -> void:
 	PUI.adopt(_prompts)
 	add_child(_prompts)
 
+	# ── Stats line: counts up under the title once it has faded in ─────────────────────────
+	_stats_label = PUI.label("", "StatLabel")
+	_stats_label.name = "RunStats"
+	_stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_stats_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_stats_label.anchor_top = 0.5
+	_stats_label.offset_top = float(PUI.S5)
+	_stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_stats_label.modulate.a = 0.0
+	PUI.adopt(_stats_label)
+	add_child(_stats_label)
+	_reveal_stats()
+
 	_prompt_label = _prompt_line("Press %s to view character stats" % InputManager.glyph("ui_menu"), "MetaLabel")
 	_shop_label = _prompt_line("Press %s to visit the Alchemist's Lab" % InputManager.glyph("ui_accept"), "SecondaryLabel")
 	_restart_label = _prompt_line("Press %s to start a new run" % InputManager.glyph("restart"), "SecondaryLabel")
 
 	if TouchControls.is_touch_platform():
 		_build_touch_buttons()
+
+
+# After the title has faded in: the run's numbers appear and count up together (reduced motion: they simply appear).
+func _reveal_stats() -> void:
+	var tw : Tween = create_tween()
+	tw.tween_interval(FADE_DURATION + 0.2)
+	tw.tween_callback(_stats_label.set_modulate.bind(Color(1, 1, 1, 1)))
+	tw.tween_method(_set_stats, 0.0, 1.0, 0.9).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	if has_node("/root/AudioManager"):
+		get_tree().create_timer(FADE_DURATION + 0.2).timeout.connect(func() -> void: AudioManager.play_sfx("tick", -6.0, 0.8, 0.8, 1))
+
+
+func _set_stats(k: float) -> void:
+	_stats_label.text = "Day %d    \u00b7    Kills %d    \u00b7    +%d potions" % [
+			int(round(float(_run_day) * minf(k * 1.5, 1.0))), int(round(float(_run_kills) * k)), int(round(float(_run_potions) * k))]
 
 
 func _prompt_line(text: String, variation: String) -> Label:

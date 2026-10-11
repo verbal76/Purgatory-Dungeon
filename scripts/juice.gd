@@ -103,3 +103,49 @@ static func cam_fx(player: Node) -> Node:
 	if player == null:
 		return null
 	return player.get_node_or_null("CameraFx")
+
+
+## Ambient dust motes: ONE GPUParticles3D that rides with the player (world-space particles in a 14 x 5 x 14 m box around them, ~48 in
+## flight, 9 s lives, drifting). Faint and unlit, they give the still air depth in torchlight. Built once per player.
+static func make_motes() -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.name = "DustMotes"
+	p.amount = 48
+	p.lifetime = 9.0
+	p.preprocess = 9.0   # the air is already full when the run starts
+	p.local_coords = false
+	p.fixed_fps = 15
+	p.visibility_aabb = AABB(Vector3(-9, -3, -9), Vector3(18, 7, 18))
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(7.0, 2.5, 7.0)
+	pm.direction = Vector3(0.3, 0.1, 0.2)
+	pm.spread = 180.0
+	pm.initial_velocity_min = 0.03
+	pm.initial_velocity_max = 0.12
+	pm.gravity = Vector3(0.0, -0.01, 0.0)
+	pm.scale_min = 0.5
+	pm.scale_max = 1.2
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1.0, 0.9, 0.7, 0.0))
+	grad.add_point(0.25, Color(1.0, 0.9, 0.7, 0.35))
+	grad.add_point(0.75, Color(1.0, 0.9, 0.7, 0.35))
+	grad.set_color(grad.get_point_count() - 1, Color(1.0, 0.9, 0.7, 0.0))
+	var gt := GradientTexture1D.new()
+	gt.gradient = grad
+	pm.color_ramp = gt
+	p.process_material = pm
+	var q := QuadMesh.new()
+	q.size = Vector2(0.05, 0.05)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.vertex_color_use_as_albedo = true
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	mat.albedo_texture = load("res://addons/kenney_particle_pack/circle_05.png") as Texture2D
+	mat.disable_receive_shadows = true
+	q.material = mat
+	p.draw_pass_1 = q
+	p.position = Vector3(0.0, 1.6, 0.0)
+	return p

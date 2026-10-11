@@ -211,6 +211,8 @@ func open_menu() -> void:
 
 	_initialize_pause_menu_values()
 	get_tree().paused = true
+	if has_node("/root/AudioManager"):
+		AudioManager.set_pause_muffle(true)   # music dulls and the world ducks while paused
 	_set_pause_menu_visible(true)
 
 
@@ -223,6 +225,8 @@ func close_menu() -> void:
 
 	_set_pause_menu_visible(false)
 	get_tree().paused = false
+	if has_node("/root/AudioManager"):
+		AudioManager.set_pause_muffle(false)
 
 	# SURGICAL FIX: Explicitly restart gameplay music after unpausing.
 	# The audio server bus manipulation done by the loading screen can leave
@@ -453,6 +457,8 @@ func _on_resume_button_pressed() -> void:
 func _on_exit_to_main_menu_button_pressed() -> void:
 	_set_pause_menu_visible(false)
 	get_tree().paused = false
+	if has_node("/root/AudioManager"):
+		AudioManager.set_pause_muffle(false)
 	# Leaving the run: stop the day clock/buffs/globes so a buff pick or day HUD cannot
 	# appear over the main menu a minute later.
 	RunLifecycle.end_run_cleanup()

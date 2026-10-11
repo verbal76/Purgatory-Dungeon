@@ -66,7 +66,8 @@ func set_health(current: float, max_val: float) -> void:
 		_hp_cur = c
 		_hp_max = m
 		health_label.text = "%d / %d" % [c, m]
-	var low: bool = frac <= LOW_FRACTION
+	var low: bool = frac <= LOW_FRACTION and current > 0.0
+	health_bar.set_pulse(low)
 	if low != _low:
 		_low = low
 		if low:

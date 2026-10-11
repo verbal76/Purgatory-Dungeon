@@ -17,6 +17,8 @@
 
 extends StaticBody3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 const _LOCKED_PATHS : Dictionary = {
 	"bronze": "res://addons/props/chests and keys/SM_LockedChestBronze.fbx",
 	"silver": "res://addons/props/chests and keys/SM_LockedChestSilver.fbx",
@@ -259,8 +261,9 @@ func _attempt_unlock() -> void:
 # Shows a floating key mesh above the chest for ~0.8 s (tween up + spin +
 # fade), then commits the reveal — real reward or mimic payload.
 func _play_unlock_sequence() -> void:
-	if has_node("/root/AudioManager") and AudioManager.has_method("play_buff_choice"):
-		AudioManager.play_buff_choice()
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("key_jingle", -1.0, 0.92, 0.98, 2)
+	Juice.haptic(20)
 
 	var key_node : Node3D = null
 	var key_path : String = _KEY_PATHS.get(color, "")
@@ -302,6 +305,20 @@ func _commit_reveal() -> void:
 
 func _reveal_real() -> void:
 	_swap_mesh(_UNLOCKED_PATHS[color])
+	# Open: a gold burst + light, the chime, a camera nudge and the amount floating up (the reveal had no feedback of its own).
+	var tint : Color = PUI.key_tint(color)
+	Juice.burst("gold", global_position + Vector3(0.0, 1.0, 0.0), Vector3.UP, 1.0)
+	Juice.flash(global_position + Vector3(0.0, 1.2, 0.0), tint, 3.0, 0.3, 5.0)
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("unlock_chime", 0.0, 1.0, 1.0, 2)
+		AudioManager.play_sfx("coin", -2.0, 0.9, 1.0, 1)
+	var fx : Node = Juice.cam_fx(get_tree().get_first_node_in_group("player"))
+	if fx != null:
+		fx.add_trauma(0.2)
+	Juice.haptic(45)
+	var reward : int = int(_POTION_REWARD.get(color, 0))
+	if reward > 0:
+		Juice.number(global_position + Vector3(0.0, 1.8, 0.0), "+%d" % reward, Color(0.55, 1.0, 0.6), 1.3)
 	if has_node("/root/PlayerWallet"):
 		PlayerWallet.add_potions(_POTION_REWARD.get(color, 0))
 	match color:
@@ -333,8 +350,17 @@ func _grant_random_perk_level() -> void:
 func _reveal_mimic() -> void:
 	_swap_mesh(_MIMIC_PATHS[color])
 	_spawn_mimic_burst()
-	if has_node("/root/AudioManager") and AudioManager.has_method("play_buff_choice"):
-		AudioManager.play_buff_choice()   # placeholder sting until a dedicated cue exists
+	# The mimic bites: a low rumble and bang, a hard camera jolt and a word (it used to reuse the happy buff chime).
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("aggro_rumble", 2.0, 0.8, 0.9, 2)
+		AudioManager.play_sfx("explosion", -4.0, 0.7, 0.8, 2)
+	var mfx : Node = Juice.cam_fx(get_tree().get_first_node_in_group("player"))
+	if mfx != null:
+		mfx.add_trauma(0.7)
+		mfx.flash_screen(Color(0.6, 0.1, 0.7), 0.4)
+	Juice.burst("magic", global_position + Vector3(0.0, 0.9, 0.0), Vector3.UP, 1.0)
+	Juice.number(global_position + Vector3(0.0, 1.8, 0.0), "MIMIC!", Color(0.85, 0.4, 1.0), 1.4)
+	Juice.haptic(90)
 
 	var player : Node = get_tree().get_first_node_in_group("player")
 	if player != null and player.has_method("take_damage"):

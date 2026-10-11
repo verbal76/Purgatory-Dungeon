@@ -632,7 +632,13 @@ func _place_kill_counter() -> void:
 
 func _update_kill_counter_label() -> void:
 	if kill_counter_label != null:
+		var before : String = kill_counter_label.text
 		kill_counter_label.text = "Kills: %d" % CharacterBase.GLOBAL_KILL_COUNT
+		# Each kill ticks the counter: it pops and settles (not on the reset to 0 at run start).
+		if before != "" and CharacterBase.GLOBAL_KILL_COUNT > 0:
+			kill_counter_label.pivot_offset = Vector2(0.0, kill_counter_label.size.y * 0.5)
+			kill_counter_label.scale = Vector2.ONE * 1.3
+			create_tween().tween_property(kill_counter_label, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -703,6 +709,7 @@ func _boot_torch_light_budget() -> void:
 	var mgr := Node.new()
 	mgr.name = "TorchLightBudget"
 	mgr.set_script(script)
+	mgr.set("flicker_amount", 0.09)   # torches breathe (game feel); the budget's own tests leave it at 0
 	add_child(mgr)
 	var torches : Array = dungeon_generation_function.registered_torches \
 		if dungeon_generation_function != null else []

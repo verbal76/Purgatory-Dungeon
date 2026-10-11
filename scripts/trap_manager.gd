@@ -25,6 +25,8 @@
 
 extends Node3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 # ── Settings ──────────────────────────────────────────────────────────────────
 @export var trap_count            : int   = 50    # Traps per run (was 5 — spread across 125 rooms means almost none)
 @export var fireball_trap_count   : int   = 10    # Extra guaranteed fireball-mine traps added on top of trap_count
@@ -221,6 +223,13 @@ func _on_trap_body_entered(body: Node3D, area: Area3D) -> void:
 	area.set_meta("armed", false)
 	area.set_deferred("monitoring", false)
 
+	# The tile clicks underfoot: a sharp click, a puff of dust off the slab and a red flicker (a trap used to spring silently; the
+	# first sign was its effect).
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("trap_click", area.global_position, 2.0, 0.95, 1.05, 30.0, 2)
+	Juice.burst("dust", area.global_position + Vector3(0.0, 0.1, 0.0), Vector3.UP, 0.8)
+	Juice.flash(area.global_position + Vector3(0.0, 0.5, 0.0), Color(1.0, 0.2, 0.1), 2.0, 0.18, 4.0)
+
 	# Remove the orange tint now that it has fired.
 	var tile = area.get_meta("tile_node", null)
 	if tile != null and is_instance_valid(tile) and tile.material_override != null:
@@ -339,6 +348,13 @@ func _spawn_homing_fireballs(player: Node3D, trap_pos: Vector3) -> void:
 
 	for origin in origins:
 		_launch_homing_fireball(origin, player)
+		Juice.burst("ember", origin + Vector3(0.0, 1.0, 0.0), Vector3.UP, 0.8)
+	# They are loosed together: one bang for the volley (not one per fireball).
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("explosion", -3.0, 0.8, 0.9, 2)
+	var fx : Node = Juice.cam_fx(player)
+	if fx != null:
+		fx.add_trauma(0.6)
 
 
 func _launch_homing_fireball(origin: Vector3, player: Node3D) -> void:
@@ -430,6 +446,11 @@ func _on_homing_hit(body: Node3D, fb: Area3D, damage_val: float) -> void:
 	if body.is_in_group("enemy") or body.is_in_group("enemies"):
 		return
 	fb.set_meta("hit", true)
+
+	Juice.burst("ember", fb.global_position, Vector3.UP, 1.0)
+	Juice.flash(fb.global_position, Color(1.0, 0.3, 0.1), 2.5, 0.14, 4.0)
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx_3d("fireball_impact", fb.global_position, 0.0, 0.9, 1.05, 30.0, 2)
 
 	if body.is_in_group("player") and body.has_method("take_damage"):
 		body.take_damage(damage_val, null)
