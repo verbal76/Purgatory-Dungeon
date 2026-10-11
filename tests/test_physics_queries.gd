@@ -54,6 +54,42 @@ func _floor_y(space: PhysicsDirectSpaceState3D, p: Vector3) -> float:
 	return r.position.y if not r.is_empty() else NAN
 
 
+func _line_clear(space: PhysicsDirectSpaceState3D, player: CollisionObject3D, base: Vector3, t: Vector3) -> bool:
+	# Both directions, at the heights the game's own rays use (1.0 m) and head height, against EVERY collider (stricter than the
+	# game, which only stops on level geometry).
+	for h in [1.0, 1.6]:
+		for pair in [[base, t], [t, base]]:
+			var from: Vector3 = pair[0] + Vector3(0, h, 0)
+			var to: Vector3 = pair[1] + Vector3(0, h, 0)
+			var q := PhysicsRayQueryParameters3D.create(from, to)
+			q.collision_mask = 1
+			q.exclude = [player.get_rid()]
+			if not space.intersect_ray(q).is_empty():
+				return false
+	return true
+
+
+func _pick_spot(space: PhysicsDirectSpaceState3D, player: CollisionObject3D, base: Vector3) -> Array:
+	var ref_floor := INF   # the room's floor level: the lowest first surface found around the player
+	for i in 8:
+		var fy0 := _floor_y(space, base + Vector3.FORWARD.rotated(Vector3.UP, i * PI / 4.0) * 5.0)
+		if not is_nan(fy0):
+			ref_floor = minf(ref_floor, fy0)
+	for i in 8:
+		var d := Vector3.FORWARD.rotated(Vector3.UP, i * PI / 4.0)
+		var t := base + d * 5.0
+		var fy := _floor_y(space, t)
+		if is_nan(fy):
+			continue
+		# A tall prop or obstacle on the spot makes the raw floor ray hit its top, which then contradicts the floor snap that
+		# ignores props. Only a spot whose first surface is the room's floor tests what these checks mean to test.
+		if fy - ref_floor > 0.3:
+			continue
+		if _line_clear(space, player, base, t):
+			return [d, t]
+	return [Vector3.ZERO, Vector3.ZERO]
+
+
 func _ready() -> void:
 	if OS.get_environment(StoragePaths.ENV_OVERRIDE) == "":
 		printerr("FAIL: refusing to run without PURGATORY_SAVE_ROOT")
@@ -84,41 +120,25 @@ func _ready() -> void:
 	await _frames(3)
 	var space: PhysicsDirectSpaceState3D = player.get_world_3d().direct_space_state
 	var base: Vector3 = player.global_position
-
-	# Find a clear spot in the start room with open floor in some direction.
 	var dir := Vector3.ZERO
 	var target := Vector3.ZERO
-	var ref_floor := INF   # the room's floor level: the lowest first surface found around the player
-	for i in 8:
-		var fy0 := _floor_y(space, base + Vector3.FORWARD.rotated(Vector3.UP, i * PI / 4.0) * 5.0)
-		if not is_nan(fy0):
-			ref_floor = minf(ref_floor, fy0)
-	for i in 8:
-		var d := Vector3.FORWARD.rotated(Vector3.UP, i * PI / 4.0)
-		var t := base + d * 5.0
-		var fy := _floor_y(space, t)
-		if is_nan(fy):
+	# Find a clear spot in the start room with open floor in some direction. The start room is random per run, and the rays the game
+	# casts (attacker -> player, brute -> player) run the OPPOSITE way to a player -> spot probe and can meet one-sided or
+	# thin geometry the forward probe slid past (this made the line-of-sight and damage checks fail about 1 run in 15 under load, on
+	# v8.3 too). So the spot is accepted only when the line is clear both ways at the heights the game uses, and it is re-verified
+	# after the player has stood still a moment (the player may still settle by a few cm, which moves the line).
+	for attempt in 6:
+		base = player.global_position
+		var pick := _pick_spot(space, player, base)
+		dir = pick[0]
+		target = pick[1]
+		if dir == Vector3.ZERO:
+			await _frames(20)
 			continue
-		# The start room is random per run: a tall prop or obstacle on the spot makes the raw floor ray hit its top
-		# (1.7 m above the real floor in the one CI failure), which then contradicts the floor snap that ignores props.
-		# Only a spot whose first surface is the room's floor tests what these checks mean to test.
-		if fy - ref_floor > 0.3:
-			continue
-		var q := PhysicsRayQueryParameters3D.create(base + Vector3(0, 1.6, 0), t + Vector3(0, 1.0, 0))
-		q.collision_mask = 1
-		q.exclude = [player.get_rid()]
-		if not space.intersect_ray(q).is_empty():
-			continue
-		# The brute's own sight ray runs level at 1 m from its feet to the player's 1 m, so the
-		# line-of-sight checks below need that exact ray clear too. The start room is random per
-		# run; without this a low static obstacle on that ray made two checks fail intermittently.
-		var level := PhysicsRayQueryParameters3D.create(base + Vector3(0, 1.0, 0), Vector3(t.x, base.y + 1.0, t.z))
-		level.collision_mask = 1
-		level.exclude = [player.get_rid()]
-		if space.intersect_ray(level).is_empty():
-			dir = d
-			target = t
+		await _frames(10)
+		if player.global_position.distance_to(base) < 0.02 and _line_clear(space, player, base, target):
 			break
+		dir = Vector3.ZERO
 	_check(dir != Vector3.ZERO, "found open floor with clear sight 5 m from the player")
 	if dir == Vector3.ZERO:
 		get_tree().quit(1)
