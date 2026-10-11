@@ -633,18 +633,21 @@ func _populate_controls_tab(t: VBoxContainer) -> void:
 	# ── Quick Reference (read-only) ─────────────────────────────────────────
 	_section(t, "Quick Reference")
 
-	const REF : Array = [
+	# The controller column is read from the InputMap (so it is right after a remap, and in the label set of the pad in use);
+	# a controller player is not shown keyboard / mouse keys.
+	var pad_only : bool = InputManager.is_gamepad()
+	var ref : Array = [
 		["Move",          "W A S D",           "Left Stick"],
 		["Look",          "Mouse",             "Right Stick"],
-		["Slide (Evade)", "Space",             "B  (Cross)"],
-		["Attack",        "LMB",               "RT  (R2)"],
-		["Kick / Shove",  "F",                 "R Stick Click"],
-		["Block",         "RMB",               "L Stick Click"],
-		["AOE Blast",     "Q",                 "L Stick Click"],
-		["Walk Toggle",   "Shift",             "RB  (R1)"],
-		["Minimap",       "Tab",               "LT  (L2)"],
-		["Equip / Use",   "E",                 "A  (Square)"],
-		["Pause",         "Esc  or  F4",       "Start / Menu"],
+		["Slide (Evade)", "Space",             _pad_name("jump")],
+		["Attack",        "LMB",               _pad_name("attack")],
+		["Kick / Shove",  "F",                 _pad_name("kick")],
+		["Block",         "RMB",               _pad_name("block")],
+		["AOE Blast",     "Q",                 _pad_name("AOE")],
+		["Walk Toggle",   "Shift",             _pad_name("toggle_walk")],
+		["Minimap",       "Tab",               _pad_name("minimap")],
+		["Equip / Use",   "E",                 _pad_name("equip")],
+		["Pause",         "Esc  or  F4",       _pad_name("ui_menu")],
 	]
 
 	# the reference is a recessed, read-only plate; the remap rows below are real controls
@@ -653,8 +656,8 @@ func _populate_controls_tab(t: VBoxContainer) -> void:
 	var ref_vb := VBoxContainer.new()
 	ref_vb.add_theme_constant_override("separation", PUI.S1)
 	ref_panel.add_child(ref_vb)
-	_table_header(ref_vb)
-	for entry in REF:
+	_table_header(ref_vb, not pad_only)
+	for entry in ref:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", PUI.S4)
 		ref_vb.add_child(row)
@@ -665,7 +668,7 @@ func _populate_controls_tab(t: VBoxContainer) -> void:
 		a.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		row.add_child(a)
 
-		for i in [1, 2]:
+		for i in ([2] if pad_only else [1, 2]):
 			var v := Label.new()
 			v.text = entry[i]
 			v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -707,15 +710,21 @@ func _populate_controls_tab(t: VBoxContainer) -> void:
 	t.add_child(reset_btn)
 
 
+# The controller button an action is bound to, in words (Xbox or Steam Deck labels), for the Quick Reference.
+func _pad_name(action: String) -> String:
+	var tok : String = InputManager.Glyphs.token_for_action(action)
+	return InputManager.Glyphs.text(tok, InputManager.controller_style) if tok != "" else "-"
+
+
 # Column captions for the two binding tables (same columns as the rows beneath them).
-func _table_header(parent: Control) -> void:
+func _table_header(parent: Control, show_keyboard: bool = true) -> void:
 	var hdr := HBoxContainer.new()
 	hdr.add_theme_constant_override("separation", PUI.S4)
 	parent.add_child(hdr)
 	var h_act := PUI.label("Action", "MetaLabel")
 	h_act.custom_minimum_size.x = SettingsRows.LABEL_W
 	hdr.add_child(h_act)
-	for col_text in ["Keyboard / Mouse", "Gamepad"]:
+	for col_text in (["Keyboard / Mouse", "Gamepad"] if show_keyboard else ["Gamepad"]):
 		var h := PUI.label(col_text, "MetaLabel")
 		h.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		h.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

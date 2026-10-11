@@ -18,6 +18,7 @@
 extends StaticBody3D
 
 const Juice := preload("res://scripts/juice.gd")
+const GlyphPromptScript := preload("res://scripts/glyph_prompt.gd")   # the use prompt's button follows the input device
 
 const _LOCKED_PATHS : Dictionary = {
 	"bronze": "res://addons/props/chests and keys/SM_LockedChestBronze.fbx",
@@ -99,7 +100,8 @@ var _player_in_range : bool = false
 # Prompt HUD (local CanvasLayer — only visible while player is in range).
 var _use_ctx       : bool        = false   # this chest is currently asking the touch layer for its USE button
 var _prompt_layer  : CanvasLayer = null
-var _prompt_label  : Label       = null
+var _prompt_label  : Label       = null   # the "locked" sentence
+var _use_prompt    : HBoxContainer = null   # "[button] Use Bronze Key": a controller shows the button's art
 
 
 func _ready() -> void:
@@ -158,6 +160,19 @@ func _ready() -> void:
 	_prompt_label.offset_bottom = -130.0
 	wrap.add_child(_prompt_label)
 
+	_use_prompt = GlyphPromptScript.new()
+	_use_prompt.setup("%g  Use " + color.capitalize() + " Key", "equip", "HudValue", 46.0, true)
+	for c in _use_prompt.get_children():
+		if c is Label:
+			c.add_theme_constant_override("outline_size", 5)
+			c.add_theme_font_size_override("font_size", int(round(PUI.fs("hud_value") * 1.25)))
+			c.add_theme_color_override("font_color", PUI.BONE_BRIGHT)
+	_use_prompt.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	_use_prompt.offset_top    = -180.0
+	_use_prompt.offset_bottom = -130.0
+	_use_prompt.visible = false
+	wrap.add_child(_use_prompt)
+
 	# Refresh the prompt when the player's key count changes while in range.
 	if has_node("/root/PlayerWallet"):
 		PlayerWallet.wallet_changed.connect(_on_wallet_changed)
@@ -212,11 +227,11 @@ func _refresh_prompt() -> void:
 	if _prompt_label == null:
 		return
 	var color_title : String = color.capitalize()
-	if has_node("/root/PlayerWallet") and PlayerWallet.get_key_count(color) > 0:
-		_prompt_label.theme_type_variation = &"HudValue"      # a short action prompt: Cinzel
-		_prompt_label.text = "[%s] Use %s Key" % [_use_glyph(), color_title]
-		_prompt_label.add_theme_color_override("font_color", PUI.BONE_BRIGHT)
-	else:
+	var can_use : bool = has_node("/root/PlayerWallet") and PlayerWallet.get_key_count(color) > 0
+	if _use_prompt != null:
+		_use_prompt.visible = can_use
+	_prompt_label.visible = not can_use
+	if not can_use:
 		_prompt_label.theme_type_variation = &"WarningLabel"  # a sentence: Source Sans
 		_prompt_label.remove_theme_color_override("font_color")
 		_prompt_label.text = "Locked \u2014 come back with a %s Key" % color_title

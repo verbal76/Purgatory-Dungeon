@@ -26,6 +26,7 @@ signal buff_expired(buff: Dictionary)
 # ── File paths ─────────────────────────────────────────────
 
 const BUFF_DATA_PATH : String = "res://data/buffs.json"
+const GlyphPromptScript = preload("res://scripts/glyph_prompt.gd")   # "Press [A] to stop": the button follows the input device
 
 # ══════════════════════════════════════════════════════════
 #  SLOT MACHINE TUNING
@@ -419,17 +420,20 @@ func _show_slot_ui() -> void:
 
 	# Prompt. Touch: large and ember so "TAP to stop" is unmissable; otherwise a quiet hint with the
 	# glyph of the active input scheme.
-	var prompt : Label
+	var prompt : Control
 	if InputManager.is_touch():
-		prompt = PUI.label("TAP to stop", "SectionHeading")
-		prompt.add_theme_font_size_override("font_size", int(round(PUI.fs("card_title") * 1.15)))
-		prompt.add_theme_color_override("font_color", PUI.EMBER_BRIGHT)
+		var tap : Label = PUI.label("TAP to stop", "SectionHeading")
+		tap.add_theme_font_size_override("font_size", int(round(PUI.fs("card_title") * 1.15)))
+		tap.add_theme_color_override("font_color", PUI.EMBER_BRIGHT)
+		tap.add_theme_constant_override("outline_size", 4)
+		tap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		tap.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+		prompt = tap
 	else:
-		prompt = PUI.label("Press %s to stop" % InputManager.glyph("ui_accept"), "SecondaryLabel")
+		var line : HBoxContainer = GlyphPromptScript.new()
+		line.setup("Press %g to stop", "ui_accept", "SecondaryLabel", 34.0)
+		prompt = line
 	prompt.name = "StopPrompt"
-	prompt.add_theme_constant_override("outline_size", 4)
-	prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	prompt.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 	prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	prompt.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	prompt.offset_top    = -float(PUI.S7 + PUI.S6)

@@ -10,11 +10,16 @@
 # ==============================================================================
 extends Node
 
+const Glyphs := preload("res://scripts/controller_glyphs.gd")
+
 enum Scheme { KEYBOARD, GAMEPAD, TOUCH }
 
 var current_scheme : Scheme = Scheme.KEYBOARD
+# Which label set the controller prompts use (Glyphs.Style: Xbox or Steam Deck / Steam Controller). Follows the pad last used.
+var controller_style : int = Glyphs.Style.XBOX
 
 signal input_method_changed(scheme: Scheme)
+signal controller_style_changed(style: int)
 
 
 func _ready() -> void:
@@ -42,9 +47,17 @@ func _input(event: InputEvent) -> void:
 		# Ignore analog stick drift below the dead zone.
 		if event is InputEventJoypadMotion and absf(event.axis_value) < 0.2:
 			return
+		_set_controller_style(Glyphs.style_for_joy_name(Input.get_joy_name(event.device)))
 		_set_scheme(Scheme.GAMEPAD)
 	elif event is InputEventKey:
 		_set_scheme(Scheme.KEYBOARD)
+
+
+func _set_controller_style(style: int) -> void:
+	if controller_style == style:
+		return
+	controller_style = style
+	controller_style_changed.emit(style)
 
 
 func _set_scheme(scheme: Scheme) -> void:
@@ -83,16 +96,11 @@ func glyph(action: String) -> String:
 				"restart": return "TAP"
 				_: return action.to_upper()
 		Scheme.GAMEPAD:
-			match action:
-				"equip", "ui_accept": return "A"
-				"jump": return "B"
-				"kick": return "RB"
-				"AOE": return "LB"
-				"attack": return "RT"
-				"block": return "D-pad Down"
-				"ui_menu": return "Start"
-				"restart": return "X"
-				_: return action.to_upper()
+			# Read from the InputMap, so a remap in Options is followed, and in the label set of the pad in use.
+			if action == "restart":
+				return Glyphs.text("x", controller_style)
+			var token: String = Glyphs.token_for_action(action)
+			return Glyphs.text(token, controller_style) if token != "" else action.to_upper()
 		_:
 			match action:
 				"equip": return "E"

@@ -1,5 +1,6 @@
 extends CanvasLayer
 
+const GlyphPromptScript = preload("res://scripts/glyph_prompt.gd")   # a prompt line whose button follows the input device
 const DungeonEntry = preload("res://scripts/dungeon_entry.gd")   # threaded dungeon load (no global class name)
 # ══════════════════════════════════════════════════════════════
 #  FILE:         you_died_screen.gd
@@ -61,9 +62,9 @@ const QUICK_RESTART_SCENE : String = "res://scenes/Purgatory_Dungeon_main_game_f
 # ── Runtime state ──────────────────────────────────────────────
 var _overlay         : ColorRect = null
 var _label           : Label     = null
-var _prompt_label    : Label     = null
-var _shop_label      : Label     = null
-var _restart_label   : Label     = null
+var _prompt_label    : Control   = null
+var _shop_label      : Control   = null
+var _restart_label   : Control   = null
 var _prompts         : VBoxContainer = null
 var _touch_row       : HBoxContainer = null
 var _timer           : float     = 0.0
@@ -167,9 +168,9 @@ func _ready() -> void:
 	add_child(_stats_label)
 	_reveal_stats()
 
-	_prompt_label = _prompt_line("Press %s to view character stats" % InputManager.glyph("ui_menu"), "MetaLabel")
-	_shop_label = _prompt_line("Press %s to visit the Alchemist's Lab" % InputManager.glyph("ui_accept"), "SecondaryLabel")
-	_restart_label = _prompt_line("Press %s to start a new run" % InputManager.glyph("restart"), "SecondaryLabel")
+	_prompt_label = _prompt_line("Press %g to view character stats", "ui_menu", "MetaLabel")
+	_shop_label = _prompt_line("Press %g to visit the Alchemist's Lab", "ui_accept", "SecondaryLabel")
+	_restart_label = _prompt_line("Press %g to start a new run", "restart", "SecondaryLabel")
 
 	if TouchControls.is_touch_platform():
 		_build_touch_buttons()
@@ -190,10 +191,9 @@ func _set_stats(k: float) -> void:
 			int(round(float(_run_day) * minf(k * 1.5, 1.0))), int(round(float(_run_kills) * k)), int(round(float(_run_potions) * k))]
 
 
-func _prompt_line(text: String, variation: String) -> Label:
-	var l := PUI.label(text, variation)
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+func _prompt_line(template: String, action: String, variation: String) -> Control:
+	var l: HBoxContainer = GlyphPromptScript.new()
+	l.setup(template, action, variation, 28.0)
 	_prompts.add_child(l)
 	return l
 
