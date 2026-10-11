@@ -57,6 +57,8 @@ func _ready() -> void:
 
 	# --- view flips while active, ticks down with the game ---------------------------------------
 	await _frames(3)
+	_check(_arm_x(player) > 0.0 and _arm_x(player) < PI + 0.0001, "the view starts turning over at once (a ~0.4 s turn, not a snap: %.2f rad after 3 ticks)" % _arm_x(player))
+	await _frames(16)   # the turn takes PI / (PI / 0.4 s) = 0.4 s = 12 physics ticks
 	_check(is_equal_approx(_arm_x(player), PI), "the camera is upside-down while Reversed View is active")
 	var before: float = player._status_reversed_view_timer
 	await _frames(30)
@@ -92,7 +94,7 @@ func _ready() -> void:
 	player.clear_timed_statuses()
 	_check(not player._status_reversed_view and not player._status_drunk and not player._status_reversed_controls and not player._status_acid, "clear_timed_statuses ends every timed trap status")
 	player.apply_status("reversed_view", 0)
-	await _frames(3)
+	await _frames(20)
 	_check(is_equal_approx(_arm_x(player), PI), "the camera is upside-down again before the death check")
 	# Dying while blocking: the blocking branch of the physics tick skips the view update, so death must reset the arm itself.
 	player._is_blocking = true
