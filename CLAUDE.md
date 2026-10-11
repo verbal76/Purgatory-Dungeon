@@ -46,6 +46,13 @@ from the signature + runtime fingerprint, not the host. **Verified repository vi
 never assume it: `curl -s https://api.github.com/repos/verbal76/Purgatory-Dungeon`, `"private": false`); so never commit keys or private artifacts.
 Publishing an actual OTA to players needs the owner's explicit authorization.
 
+## Steam Deck / Steam Machine (held for the next APK; docs/STEAM_DECK.md)
+
+The Windows build is meant to run on a Deck through Proton. Controller glyphs (`scripts/controller_glyphs.gd`, `glyph_prompt.gd`, art in `assets/ui/glyphs`),
+controller-only navigation, the Graphics Quality setting (`scripts/graphics_quality.gd`, Medium by default on a Deck) and the Deck checklist are in the repo; a
+prompt that names a key or button must go through `GlyphPromptScript` / `InputManager.glyph()` so it follows the input in use. Not released and not measured on a
+real Deck. `project.godot` changes (e.g. the Windows renderer) wait for the next APK.
+
 ## GitHub Actions budget (standing owner policy: GitHub-hosted minutes are scarce)
 
 Actions usage is shared across the owner's projects with a deliberately small monthly budget. Before starting any hosted workflow ask:

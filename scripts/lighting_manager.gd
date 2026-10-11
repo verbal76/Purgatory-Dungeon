@@ -1,5 +1,7 @@
 extends Node3D
 
+const GraphicsQuality := preload("res://scripts/graphics_quality.gd")
+
 # ══════════════════════════════════════════════════════════════
 #  lighting_manager.gd
 #  res://scripts/lighting_manager.gd
@@ -69,6 +71,7 @@ var _brightness: float = 0.0     # 0..1, from the accessibility setting
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
+	add_to_group("lighting_quality")   # GraphicsQuality.apply() calls apply_quality() when the level changes
 	_brightness = brightness_from_setting()
 	# No DirectionalLight3D, and no fill light: the ambient floor is free (it adds no Light3D).
 	# Build the WorldEnvironment immediately so the renderer always has
@@ -123,6 +126,12 @@ func ambient_energy_for(dimming: float, brightness: float) -> float:
 
 func exposure_for(brightness: float) -> float:
 	return BASE_EXPOSURE + clampf(brightness, 0.0, 1.0) * brightness_exposure_lift
+
+
+## Graphics Quality changed: bloom follows it (Low drops bloom).
+func apply_quality() -> void:
+	if _world_env != null and _world_env.environment != null:
+		_world_env.environment.glow_enabled = GraphicsQuality.glow_enabled()
 
 
 func _apply_levels() -> void:
@@ -189,7 +198,7 @@ func _setup_sky() -> void:
 	env.fog_height            = -172.0
 	env.fog_height_density    = 0.02
 
-	env.glow_enabled              = true
+	env.glow_enabled              = GraphicsQuality.glow_enabled()
 	env.glow_intensity            = 0.3    # low — flame orb only, not lit walls
 	env.glow_strength             = 0.4
 	env.glow_bloom                = 0.02

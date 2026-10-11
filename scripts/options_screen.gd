@@ -21,6 +21,8 @@
 # ==============================================================================
 extends Control
 
+const GraphicsQuality := preload("res://scripts/graphics_quality.gd")
+
 @export var main_menu_scene : String = "res://scenes/MainMenu.tscn"
 
 # Set by the caller before changing scene here.  Cleared when Back fires.
@@ -319,6 +321,18 @@ func _build_video_tab() -> void:
 
 	_section(t, "Performance")
 	_checkbox(t, "Enable V-Sync", "VSync")
+	var gq := _row(t, "Graphics Quality", "Applies immediately")
+	var gq_option := OptionButton.new()
+	gq_option.name = "GraphicsQuality"
+	gq_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for lvl in [GraphicsQuality.Level.LOW, GraphicsQuality.Level.MEDIUM, GraphicsQuality.Level.HIGH]:
+		gq_option.add_item(GraphicsQuality.NAMES[lvl], lvl)
+	gq_option.select(GraphicsQuality.level())
+	gq_option.item_selected.connect(func(idx: int) -> void:
+		SettingsManager.update_setting(GraphicsQuality.KEY, float(idx))
+		GraphicsQuality.apply(get_tree().root, idx))
+	gq.add_child(gq_option)
+	_hint(t, "Lower levels draw the 3D scene at a lower resolution and upscale it, which costs less. Menus and text stay sharp. Medium is the default on a Steam Deck.")
 
 
 func _build_resolution_list() -> void:

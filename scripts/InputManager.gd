@@ -11,6 +11,7 @@
 extends Node
 
 const Glyphs := preload("res://scripts/controller_glyphs.gd")
+const GraphicsQuality := preload("res://scripts/graphics_quality.gd")
 
 enum Scheme { KEYBOARD, GAMEPAD, TOUCH }
 
@@ -31,6 +32,10 @@ func _ready() -> void:
 		MobileUi.install(get_tree())
 		AppLifecycle.install(get_tree())
 		PerfOverlay.install(get_tree())
+	else:
+		# Desktop (and Steam Deck): the 3D scene's resolution follows Options > Video > Graphics Quality (Medium by default on a Deck).
+		# Deferred: SettingsManager has loaded the saved level by the time this runs.
+		GraphicsQuality.apply.call_deferred(get_tree().root)
 
 
 func _input(event: InputEvent) -> void:
