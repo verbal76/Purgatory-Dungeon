@@ -48,6 +48,11 @@ const MAX_NAME_LENGTH := 20
 const MAX_SEED_LENGTH := 20
 const SLOT_COUNT := 10
 
+# Save schema (docs/COMPLIANCE_AUDIT.md RED-5). A profile file carries "schema_version"; a file without it is the legacy layout (version 0) and is migrated
+# in memory to the current version, which only adds that key. Unknown keys of any version are kept and written back, and a file written by a NEWER
+# game (version above this one) is never downgraded: its version number and every key stay as they were. Backups are described at _backup_before_write.
+const SCHEMA_VERSION := 1
+
 const VALID_CLASSES      := ["barbarian", "mage"]
 const VALID_DIFFICULTIES := ["easy", "medium", "hardcore"]
 
@@ -144,6 +149,7 @@ func get_file_path(slot: int) -> String:
 # "character_class" starts empty — set once during identity creation.
 func get_default_profile() -> Dictionary:
 	return {
+		"schema_version":  SCHEMA_VERSION,
 		"character_name":  "",
 		"character_class": "",
 		"difficulty":      "medium",
@@ -172,6 +178,24 @@ func get_default_profile() -> Dictionary:
 # preference, current_profile, or emit signals. Use this to inspect slots.
 func peek_slot(slot_index: int) -> Dictionary:
 	var path := get_file_path(slot_index)
+	var profile := _read_profile_file(path)
+	if profile.is_empty():
+		# The main file is missing or unreadable. A write that was interrupted after its temp file was complete (profile_N.save.tmp) or the
+		# backup of the previous session (profile_N.save.bak) still holds the player's progress; the newest readable one wins.
+		profile = _read_profile_file(path + ".tmp")
+		if profile.is_empty() and FileAccess.file_exists(path):
+			profile = _read_profile_file(path + ".bak")
+	if profile.is_empty():
+		return {}
+	var defaults := get_default_profile()
+	for key in defaults.keys():
+		if not profile.has(key):
+			profile[key] = defaults[key]
+	return profile
+
+
+# A profile file parsed as a Dictionary, or {} when it is absent, unreadable, not JSON or not an object. Never changes anything.
+func _read_profile_file(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
 		return {}
 	var file := FileAccess.open(path, FileAccess.READ)
@@ -182,12 +206,7 @@ func peek_slot(slot_index: int) -> Dictionary:
 	file.close()
 	if err != OK or typeof(json.data) != TYPE_DICTIONARY:
 		return {}
-	var profile: Dictionary = json.data
-	var defaults := get_default_profile()
-	for key in defaults.keys():
-		if not profile.has(key):
-			profile[key] = defaults[key]
-	return profile
+	return json.data
 
 
 # Loads a slot into current_profile. If the file does not exist or
@@ -198,8 +217,11 @@ func load_slot(slot_index: int) -> void:
 	_save_last_slot_pref()
 
 	var profile := peek_slot(slot_index)
-	if profile.is_empty():
+	if FileAccess.file_exists(get_file_path(slot_index)) and _read_profile_file(get_file_path(slot_index)).is_empty():
 		_preserve_unreadable(slot_index)
+		if not profile.is_empty():
+			push_warning("SaveManager: slot %d was unreadable; its progress was restored from the previous session's backup." % slot_index)
+	if profile.is_empty():
 		current_profile = get_default_profile()
 	else:
 		current_profile = profile
@@ -219,6 +241,9 @@ func save_profile() -> bool:
 	current_profile["updated_at_unix"] = Time.get_unix_time_from_system()
 
 	var path = get_file_path(active_slot_index)
+	_backup_before_write(active_slot_index)
+	# Never downgrade: a profile from a newer game keeps its (higher) schema version; everything else is written at the current one.
+	current_profile["schema_version"] = maxi(int(current_profile.get("schema_version", 0)), SCHEMA_VERSION)
 	if not StoragePaths.write_text_atomic(path, JSON.stringify(current_profile, "\t")):
 		return false
 	save_count += 1
@@ -247,10 +272,58 @@ func _preserve_unreadable(slot_index: int) -> void:
 	dst.close()
 
 
+# Slots already backed up in this session (a backup is the state the session STARTED with, taken once, so the many saves of a run cost no extra IO).
+var _backed_up_slots: Dictionary = {}
+
+
+# Before the first write of a slot in a session, keep the file as it is:
+#   profile_N.save.bak        the previous good file (replaced once per session, only by a file that parses)
+#   profile_N.save.vK.bak     the file as written by schema K (0 = legacy, no version key) before it is migrated, or by a NEWER schema K than this
+#                             game knows before this game touches it; written once and never overwritten
+# A slot whose main file is gone starts clean: stale recovery copies of an earlier character are removed so they cannot resurrect it.
+func _backup_before_write(slot_index: int) -> void:
+	if _backed_up_slots.has(slot_index):
+		return
+	_backed_up_slots[slot_index] = true
+	var path := get_file_path(slot_index)
+	if not FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path + ".bak")
+		DirAccess.remove_absolute(path + ".tmp")
+		return
+	var on_disk := _read_profile_file(path)
+	if on_disk.is_empty():
+		return   # unreadable: it was copied to .unreadable at load; the existing .bak stays the way back
+	_copy_file(path, path + ".bak")
+	var disk_version: int = int(on_disk.get("schema_version", 0))
+	if disk_version != SCHEMA_VERSION:
+		var versioned := "%s.v%d.bak" % [path, disk_version]
+		if not FileAccess.file_exists(versioned):
+			_copy_file(path, versioned)
+
+
+func _copy_file(from_path: String, to_path: String) -> bool:
+	var src := FileAccess.open(from_path, FileAccess.READ)
+	if src == null:
+		return false
+	var bytes := src.get_buffer(src.get_length())
+	src.close()
+	var dst := FileAccess.open(to_path, FileAccess.WRITE)
+	if dst == null:
+		push_warning("SaveManager: could not write the backup %s." % to_path.get_file())
+		return false
+	dst.store_buffer(bytes)
+	dst.close()
+	return true
+
+
 # Deletes a slot file from disk. If the deleted slot was the active
 # one, current_profile resets to a blank default.
 func delete_slot(slot_index: int) -> void:
 	var path = get_file_path(slot_index)
+	# Deleting a character is deliberate: its recovery copies go with it (a stale .bak must not bring it back). Copies of unreadable files are kept.
+	DirAccess.remove_absolute(path + ".bak")
+	DirAccess.remove_absolute(path + ".tmp")
+	_backed_up_slots.erase(slot_index)
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
 		if active_slot_index == slot_index:
@@ -264,7 +337,8 @@ func delete_slot(slot_index: int) -> void:
 # Tier 1: Does a save file physically exist on disk for this slot?
 # Does not read or parse the file — just checks existence.
 func slot_has_file(slot_index: int) -> bool:
-	return FileAccess.file_exists(get_file_path(slot_index))
+	# A complete temp file with no main file is a write that was interrupted between the two steps of the atomic rename: the slot is occupied.
+	return FileAccess.file_exists(get_file_path(slot_index)) or not _read_profile_file(get_file_path(slot_index) + ".tmp").is_empty()
 
 
 # Tier 2: Does the slot contain a fully initialized character?
