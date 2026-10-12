@@ -145,5 +145,5 @@ the loading gate (`loading_screen.gd` 30 s timer versus generation that now yiel
 needs a measured repro on a slow device.
 
 **What was and was not validated at which SHA.** Hosted build run 38317691543 built `0e692d6` (all jobs green; its PR `Tests` check also passed). The review fixes above came after it, in `5c894b7`
-(save_manager, build.py, verify_package and their tests): validated by the full local suite (112 Godot stages + Python stages, no failure) and by the hosted PR `Tests` run on `5c894b7`. A new
+(save_manager, build.py, verify_package and their tests): validated by the full local suite on `5c894b7` (112 Godot stages + Python stages, no failure) and by the hosted PR `Tests` check (job `validate`, run 38322574226) on `be364df`, the docs-only commit on top of it (the run on `5c894b7` itself was superseded by that push). Later commits are documentation only. A new
 hosted BUILD of the final SHA was not run (the single authorised hosted build was used); the exact-member check of `verify_package` has not yet seen a real APK listing.
