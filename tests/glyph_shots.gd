@@ -32,11 +32,12 @@ func _ready() -> void:
 		var line: HBoxContainer = GlyphPromptScript.new()
 		line.setup(pair[0], pair[1], "SecondaryLabel", 34.0)
 		box.add_child(line)
-	for scheme_name in ["xbox", "deck", "keyboard"]:
+	var styles := {"xbox": Glyphs.Style.XBOX, "deck": Glyphs.Style.DECK, "playstation": Glyphs.Style.PLAYSTATION, "switch": Glyphs.Style.SWITCH}
+	for scheme_name in ["xbox", "deck", "playstation", "switch", "keyboard"]:
 		if scheme_name == "keyboard":
 			InputManager._set_scheme(InputManager.Scheme.KEYBOARD)
 		else:
-			InputManager._set_controller_style(Glyphs.Style.XBOX if scheme_name == "xbox" else Glyphs.Style.DECK)
+			InputManager._set_controller_style(styles[scheme_name])
 			InputManager._set_scheme(InputManager.Scheme.GAMEPAD)
 		for i in 4:
 			await get_tree().process_frame

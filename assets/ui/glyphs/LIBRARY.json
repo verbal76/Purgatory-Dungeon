@@ -1,0 +1,594 @@
+{
+ "files": {
+  "keyboard/0.png": {
+   "sha256": "8e8a2541f4d6618502759f0b68f660b5a5b1c7e5b5d92fa25c9b6951de784e50",
+   "source": "Keyboard_Mouse/White/T_0_Key_White.png"
+  },
+  "keyboard/1.png": {
+   "sha256": "71b73b16efed7c80cb41cdcc859ef89e8c6510515967f4af8f6d94b7445f88ef",
+   "source": "Keyboard_Mouse/White/T_1_Key_White.png"
+  },
+  "keyboard/2.png": {
+   "sha256": "1885caebfe99d9f9513551fc6fb3a6cf28b9602bd5bada7f19ccad920bd5581e",
+   "source": "Keyboard_Mouse/White/T_2_Key_White.png"
+  },
+  "keyboard/3.png": {
+   "sha256": "2a6bc400b1715903cef82cebbc2b63ca4789f183a75a3e59a38d25edb6ecd1b1",
+   "source": "Keyboard_Mouse/White/T_3_Key_White.png"
+  },
+  "keyboard/4.png": {
+   "sha256": "34760a37bdefb71d272e10bdc43c5ab606862764be9c6ee7406cfb69fe3a3476",
+   "source": "Keyboard_Mouse/White/T_4_Key_White.png"
+  },
+  "keyboard/5.png": {
+   "sha256": "e6548bf8820a58c693b9727cd1a7909f7c95a8b8624d2a2df10159d3cf66a0e1",
+   "source": "Keyboard_Mouse/White/T_5_Key_White.png"
+  },
+  "keyboard/6.png": {
+   "sha256": "8b20f44759f0a3f22c29ea3a7a37c6d28b5301eebdb4aeebd9ed6763e730eee7",
+   "source": "Keyboard_Mouse/White/T_6_Key_White.png"
+  },
+  "keyboard/7.png": {
+   "sha256": "d6550f2850634da515a69223e570d01c45ec670d879d72f86023bd06880908e4",
+   "source": "Keyboard_Mouse/White/T_7_Key_White.png"
+  },
+  "keyboard/8.png": {
+   "sha256": "afa79ddbe529b981050ad1ef2015b9a59c466bd3f9a8fdec29e0974268520866",
+   "source": "Keyboard_Mouse/White/T_8_Key_White.png"
+  },
+  "keyboard/9.png": {
+   "sha256": "471910554945b82696647da22379808aa652ad31f5352f61c69f2d5ce97e5c8a",
+   "source": "Keyboard_Mouse/White/T_9_Key_White.png"
+  },
+  "keyboard/a.png": {
+   "sha256": "8f733555456f8aca612a813eb2ddec83fa06559fd6bcd69ada6fc04b9d098251",
+   "source": "Keyboard_Mouse/White/T_A_Key_White.png"
+  },
+  "keyboard/alt.png": {
+   "sha256": "f392bee84a4fbb6d49d4aef608bba6e4d52a555e1580f3362a76279dd60dc3a9",
+   "source": "Keyboard_Mouse/White/T_Alt_Key_White.png"
+  },
+  "keyboard/asterisk.png": {
+   "sha256": "dc674f9a0f874c7494885253f7f437d1236fc5527a7e393e72a1a30791a918e1",
+   "source": "Keyboard_Mouse/White/T_Asterisk_Key_White.png"
+  },
+  "keyboard/b.png": {
+   "sha256": "323e76c9fae5f8123d76d3d213b6a74a303037a34c577cb4716bd2f4543e57d9",
+   "source": "Keyboard_Mouse/White/T_B_Key_White.png"
+  },
+  "keyboard/backspace.png": {
+   "sha256": "67136913a1c0007aebf9c1162ce199b58eb84b954885e37954104039df8aee71",
+   "source": "Keyboard_Mouse/White/T_BackSpace_Key_White.png"
+  },
+  "keyboard/backspace_alt.png": {
+   "sha256": "c9d2edf1e6fecf8efecc14159390417a397b0f795264581bd7542685b83bbaff",
+   "source": "Keyboard_Mouse/White/T_Backspace_Alt_Key_White.png"
+  },
+  "keyboard/brackets_l.png": {
+   "sha256": "2461d3fda06142fb284a2ac3e679d06521c334942b9e38b9e2824e2bebb64044",
+   "source": "Keyboard_Mouse/White/T_Brackets_L_Key_White.png"
+  },
+  "keyboard/brackets_r.png": {
+   "sha256": "18d8d99159c99caf93bd47e86146ed38481e74166a6a18421ab22fdd5a229a78",
+   "source": "Keyboard_Mouse/White/T_Brackets_R_Key_White.png"
+  },
+  "keyboard/c.png": {
+   "sha256": "1dc3c847afcbdda0922b866e1c344f597a2012937207342556a56df7dcf36c29",
+   "source": "Keyboard_Mouse/White/T_C_Key_White.png"
+  },
+  "keyboard/caps_lock.png": {
+   "sha256": "a32d9e202705822728b221976b95ee42da07ddc23905ac01bcbd805ed4810e9c",
+   "source": "Keyboard_Mouse/White/T_CapsLock_Key_White.png"
+  },
+  "keyboard/ctrl.png": {
+   "sha256": "635195bafe1e6562dc2cfb92346a291168f1dda968c442548527609640afbe07",
+   "source": "Keyboard_Mouse/White/T_Crtl_Key_White.png"
+  },
+  "keyboard/cursor.png": {
+   "sha256": "1aa539df2c2f8e408cbe0ed7d5e182e563ead6d3341ea8eb83e909cfdb3d7d4f",
+   "source": "Keyboard_Mouse/White/T_Cursor_Key_White.png"
+  },
+  "keyboard/d.png": {
+   "sha256": "81aa30fed345297e13b18ca3edc32afe6d401bd4239e3ea28194ac7f5615b9b5",
+   "source": "Keyboard_Mouse/White/T_D_Key_White.png"
+  },
+  "keyboard/delete.png": {
+   "sha256": "a0a1ca8a92133773c339053702d8e183f7886f34dc8c1e936b61937f8c2fdde1",
+   "source": "Keyboard_Mouse/White/T_Del_Key_White.png"
+  },
+  "keyboard/down.png": {
+   "sha256": "bc9b366551e00238c9c196f0ff91a8392befac82f96640044770a2cd5c801153",
+   "source": "Keyboard_Mouse/White/T_Down_Key_White.png"
+  },
+  "keyboard/e.png": {
+   "sha256": "b83310a88c5a70a60143e5471f3155067bc66f92ccebf64ae8ce042731a6a59a",
+   "source": "Keyboard_Mouse/White/T_E_Key_White.png"
+  },
+  "keyboard/end.png": {
+   "sha256": "f05e6c2bf2f99141314dbb14b0837f002d5c84eca29cc46ef90ad37a486b1363",
+   "source": "Keyboard_Mouse/White/T_End_Key_White.png"
+  },
+  "keyboard/enter.png": {
+   "sha256": "fb420475b5cfd4134850869529dc4fa9ccdf3ed7e661511c8b066742f2ae45be",
+   "source": "Keyboard_Mouse/White/T_Enter_Key_White.png"
+  },
+  "keyboard/enter_alt.png": {
+   "sha256": "25f0c75b1a6f0eb78a16e0c55b9615090e54986975255bb837ea8dae0abc7d46",
+   "source": "Keyboard_Mouse/White/T_Enter_Alt_Key_White.png"
+  },
+  "keyboard/enter_tall.png": {
+   "sha256": "e35fbbc32cfc662c0e38a59588dde08f3e6410f5177e4f9a24c12c58452bfc12",
+   "source": "Keyboard_Mouse/White/T_Enter_Tall_Key_White.png"
+  },
+  "keyboard/esc.png": {
+   "sha256": "2bd6c1adc05a72314b34430474823e41e4ed397a49820ca33e24fe10783ef3de",
+   "source": "Keyboard_Mouse/White/T_Esc_Key_White.png"
+  },
+  "keyboard/f.png": {
+   "sha256": "c08d50f6ab59fa8faa7d8781968a8db83c14a02f5f7dd33ccbbe531b8f6d006a",
+   "source": "Keyboard_Mouse/White/T_F_Key_White.png"
+  },
+  "keyboard/f1.png": {
+   "sha256": "b7eea66c7cc0bc82c217d59e6267f9726baabbcb37af1dd5a9c6dae72e3975ed",
+   "source": "Keyboard_Mouse/White/T_F1_Key_White.png"
+  },
+  "keyboard/f10.png": {
+   "sha256": "001185d332abd5fb1a622b24dc35beee382af6e93084b85e8a05f120dd02b49f",
+   "source": "Keyboard_Mouse/White/T_F10_Key_White.png"
+  },
+  "keyboard/f11.png": {
+   "sha256": "26b6663978d8731f071e4205235d30fe218e76c03167b8076eceeecdcd6d48b8",
+   "source": "Keyboard_Mouse/White/T_F11_Key_White.png"
+  },
+  "keyboard/f12.png": {
+   "sha256": "6c3c84934750fd6a86b4fc3e21970f4fe4bee5057292aca7a565815929d35e42",
+   "source": "Keyboard_Mouse/White/T_F12_Key_White.png"
+  },
+  "keyboard/f2.png": {
+   "sha256": "1c0eb357aa29ce79ee759f3b81f71e060914b5eb887621865d15f52a4163bd9d",
+   "source": "Keyboard_Mouse/White/T_F2_Key_White.png"
+  },
+  "keyboard/f3.png": {
+   "sha256": "3934d1832df61d45cff1b04d5257e3007389a480e44e082c2de4c0da4b87cad0",
+   "source": "Keyboard_Mouse/White/T_F3_Key_White.png"
+  },
+  "keyboard/f4.png": {
+   "sha256": "750c6f974105b87b515ab101a2722540cbb8e79bc49de897e665c2fce379f8b9",
+   "source": "Keyboard_Mouse/White/T_F4_Key_White.png"
+  },
+  "keyboard/f5.png": {
+   "sha256": "8a6602b5bc4698f1e3be825c19d5a44a1b072a740852ab889b07e5b9ea5a590a",
+   "source": "Keyboard_Mouse/White/T_F5_Key_White.png"
+  },
+  "keyboard/f6.png": {
+   "sha256": "162c66a610289c60d4cbe0b96248456eed10eb8b3258ea55214fd8795ca55ecc",
+   "source": "Keyboard_Mouse/White/T_F6_Key_White.png"
+  },
+  "keyboard/f7.png": {
+   "sha256": "ad861f794df08ce0b69fcadfcff89d40e279243756266e7153da958b13aaff42",
+   "source": "Keyboard_Mouse/White/T_F7_Key_White.png"
+  },
+  "keyboard/f8.png": {
+   "sha256": "93d37e97e417a75897885f6250f81cb0bbc9bd52b939f3fb393d0de9e4eedcdb",
+   "source": "Keyboard_Mouse/White/T_F8_Key_White.png"
+  },
+  "keyboard/f9.png": {
+   "sha256": "9f5deb1a197810e5dff8a655cf6264f6fb6ba4c8692ec854f4819f4e6bbd6f03",
+   "source": "Keyboard_Mouse/White/T_F9_Key_White.png"
+  },
+  "keyboard/g.png": {
+   "sha256": "5c728edc8d291c5c9877188e01e3257a74891a7c45729599209a6ff24b979912",
+   "source": "Keyboard_Mouse/White/T_G_Key_White.png"
+  },
+  "keyboard/h.png": {
+   "sha256": "d71d2b1b148716011dfdf78e4fa386b4cd20fb48133ed8cec75018332806f0ae",
+   "source": "Keyboard_Mouse/White/T_H_Key_White.png"
+  },
+  "keyboard/home.png": {
+   "sha256": "30f143c7c4004cfdd08c5e2b8452a6ddb5595ec1790b1582806c97665e47e221",
+   "source": "Keyboard_Mouse/White/T_Home_Key_White.png"
+  },
+  "keyboard/i.png": {
+   "sha256": "18204e5c68ad2a270c3061e1d2d299514871b028f89d0a6d89844bf1fb9bb07a",
+   "source": "Keyboard_Mouse/White/T_I_Key_White.png"
+  },
+  "keyboard/insert.png": {
+   "sha256": "875a8b63f3133e51fff7244a279e242c6679cb7876c20a6aa8bb0b3b60c510f4",
+   "source": "Keyboard_Mouse/White/T_Ins_Key_White.png"
+  },
+  "keyboard/j.png": {
+   "sha256": "5f9328c49ee377bb37afdc8c4ae0b6ba50f8adb0770d79e37071383a589cd10e",
+   "source": "Keyboard_Mouse/White/T_J_Key_White.png"
+  },
+  "keyboard/k.png": {
+   "sha256": "6210036bb4d00ee01a509cc3b74a9afa2ff9286c4c42a6122cdcc0596d9a10ba",
+   "source": "Keyboard_Mouse/White/T_K_Key_White.png"
+  },
+  "keyboard/keyboard_r.png": {
+   "sha256": "372d80b0673d3feb4f50b9be5879c476eb98f7bfb4b1baea176d5062a5f04c9f",
+   "source": "Keyboard_Mouse/White/T_Keyboard_R_Key_White.png"
+  },
+  "keyboard/l.png": {
+   "sha256": "154792e198ae0f9448b260a6447203702132187967ae675b0426424996d3a84a",
+   "source": "Keyboard_Mouse/White/T_L_Key_White.png"
+  },
+  "keyboard/left.png": {
+   "sha256": "6a2b0deb150716425a4e8e64b0c0f3186c9b6624e24a391b55a47573f153da53",
+   "source": "Keyboard_Mouse/White/T_Left_Key_White.png"
+  },
+  "keyboard/m.png": {
+   "sha256": "4752e62e4cdf6817cd46f72712ef92cdafcc5a5e5201d73a78aa184889056b22",
+   "source": "Keyboard_Mouse/White/T_M_Key_White.png"
+  },
+  "keyboard/minus.png": {
+   "sha256": "cfe6270f8d2cced9f6ebdab217b6777911e176b1d4cfbda1698082e334fd5896",
+   "source": "Keyboard_Mouse/White/T_Minus_Key_White.png"
+  },
+  "keyboard/mouse_left.png": {
+   "sha256": "fa6d6f09229c0e65c23da13f6b7bae0bdd2f72e4fe69d849a1e392f7a6b2a8c8",
+   "source": "Keyboard_Mouse/White/T_Mouse_Left_Key_White.png"
+  },
+  "keyboard/mouse_middle.png": {
+   "sha256": "76b2e58739d42c34110a95044fdec92b1aecfd9c5d679f6028368948c7a7a7aa",
+   "source": "Keyboard_Mouse/White/T_Mouse_Middle_Key_White.png"
+  },
+  "keyboard/mouse_right.png": {
+   "sha256": "236392d1fb9026e537231e631e268e7368529bce8dbc01dea60045d58a5ec242",
+   "source": "Keyboard_Mouse/White/T_Mouse_Right_Key_White.png"
+  },
+  "keyboard/mouse_simple.png": {
+   "sha256": "f2fcf79a8367e746ae810adf646eb11fd418773792d96d19786be28990a12c70",
+   "source": "Keyboard_Mouse/White/T_Mouse_Simple_Key_White.png"
+  },
+  "keyboard/mouse_x.png": {
+   "sha256": "951fd404704b92d0726209a7c03c8e6834c853e44fb5ee09db6460fd84d5c786",
+   "source": "Keyboard_Mouse/White/T_Mouse_X_Key_White.png"
+  },
+  "keyboard/mouse_xy.png": {
+   "sha256": "0cc4d4c7fc5130a03f00559fb8bc4e1a75fd0d9a2b0f93aca0ce066088c8b078",
+   "source": "Keyboard_Mouse/White/T_Mouse_XY_Key_White.png"
+  },
+  "keyboard/mouse_y.png": {
+   "sha256": "d9238b461d3a3df4aa497799f7fb8b75f59ce35af58c17b815ba5a680a67d794",
+   "source": "Keyboard_Mouse/White/T_Mouse_Y_Key_White.png"
+  },
+  "keyboard/n.png": {
+   "sha256": "ce039c6303cd32356813af49c37d7bf25a80f789aad2145e9e1365f83640f632",
+   "source": "Keyboard_Mouse/White/T_N_Key_White.png"
+  },
+  "keyboard/num_lock.png": {
+   "sha256": "a90cbc537f13f32a251e2911c4707ec29b344891e879a093c234ff7e131a9420",
+   "source": "Keyboard_Mouse/White/T_NumLock_Key_White.png"
+  },
+  "keyboard/o.png": {
+   "sha256": "d9801d9253f129ad5dd8bd93bf9f4dc649f81fb0edf9fd7910c4f566d8725024",
+   "source": "Keyboard_Mouse/White/T_O_Key_White.png"
+  },
+  "keyboard/p.png": {
+   "sha256": "2570d22a2b4433d8ada3f4f2b3805279d58613f8602f7be9e0f588f4e56e4ff9",
+   "source": "Keyboard_Mouse/White/T_P_Key_White.png"
+  },
+  "keyboard/page_down.png": {
+   "sha256": "67d4c43f4192f94eb0c6eafd12832b1c21e03077a51c4aa8a4c15f9e3e2ea11a",
+   "source": "Keyboard_Mouse/White/T_PageDown_Key_White.png"
+  },
+  "keyboard/page_up.png": {
+   "sha256": "63f99e8f89a7c157fa6010ab9c4a70249a0986912a857dd1864b150bcc399931",
+   "source": "Keyboard_Mouse/White/T_PageUp_Key_White.png"
+  },
+  "keyboard/plus.png": {
+   "sha256": "6830daedf41c451130d6fbaf2dbcc82c16ededb3eaaaabb9c8edea4de35ecb2c",
+   "source": "Keyboard_Mouse/White/T_Plus_Key_White.png"
+  },
+  "keyboard/plus_tall.png": {
+   "sha256": "477a70bb8c9d3cc98d366dd4604414639be191bc2911a597b07d0e97507393d7",
+   "source": "Keyboard_Mouse/White/T_Plus_Tall_Key_White.png"
+  },
+  "keyboard/print_screen.png": {
+   "sha256": "01b84acce5ac71d8578f6983ee874204a7dd242969ed988036a03f40f92fbcc8",
+   "source": "Keyboard_Mouse/White/T_PrtScrn_Key_White.png"
+  },
+  "keyboard/q.png": {
+   "sha256": "9d7f9fa2ef80bc0417ccba47ec9a36ca54345c95055eb11eff973558ea9691b9",
+   "source": "Keyboard_Mouse/White/T_Q_Key_White.png"
+  },
+  "keyboard/question_mark.png": {
+   "sha256": "5f6c99cff8a65ccf2a147d33721dec7e6d1d3f3f2071a089725b8b3b28bdb5cd",
+   "source": "Keyboard_Mouse/White/T_Question_Mark_Key_White.png"
+  },
+  "keyboard/quotation.png": {
+   "sha256": "40219b0b82a481287e73a005053625d961d72baeae310147c2d81d70d3405e17",
+   "source": "Keyboard_Mouse/White/T_Quotation_Key_White.png"
+  },
+  "keyboard/r.png": {
+   "sha256": "500f7fe1e582bd0265e7a494721f26d1fc1cdb55103c5e446d99daa0e04547a4",
+   "source": "Keyboard_Mouse/White/T_R_Key_White.png"
+  },
+  "keyboard/right.png": {
+   "sha256": "ea0c28d3f2129b679c20c5768e1a2a410ff1a71d3a677001920b71061af85633",
+   "source": "Keyboard_Mouse/White/T_Right_Key_White.png"
+  },
+  "keyboard/s.png": {
+   "sha256": "d9f7ef8a89666b2dc1f404e15db6940d7b705faad4783e265976690c639c171f",
+   "source": "Keyboard_Mouse/White/T_S_Key_White.png"
+  },
+  "keyboard/semicolon.png": {
+   "sha256": "ad274717441ea1760bb4b1a3f26433f27a771afaaa7b2cb079fa8bdfbb954990",
+   "source": "Keyboard_Mouse/White/T_Semicolon_Key_White.png"
+  },
+  "keyboard/shift.png": {
+   "sha256": "0ad62f75e9987749303b2334be477a19f309e5b56b05f4fcc69a66520b6a12dc",
+   "source": "Keyboard_Mouse/White/T_Shift_Key_White.png"
+  },
+  "keyboard/shift_super_wide.png": {
+   "sha256": "20b32ae7cd480c9928d0df17af1201c03e42c25f32663232a8a7765e361d2acf",
+   "source": "Keyboard_Mouse/White/T_Shift_Super_Wide_Key_White.png"
+  },
+  "keyboard/slash.png": {
+   "sha256": "d5f9c70b6a1884dc5508a9be00983d28d92b91406828a3cc22d229a45ef0d020",
+   "source": "Keyboard_Mouse/White/T_Slash_Key_White.png"
+  },
+  "keyboard/space.png": {
+   "sha256": "59a1c551dd1baabeae40039ba8c92306be423d0e69b904d4d6bcf60b922e1eff",
+   "source": "Keyboard_Mouse/White/T_Space_Key_White.png"
+  },
+  "keyboard/t.png": {
+   "sha256": "f9be5547d6a9fa6f47e0691500153f5b4e9306770937b0bf987ed34698727bf2",
+   "source": "Keyboard_Mouse/White/T_T_Key_White.png"
+  },
+  "keyboard/tab.png": {
+   "sha256": "654cbe5ec1fed1365ccc66c385d0a9995d25731d0bc3da02bf438d73e29f1162",
+   "source": "Keyboard_Mouse/White/T_Tab_Key_White.png"
+  },
+  "keyboard/tilde.png": {
+   "sha256": "b05478cc1e95d2f25f7aa7fa0f253077f36097e8ea2f3122da6027693752c8b0",
+   "source": "Keyboard_Mouse/White/T_Tilde_Key_White.png"
+  },
+  "keyboard/u.png": {
+   "sha256": "a5a35146dd82545b8c9e86468c46d9a4100ee13d6cc1ceaad31df856f5c2a024",
+   "source": "Keyboard_Mouse/White/T_U_Key_White.png"
+  },
+  "keyboard/up.png": {
+   "sha256": "4939a26ecd9e7882eb82f98d4ee86f355878ec54208449a69baa2885931a196d",
+   "source": "Keyboard_Mouse/White/T_Up_Key_White.png"
+  },
+  "keyboard/v.png": {
+   "sha256": "fdaccbc7824cde3e900eb61ab763769c0f42a8ffea674b81072ba3d5eebc81bd",
+   "source": "Keyboard_Mouse/White/T_V_Key_White.png"
+  },
+  "keyboard/w.png": {
+   "sha256": "1529d9a29943b6d4c55d70e07373af567b81d463f1bc1aeac550d5d3d518a1f4",
+   "source": "Keyboard_Mouse/White/T_W_Key_White.png"
+  },
+  "keyboard/x.png": {
+   "sha256": "7d90351efdaee323576db36d31cc4ed7bdf7f0c6fda86d82846cf6d792790a1a",
+   "source": "Keyboard_Mouse/White/T_X_Key_White.png"
+  },
+  "keyboard/y.png": {
+   "sha256": "eb0dc3ffe33bb52def03318491b4cdb8d02c939868f51ce12cee695edf6f8652",
+   "source": "Keyboard_Mouse/White/T_Y_Key_White.png"
+  },
+  "keyboard/z.png": {
+   "sha256": "394ac70affab3c557e688b53a8b6ce5a9fbaa1e873c8d2218fdc501b9595990c",
+   "source": "Keyboard_Mouse/White/T_Z_Key_White.png"
+  },
+  "ps5/a.png": {
+   "sha256": "3cf3459c0b55da147a5c85b037dc98e95abc60d450bf6d49e301b7641d24b98a",
+   "source": "P5Gamepad/Light/T_P5_Cross_Color_Light.png"
+  },
+  "ps5/b.png": {
+   "sha256": "b366bfb365ce4f630363f13725d21a7108a29b44def7fe3cf951dae16d8f686c",
+   "source": "P5Gamepad/Light/T_P5_Circle_Color_Light.png"
+  },
+  "ps5/dpad_down.png": {
+   "sha256": "5784b0471ff0546ed82744f08138cd0772aed5e8a623c5f15266551b3f8b6919",
+   "source": "P5Gamepad/Light/T_P5_Dpad_Down_Light.png"
+  },
+  "ps5/dpad_left.png": {
+   "sha256": "fc7593053034d564faa62a31aae0d0ed25a78b84c9eb5d0165163e6e9952927a",
+   "source": "P5Gamepad/Light/T_P5_Dpad_Left_Light.png"
+  },
+  "ps5/dpad_right.png": {
+   "sha256": "6843e3661725174a0efd2a745679f002c6788940a4fcedab0a4ca9c9302c4f00",
+   "source": "P5Gamepad/Light/T_P5_Dpad_Right_Light.png"
+  },
+  "ps5/dpad_up.png": {
+   "sha256": "c3ffe29a6db85911ab540bd7d357f17676243eb86f40943d1624ff2a55c7d11a",
+   "source": "P5Gamepad/Light/T_P5_Dpad_UP_Light.png"
+  },
+  "ps5/l3.png": {
+   "sha256": "25975d7f93e192ff932a329ddda3a2f34b298df4abc4ce5c64cff41aa2b5a0c8",
+   "source": "P5Gamepad/Light/T_P5_L3_Light.png"
+  },
+  "ps5/lb.png": {
+   "sha256": "f51c4fc173dad6f140580c4749fb0f4e790582c00705474807cbfe3699cd1aa6",
+   "source": "P5Gamepad/Light/T_P5_L1_Light.png"
+  },
+  "ps5/lstick.png": {
+   "sha256": "35c0ea23a5dd1b2772d74ab40b085171c887c1fcd545d2f3f8d65d3d107e0897",
+   "source": "P5Gamepad/Light/T_P5_L_Light.png"
+  },
+  "ps5/lt.png": {
+   "sha256": "5f9cf43977fb87ac7f865fc8202536ba0c4c402f805e814d8250c41f919739b7",
+   "source": "P5Gamepad/Light/T_P5_L2_Light.png"
+  },
+  "ps5/menu.png": {
+   "sha256": "d5600d6319c71d69b404ab57fe8dd8fbb85da9897b553b3d10f839552c4feed1",
+   "source": "P5Gamepad/Light/T_P5_Options_Light.png"
+  },
+  "ps5/r3.png": {
+   "sha256": "5f42259667139d56c5b1fc022809cdef9d2ba608f9d10256a2ce0b2e0268357c",
+   "source": "P5Gamepad/Light/T_P5_R3_Light.png"
+  },
+  "ps5/rb.png": {
+   "sha256": "fe461834de9157f6fa7892147dd5278b4023d3b17fcb4c85ac4066fa7c5d9682",
+   "source": "P5Gamepad/Light/T_P5_R1_Light.png"
+  },
+  "ps5/rstick.png": {
+   "sha256": "89dcdfe69be164c2949d37c0c735a689dc5f8742190ddcb63917c7a6ead554d9",
+   "source": "P5Gamepad/Light/T_P5_R_Light.png"
+  },
+  "ps5/rt.png": {
+   "sha256": "e78ffe91a4ccb1e88cd3f7a2b9bc1518c3845fbbc8ff3aa54071e36caa1ea438",
+   "source": "P5Gamepad/Light/T_P5_R2_Light.png"
+  },
+  "ps5/view.png": {
+   "sha256": "505b4b6c481d78707ae9e187a477037fcc832378404a97acffcdcc0543266901",
+   "source": "P5Gamepad/Light/T_P5_Share_Light.png"
+  },
+  "ps5/x.png": {
+   "sha256": "6e82c5d0d59c5139b29343284b7b31cb43b412ea460294b02bc3cfa7c5001817",
+   "source": "P5Gamepad/Light/T_P5_Square_Color_Light.png"
+  },
+  "ps5/y.png": {
+   "sha256": "5e707a008dc24c94e9b535f636cb6cfc92458b153ed9797d676c73f5ddf246e2",
+   "source": "P5Gamepad/Light/T_P5_Triangle_Color_Light.png"
+  },
+  "switch/a.png": {
+   "sha256": "1a37589535b3e221657e2ced545464930be0d3465ca79b8e13598abfb26f72ab",
+   "source": "SGamepad/Light/T_S_B_Light.png"
+  },
+  "switch/b.png": {
+   "sha256": "939e0731db02ced1b027d53d1a7ea0eaf61e88bca4b603f0273f58b2d628443a",
+   "source": "SGamepad/Light/T_S_A_Light.png"
+  },
+  "switch/dpad_down.png": {
+   "sha256": "feaaac01aac07d161e658c2ce7461fff3d7af390cf3f3e9e0db7fae31fdf8e17",
+   "source": "SGamepad/Light/T_S_Dpad_Down_Light.png"
+  },
+  "switch/dpad_left.png": {
+   "sha256": "37481447ff8b4ac9751b204a238d6cc40094a9f754371bc2bc1ebcd6d242ac2f",
+   "source": "SGamepad/Light/T_S_Dpad_Left_Light.png"
+  },
+  "switch/dpad_right.png": {
+   "sha256": "5a8272c88cb496b83fa5cf90a3badec0709be17b2841abbb5ebd95e911e68cdc",
+   "source": "SGamepad/Light/T_S_Dpad_Right_Light.png"
+  },
+  "switch/dpad_up.png": {
+   "sha256": "2c5383a4c93749ad0125d5276c236fbe6eb37d62a9ce164ef11686e24df0bec6",
+   "source": "SGamepad/Light/T_S_Dpad_Up_Light.png"
+  },
+  "switch/l3.png": {
+   "sha256": "4ade38601b65559f191b02f76d6f1f42f049333d196d728defe84652fa1ee833",
+   "source": "SGamepad/Light/T_S_L_Light.png"
+  },
+  "switch/lb.png": {
+   "sha256": "4443244bfa636621e6237f00d2b8f9cdbd5b01b15f499f03ab913b8b5614dece",
+   "source": "SGamepad/Light/T_S_LB_Light.png"
+  },
+  "switch/lstick.png": {
+   "sha256": "4ade38601b65559f191b02f76d6f1f42f049333d196d728defe84652fa1ee833",
+   "source": "SGamepad/Light/T_S_L_Light.png"
+  },
+  "switch/lt.png": {
+   "sha256": "db56bd16a304951ad96b3dddefbb8c8dc658f5a050d9afa0c0b6c2a9600973ab",
+   "source": "SGamepad/Light/T_S_LT_Light.png"
+  },
+  "switch/menu.png": {
+   "sha256": "5fef80aa7815b242ca832bbd53a28fd2ed93a68de21d7c9564fc5bfdd60fda3a",
+   "source": "SGamepad/Light/T_S_Plus_Light.png"
+  },
+  "switch/r3.png": {
+   "sha256": "d4c98a18906fc986bcb62d5b7e1ac8954f0e2e32b86a0a7449b626c47f2613f7",
+   "source": "SGamepad/Light/T_S_R_Light.png"
+  },
+  "switch/rb.png": {
+   "sha256": "405f7a6d222df9d64e9e06e8a614aafbc9eedcd9990d5d6e4406cbe5b281316f",
+   "source": "SGamepad/Light/T_S_RB_Light.png"
+  },
+  "switch/rstick.png": {
+   "sha256": "d4c98a18906fc986bcb62d5b7e1ac8954f0e2e32b86a0a7449b626c47f2613f7",
+   "source": "SGamepad/Light/T_S_R_Light.png"
+  },
+  "switch/rt.png": {
+   "sha256": "a088bd93fa023468f16644e31b584d889f842b7a1ae020465060294fbd0db99e",
+   "source": "SGamepad/Light/T_S_RT_Light.png"
+  },
+  "switch/view.png": {
+   "sha256": "c32d718aef29170dc34714ab31ac4c4bed08e6b9b4e2eef902923fdb1a5da36d",
+   "source": "SGamepad/Light/T_S_Minus_Light.png"
+  },
+  "switch/x.png": {
+   "sha256": "622c63e49acc5f008e7778715e937b4ce64b2d3ff2e3da02b91ba84cd4af99cb",
+   "source": "SGamepad/Light/T_S_Y_Light.png"
+  },
+  "switch/y.png": {
+   "sha256": "68e5d4d1fbca6be29a344cf197ac107f10afab1bc1c1429e29e08d9c734308b8",
+   "source": "SGamepad/Light/T_S_X_Light.png"
+  },
+  "xbox/a.png": {
+   "sha256": "c7b808da36d23d8e82896e14878ee8ca9bd0e7d59862089260dfb09c4ae945e9",
+   "source": "XGamepad/Light/T_X_A_Color_Light.png"
+  },
+  "xbox/b.png": {
+   "sha256": "3289563cfdf5ef3efd15c57511e538824db47f10aba160a47bf55da90a02c690",
+   "source": "XGamepad/Light/T_X_B_Color_Light.png"
+  },
+  "xbox/dpad_down.png": {
+   "sha256": "234144d7187766d9103a691c3d24c91f9d38b9986e4d41e17a2a7e594b6a7c5e",
+   "source": "XGamepad/Light/T_X_Dpad_Down_Light.png"
+  },
+  "xbox/dpad_left.png": {
+   "sha256": "3ded93d02983302810fc0ff36bce5ff3c3707b742671c342db47e0f954370891",
+   "source": "XGamepad/Light/T_X_Dpad_Left_Light.png"
+  },
+  "xbox/dpad_right.png": {
+   "sha256": "a3fd1ddcd3279ae56ae00b21c3c057735644bf03e4881a1030749da6b92e1429",
+   "source": "XGamepad/Light/T_X_Dpad_Right_Light.png"
+  },
+  "xbox/dpad_up.png": {
+   "sha256": "722c1dd8f3e5debc0143d82d7c7573860b764bab05fb73cdeb2eb0c63cb723fe",
+   "source": "XGamepad/Light/T_X_Dpad_Up_Light.png"
+  },
+  "xbox/l3.png": {
+   "sha256": "e75c70930629a49b9c92664ee42281ff629bf65ecd8a51d5e5f4b826c60c874a",
+   "source": "XGamepad/Light/T_X_Left_Stick_Click_Light.png"
+  },
+  "xbox/lb.png": {
+   "sha256": "2721a8a948b7776b3dfbdee1c6f66974542d27257535da4e817b4865c876f640",
+   "source": "XGamepad/Light/T_X_LB_Light.png"
+  },
+  "xbox/lstick.png": {
+   "sha256": "423f9dca29ee82df14fb8e23923790e96f41bb893cec7cf73c753f5826c5e78f",
+   "source": "XGamepad/Light/T_X_L_Light.png"
+  },
+  "xbox/lt.png": {
+   "sha256": "3816da328682ad71c8ff550eaed7aef3172f8ad92f305df0e9a2d1135fcf6cc3",
+   "source": "XGamepad/Light/T_X_LT_Light.png"
+  },
+  "xbox/menu.png": {
+   "sha256": "717ae22dee8e1567a2d9c2ba572718289b806892dddcb7b8b1d4c0f4bf9232b1",
+   "source": "XGamepad/Light/T_X_Light_Sprite.svg (rendered x4, cell 16,1696 96px)"
+  },
+  "xbox/r3.png": {
+   "sha256": "a00c5d376f459a89315fe6fd779cc74bbfa86ee9e9841ec2f8a6ea149074368f",
+   "source": "XGamepad/Light/T_X_Right_Stick_Click_Light.png"
+  },
+  "xbox/rb.png": {
+   "sha256": "95468665c052ca59c31909ab556399eb2130be60d2293a561f8d0b1c08b2abd4",
+   "source": "XGamepad/Light/T_X_RB_Light.png"
+  },
+  "xbox/rstick.png": {
+   "sha256": "92678fb94845e7f99e3f6eeb49df779f6e70dd96df72ea932d10313de50b8e96",
+   "source": "XGamepad/Light/T_X_R_Light.png"
+  },
+  "xbox/rt.png": {
+   "sha256": "e5fb324240113a05f8acb671bffbf0de732e7a664508a3c22027ab16d1ddef63",
+   "source": "XGamepad/Light/T_X_RT_Light.png"
+  },
+  "xbox/view.png": {
+   "sha256": "b314723371a0f4be82f7d6af7e29372728099eff59bd4bd178b01f77c3c98fa2",
+   "source": "XGamepad/Light/T_X_Light_Sprite.svg (rendered x4, cell 184,1696 96px)"
+  },
+  "xbox/x.png": {
+   "sha256": "9cac7e1e1ba1475e707b1c86f2d0f888230be2f81e92339c53a9dfe614c55f97",
+   "source": "XGamepad/Light/T_X_X_Color_Light.png"
+  },
+  "xbox/y.png": {
+   "sha256": "46235e2704a2b129599ee25c8f9048b714690a9f448fe6f611c181bacb168809",
+   "source": "XGamepad/Light/T_X_Y_Color_Light.png"
+  }
+ },
+ "source_archive_bytes": 12999638,
+ "source_archive_sha256": "f6c75921b9d6ab2cb2b5249f547c7b7ba19e22da9f4f3b45693cf0912f25ded0"
+}

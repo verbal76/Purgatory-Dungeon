@@ -3,9 +3,8 @@
 # Path: res://scripts/glyph_prompt.gd
 #
 # Description:
-#   One prompt line with a button in it ("Press [A] to stop"). On a controller the button is its art (original glyphs, in the Xbox or
-#   Steam Deck / Steam Controller label set of the pad in use); on keyboard / mouse it is the key's name; on touch the on-screen
-#   control's name. It follows InputManager live, so switching input device swaps the line without rebuilding the screen.
+#   One prompt line with a button in it ("Press [A] to stop"). On a controller the button is its art (the studio glyph library, in the Xbox, PlayStation,
+#   Switch or Steam Deck family of the pad in use); on keyboard / mouse it is the key cap; on touch the on-screen control's name. It follows InputManager live, so switching input device swaps the line without rebuilding the screen.
 #
 #   Usage (the template's "%g" marks where the button goes):
 #       var line: HBoxContainer = GlyphPromptScript.new()
@@ -71,10 +70,16 @@ func form() -> String:
 func _refresh() -> void:
 	if _icon == null:
 		return
+	# Controller: that pad's button. Keyboard / mouse: the key cap. Touch (and anything the library has no art for): words. Never two forms at once.
 	var tex: Texture2D = null
 	if InputManager.is_gamepad():
 		tex = Glyphs.texture(Glyphs.token_for_action(action), InputManager.controller_style)
+	elif InputManager.is_keyboard():
+		tex = Glyphs.key_texture(action)
 	_icon.texture = tex
+	if tex != null and tex.get_height() > 0:
+		# Sized by height; the width follows the glyph's own shape (a Space or Enter cap is wide, a face button round).
+		_icon.custom_minimum_size = Vector2(icon_px * float(tex.get_width()) / float(tex.get_height()), icon_px)
 	_icon.visible = tex != null
 	_key.visible = tex == null
 	if tex == null:

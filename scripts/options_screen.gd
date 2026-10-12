@@ -645,6 +645,18 @@ func _build_controls_tab() -> void:
 
 
 func _populate_controls_tab(t: VBoxContainer) -> void:
+	# ── Controller prompts: which pad the on-screen buttons are drawn for ───────────
+	_section(t, "Prompts")
+	var pr := _row(t, "Controller Prompts", "Applies immediately")
+	var pr_option := OptionButton.new()
+	pr_option.name = "ControllerPrompts"
+	pr_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for entry in [["Automatic (follows the controller in use)", 0], ["Xbox", 1], ["PlayStation", 2], ["Nintendo Switch", 3], ["Steam Deck / Steam Controller", 4]]:
+		pr_option.add_item(entry[0], entry[1])
+	pr_option.select(InputManager.prompt_override)
+	pr_option.item_selected.connect(func(idx: int) -> void: InputManager.set_prompt_override(idx))
+	pr.add_child(pr_option)
+
 	# ── Quick Reference (read-only) ─────────────────────────────────────────
 	_section(t, "Quick Reference")
 
