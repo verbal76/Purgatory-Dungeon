@@ -5,9 +5,9 @@ actually run, and what was not. "Compiled" is never written as "tested". Status 
 
 | | Android | Windows | Linux (native) |
 |---|---|---|---|
-| Artifact | `Purgatory-Dungeon-v<N>.apk` (arm64, API 30-36, signed with the persistent key) | `Purgatory-Dungeon-v<N>-Windows.zip` | `Purgatory-Dungeon-v<N>-Linux.tar.gz` (executable bit set) |
+| Artifact | `Purgatory Dungeon Build NN APK.apk` (arm64, API 30-36, signed with the persistent key) | `Purgatory Dungeon Build NN EXE.zip` | `Purgatory Dungeon Build NN Linux.tar.gz` (executable bit set) (v1-v8: `Purgatory-Dungeon-v<N>...`) |
 | Export preset | `Android` in `export_presets.cfg` | `Windows Desktop` in `export_presets.cfg` | **none tracked**: `tools/build.py` appends a `Linux` preset to a scratch copy (a tracked preset would change the native fingerprint; `docs/COMPLIANCE_AUDIT.md` RED-3) |
-| Built by | `ci.yml` (`tools/android/build_apk.sh`; release tag or explicit dispatch) | `ci.yml` (release / dispatch) or `python3 tools/build.py --platform windows` | `python3 tools/build.py --platform linux` (local); `ci.yml` job `linux` on an explicit `build_linux` dispatch (never run; a dispatch needs the workflow on the default branch) |
+| Built by | the manual `ci.yml` workflow, job `android` (`tools/android/build_apk.sh`, existing key only) | the manual `ci.yml` workflow, job `windows`, or `python3 tools/build.py --platform windows` | the manual `ci.yml` workflow, job `linux`, or `python3 tools/build.py --platform linux` |
 | Engine templates | Android (installed in CI) | Windows (installed in CI) | official 4.6-stable `linux_release.x86_64` (not installed in CI yet) |
 | Renderer | Mobile / Vulkan, 0.75 render scale, 1280x720 expand | Forward+ with D3D12 (`rendering_device/driver.windows`) | Forward+ / Vulkan (Godot's Linux default) |
 | Input | touch (`scripts/touch/`), Android back button handled | keyboard + mouse, gamepad | keyboard + mouse, gamepad |

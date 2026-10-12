@@ -17,14 +17,14 @@ Work classes: GREEN (safe, autonomous), YELLOW (autonomous with a regression tes
 | 4 | Windows build (5) | PASS | exported and verified locally and by CI; the package no longer carries the ~300 MB of unused media after the `.gdignore` change (pass 4) |
 | 5 | Native Linux build (5) | PARTIAL | `tools/build.py --platform linux` builds, verifies, boots headless (also inside an empty network namespace); an explicit-dispatch `linux` job exists in `ci.yml` (never run: a dispatch needs the workflow on the default branch); no tracked preset (RED-3); not run on hardware |
 | 6 | One build number, one SHA (6) | PASS | `VERSION`, lineage gate, `SOURCE_SHA` in CI; `build.py` stamps one SHA on all targets |
-| 7 | Artifact naming (7) | FAIL (convention conflict) | repo convention `Purgatory-Dungeon-v<N>-Windows.zip` / `.apk` differs from the standard's `Purgatory Dungeon Build NN EXE.zip`; `build.py --naming standard` supports both; owner decision RED-2 |
-| 8 | GitHub Releases library (8) | PARTIAL | one release per number, Latest, immutable tags, never overwritten; no `build-manifest.json` / `checksums.sha256` attached by CI yet (Q-6); no Linux file |
-| 9 | Manual coordinated build workflow (9) | PARTIAL | local tool done (`build.py`); `ci.yml` builds each target only on an explicit dispatch input (`build_windows`, `build_android`, `build_linux`) or a release ref; the single workflow with inputs `platform / source_sha / build_number / destination` and Release attachment is not written (RED-9: touches the release path) |
-| 10 | No accidental publication (9, 20) | PASS | PRs run only when ready, no push-triggered releases of OTA; release only by tag/release branch (owner action); OTA only by `ota/<channel>/<sha>` push |
+| 7 | Artifact naming (7) | PASS (pass 5) | owner decision 2026-10-12: future builds are `Purgatory Dungeon Build NN APK.apk / EXE.zip / Linux.tar.gz` + `build-manifest.json` + `checksums.sha256`; v1-v8 keep their names; enforced by `build.py`, `build_gate.py`, `verify_package.py` |
+| 8 | GitHub Releases library (8) | PASS in source (never run) | the guarded `publish` job creates tag `build-NN` and the release with the five standard files; `local_only` creates nothing; v1-v8 untouched |
+| 9 | Manual coordinated build workflow (9) | PASS in source, hosted run pending (pass 5) | `ci.yml` = "Build (manual)": `workflow_dispatch` only, inputs platform / source_sha / build_number / destination (default `local_only`), gate -> validate -> windows/linux/android -> assemble -> publish (github_releases only); policy tests + actionlint; the hosted run is recorded in the pass-5 section |
+| 10 | No accidental publication (9, 20) | PASS (pass 5) | tag / `release/v*` / `promote/**` publication was REMOVED; builds start only by manual dispatch; the one remaining push-triggered publisher is `ota-publish.yml` (an `ota/<channel>/<sha>` branch, owner-authorised, unchanged, asserted by `test_build_workflow.py`) |
 | 11 | Update architecture (10) | PASS | signed OTA + native baseline + runtime fingerprint + rollback (`docs/OTA.md`); Android only; Windows/Linux = new package (SteamPipe pending, RED-6) |
 | 12 | Publishing separation (10) | PASS | release, OTA, Steam are separate actions; `build.py` has no publish path (tested) |
-| 13 | Save schema, safe writes (11) | PARTIAL | atomic temp+rename for profile, settings, last slot and now codex; **no save schema version field, no backup of the previous good file** (RED-5) |
-| 14 | Corruption handling (11) | PARTIAL | a corrupt slot loads a fresh default profile and, found in pass 4, the quit / background path then saved over the unreadable file; fixed: the bytes are now kept as `profile_N.save.unreadable` (`test_save_manager`). Still no schema version and no automatic restore (RED-5) |
+| 13 | Save schema, safe writes (11) | PASS in source, native release only (pass 5) | `schema_version` 1, unknown keys and newer schemas preserved, session backups; `test_save_schema` (40 checks). (earlier text:) | atomic temp+rename for profile, settings, last slot and now codex; **no save schema version field, no backup of the previous good file** (RED-5) |
+| 14 | Corruption handling (11) | PASS in source (pass 5) | unreadable bytes preserved, recovery from the previous session's backup or a complete interrupted temp file. (earlier text:) | a corrupt slot loads a fresh default profile and, found in pass 4, the quit / background path then saved over the unreadable file; fixed: the bytes are now kept as `profile_N.save.unreadable` (`test_save_manager`). Still no schema version and no automatic restore (RED-5) |
 | 15 | Steam Cloud (11) | BLOCKED | no Steam App ID, no Steamworks plugin; hardware-specific settings (graphics level) live in settings.json, which a cloud sync must exclude (design note in Q-9) |
 | 16 | Controller completeness (12.1) | PASS (software) | every menu reachable by pad (`test_controller_nav`, 35 checks); remap not disturbed; physical pad on a Deck UNVERIFIED |
 | 17 | On-screen keyboard (12.2) | PARTIAL | the in-game pad keyboard works (tested); the Steam floating keyboard (`ShowFloatingGamepadTextInput`) is **pending**, needs Steamworks/App ID (BLOCKED, RED-6) |
@@ -64,7 +64,7 @@ Work classes: GREEN (safe, autonomous), YELLOW (autonomous with a regression tes
 - **RED-2** Artifact/release naming: standard `Purgatory Dungeon Build NN ...` against the owner's `Purgatory Dungeon v<N>` convention (CLAUDE.md, docs/RELEASES.md, tests). Tool supports both; the owner picks.
 - **RED-3** Tracked Linux export preset: changes `export_presets.cfg` and therefore the native fingerprint (a new APK generation). The scratch-preset approach avoids it.
 - ~~RED-4~~ **Resolved in pass 4 without a preset change**: the unreferenced skyboxes, video and night-sky texture are hidden from Godot with `.gdignore` (moved, not deleted), so no preset edit or fingerprint bump was needed.
-- **RED-5** (narrowed in pass 4: unreadable bytes are now preserved) Save-system hardening still open: add `schema_version`, keep a `.bak` of the last good profile and fall back to it on a parse failure. Touches `save_manager.gd` / `storage_paths.gd` (guarded files, the save format): needs a migration plan and the owner's approval; test with real saves first.
+- ~~RED-5~~ **Implemented in pass 5** (owner authorised the backward-compatible save protection): `schema_version`, session backups, future-schema protection, recovery; ships only in the next native release (below). Touches `save_manager.gd` / `storage_paths.gd` (guarded files, the save format): needs a migration plan and the owner's approval; test with real saves first.
 - **RED-6** Steamworks (GodotSteam plugin, App ID): Steam keyboard, Steam Cloud, SteamPipe uploads.
 - **RED-7** Windows renderer d3d12 -> vulkan (native, owner decision, already parked).
 - **RED-8** Remove or license UNVERIFIED assets; supply receipts.
@@ -114,3 +114,24 @@ add a required-reviewer environment on the `publish` job if a second confirmatio
 
 **Corrections made in pass 4:** `.gdignore` for unreferenced media (Windows package no longer ships ~300 MB of it); `tests/test_licenses.py`; `tests/test_offline.py`;
 `tests/test_mixed_look.gd`; banner-over-pause fix + `tests/test_toast_pause.gd`; unreadable-save preservation + test; `ci.yml` `build_linux` dispatch job + wiring tests.
+
+## Pass 5 (unified build pipeline and save protection; starting SHA `ee92cb6`)
+
+**Owner decisions applied (2026-10-12).** (1) Future builds are named `Purgatory Dungeon Build NN` with the five standard files; v1-v8 stay as published. (2) One manual
+build workflow; building and publishing are separate. (3) Backward-compatible save versioning and backups for the next native release. The decisions that remain are in the final report.
+
+**Publication paths found (all workflows).** `ci.yml` published on a `v<N>` tag, a `release/v<N>` branch and a `promote/**` branch (removed: the replacement is the guarded `publish` job of the manual
+workflow); `ota-publish.yml` publishes an OTA when an `ota/<channel>/<sha>` branch is pushed (kept: not an ordinary push, owner-authorised, protected by the signing key, the native runtime
+fingerprint and the proven suite; converting it to a dispatch would make OTAs unpublishable until `main` carries the workflow, so it is documented and pinned by a test instead);
+`ota.yml` / `ota-pubkey.yml` are legacy files that exist only on `main`'s registry history (not in this tree). No branch has protection (`protected: false` on every branch, `main` included):
+recommendation: protect `main` (required review, no force push) when it is fast-forwarded.
+
+**Why the unified workflow lives in `ci.yml`.** GitHub can dispatch only a workflow it has already registered (probe: `ci.yml` accepted a dispatch at the PR branch ref, a new `build.yml` returned 404),
+and `main` has no workflows yet. Reusing the registered path makes the one authorised hosted run possible before the merge; after the merge the file can be renamed. `tests.yml` (pull requests and
+pushes to `main`, read-only) replaces the old validation job.
+
+**Saves.** `OTA-guarded`: `scripts/save_manager.gd` changed, so `tools/ota/classify.py` reports it as guarded and an OTA would need the owner's separate `--accept-guarded`. The new code only adds
+a key and writes extra recovery files, so an older reader still loads the file, but the change is delivered in the next native release (APK), never by an OTA, until the owner decides otherwise.
+
+**Remaining release blockers (documented, not solved):** Steam App ID + Steamworks (Steam keyboard, Steam Input, Steam Cloud, SteamPipe), Steam Deck / Android device / Windows and Linux GPU
+validation, controller reconnect and suspend/resume, licences for the music, sound effects, models and props, the glyph page copy, production signing credentials (the hosted Android job uses the existing key only).

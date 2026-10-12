@@ -2913,21 +2913,24 @@ class TestOtherWorkflows(unittest.TestCase):
             self.assertEqual(d["jobs"]["suite"]["permissions"], {"contents": "read"})
 
     def test_ci_has_no_ota_key_job_or_trust_anchor_steps(self):
-        y = wf("ci.yml")
-        for gone in ("ota-key", "OTA trust anchor", "ota_trust", "keys.sh", "OTA_PUB_B64", "pub_b64", "OTA_SIGNING_KEY"):
-            self.assertNotIn(gone, y, gone)
+        # ci.yml is the manual build workflow, tests.yml the validation workflow: neither holds an OTA key, a trust anchor or an OTA publication step.
+        y, t = wf("ci.yml"), wf("tests.yml")
+        for text in (y, t):
+            for gone in ("ota-key", "OTA trust anchor", "ota_trust", "keys.sh", "OTA_PUB_B64", "pub_b64", "OTA_SIGNING_KEY"):
+                self.assertNotIn(gone, text, gone)
         self.assertEqual(y.count("python3 tools/ota_runtime.py --check"), 2)
+        self.assertEqual(t.count("python3 tools/ota_runtime.py --check"), 1)
         d = load_yaml(y)
         if d:
-            for job in ("validate-and-export", "android"):
+            for job in ("validate", "android"):
                 runs = [s.get("run", "") for s in d["jobs"][job]["steps"]]
                 self.assertIn("python3 tools/ota_runtime.py --check", runs, job)
-            self.assertNotIn("needs", d["jobs"]["validate-and-export"], "no longer waits for an ota-key job")
-            self.assertEqual(d["jobs"]["android"]["needs"], "validate-and-export", "the APK is built only after the FULL suite is green (and waits for nothing else)")
+            self.assertEqual(d["jobs"]["validate"]["needs"], "gate", "the suite waits only for the source gate")
+            self.assertEqual(sorted(d["jobs"]["android"]["needs"]), ["gate", "validate"], "the APK is built only after the FULL suite is green")
             self.assertNotIn("ota-key", d["jobs"])
         # everything else is still there
-        for keep in ("tools/release_tool.py check", "tests/run_tests.sh", "tools/verify_package.py", "tools/android/build_apk.sh", "tools/publish_release.sh",
-                     "promote/", "android-signing-key"):
+        for keep in ("tools/release_tool.py check", "tests/run_tests.sh", "tools/build.py", "tools/build_gate.py", "tools/verify_apk.py", "tools/android/build_apk.sh",
+                     "android-signing-key"):
             self.assertIn(keep, y, keep)
 
     def test_nothing_else_publishes_ota_releases(self):
