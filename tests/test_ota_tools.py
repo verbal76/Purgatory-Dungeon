@@ -1958,7 +1958,8 @@ class TestBuildInfoAndVerify(TmpCase):
 
     def names_ok(self, extra=(), bi=None, drop=()):
         names = ["scenes/StudioSplash.tscn", "scripts/studio_splash.gd", "scenes/MainMenu.tscn", "scripts/build_info.gd", "build_info.json",
-                 "Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png", "scripts/boot/ota_core.gd", "scripts/boot/ota_config.gd"]
+                 "Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png", "scripts/boot/ota_core.gd", "scripts/boot/ota_config.gd",
+                 "data/buffs.json", "data/globe_effects.json", "data/codex_lore.json"]
         names = [n for n in names if n not in drop] + list(extra)
         info = {"public_version": 7, "release": True, "commit": BASE40, "runtime_id": "android-godot-4.6.0-r1", "runtime_fingerprint": FP64,
                 "ota_channel": "dev"}
@@ -1970,6 +1971,7 @@ class TestBuildInfoAndVerify(TmpCase):
 
     def test_package_checks(self):
         self.assertEqual(self.names_ok(), [])
+        self.assertTrue(any("codex_lore.json" in p for p in self.names_ok(drop=("data/codex_lore.json",))), "a package without the runtime data (the Codex lore) is refused")
         self.assertEqual(self.names_ok(drop=("scripts/boot/ota_core.gd", "scripts/boot/ota_config.gd")), [], "a build without the client is fine")
         for field in ("runtime_id", "runtime_fingerprint", "ota_channel"):
             probs = self.names_ok(bi={field: None})
