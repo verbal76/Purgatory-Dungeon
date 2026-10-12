@@ -91,8 +91,14 @@ def check_names(names, read, what, version, require_logo, release, sha, problems
     def has(sub):
         return any(sub in n for n in names)
 
+    members = {n[len("res://"):] if n.startswith("res://") else n for n in names}
+
+    def present(need):
+        """EXACT member match (a sidecar such as scripts/x.gd.uid must not satisfy a requirement for scripts/x.gd): the file itself, its .remap, or its compiled .gdc."""
+        return need in members or need + ".remap" in members or (need.endswith(".gd") and need[:-3] + ".gdc" in members)
+
     for need in ("scenes/StudioSplash.tscn", "scripts/studio_splash.gd", "scenes/MainMenu.tscn", "build_info.json", "scripts/build_info.gd"):
-        if not (has(need) or has(need.replace(".gd", ".gdc")) or has(need + ".remap")):
+        if not present(need):
             problems.append(f"the {what} does not contain {need}")
     if not has(LOGO):
         (problems if require_logo else notes).append(f"the {what} does not contain the canonical logo {LOGO}")
@@ -105,7 +111,7 @@ def check_names(names, read, what, version, require_logo, release, sha, problems
     # Runtime data the game reads from res:// must be in the package: the export packs resources and known data (.json), NOT arbitrary files such as
     # .txt (the Codex lore was a .txt and every packaged build lacked it).
     for must in ("data/buffs.json", "data/globe_effects.json", "data/codex_lore.json"):
-        if not has(must):
+        if not present(must):
             problems.append(f"the {what} does not contain the runtime data file {must}")
     # OTA (docs/OTA.md v7): the client is scripts/boot/ota_core.gd and its public key is compiled into
     # scripts/boot/ota_config.gd, so a package carries no trust-anchor file, no channel file and no key material.
@@ -137,8 +143,8 @@ def check_names(names, read, what, version, require_logo, release, sha, problems
                 problems.append(f"build_info.json is for v{bi.get('public_version', bi.get('version'))}, expected v{version}")
             if release and not bi.get("release", False):
                 problems.append("build_info.json is not stamped as a release build")
-            if sha and bi.get("commit") and bi["commit"] != sha:
-                problems.append(f"build_info.json commit {bi['commit']} != {sha}")
+            if sha and bi.get("commit") != sha:     # a missing or empty commit is an error too: the package must carry the source identity it is checked against
+                problems.append(f"build_info.json commit {bi.get('commit')!r} != {sha}")
             notes.append("build_info.json: " + json.dumps(bi, sort_keys=True))
         except Exception as e:  # noqa: BLE001
             problems.append(f"build_info.json unreadable: {e}")

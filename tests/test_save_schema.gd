@@ -139,6 +139,24 @@ func _ready() -> void:
 	_check(SaveManager.get_slot_state(3) == "empty", "delete: the slot is empty again")
 	_check(FileAccess.file_exists(p3 + ".unreadable"), "delete: the copy of an unreadable file is kept")
 
+	# --- a character that lived only in a recovered temp file is really deleted (the active profile is reset too), and a blank profile is never written ----------
+	var p7: String = SaveManager.get_file_path(7)
+	_write(p7 + ".tmp", JSON.stringify(_legacy_profile()))
+	SaveManager.load_slot(7)
+	_check(SaveManager.current_profile["character_name"] == "Old", "tmp-only slot: loaded as the active profile")
+	SaveManager.delete_slot(7)
+	_check(not SaveManager.current_profile_is_valid(), "tmp-only slot: deleting it resets the active profile")
+	SaveManager.save_profile()
+	_check(not FileAccess.file_exists(p7) and not FileAccess.file_exists(p7 + ".tmp") and SaveManager.get_slot_state(7) == "empty", "tmp-only slot: a later save does not bring the deleted character back")
+	var p8: String = SaveManager.get_file_path(8)
+	SaveManager.load_slot(8)   # a slot that never had a character (first launch, main menu backgrounded or quit)
+	_check(not SaveManager.save_profile(), "a blank default profile is not written")
+	_check(not FileAccess.file_exists(p8) and SaveManager.get_slot_state(8) == "empty", "first launch: backgrounding the menu leaves the slot empty, not a broken ghost")
+	SaveManager.current_profile["character_name"] = "Fresh"
+	SaveManager.current_profile["character_class"] = "mage"
+	SaveManager.current_profile["initialized"] = true
+	_check(SaveManager.save_profile() and SaveManager.get_slot_state(8) == "valid", "a real character still saves")
+
 	# --- settings stay separate from gameplay saves -------------------------------------------------------------------------------------
 	var fresh := SaveManager.get_default_profile()
 	for key in ["GraphicsQuality", "ControllerPrompts", "MasterVolume", "Resolution", "DisplayMode"]:

@@ -241,6 +241,10 @@ func save_profile() -> bool:
 	current_profile["updated_at_unix"] = Time.get_unix_time_from_system()
 
 	var path = get_file_path(active_slot_index)
+	# A blank default profile (no character created, e.g. the first launch's main menu being backgrounded or quit) is never written: it would turn an
+	# empty slot into a "broken" ghost, or replace an unreadable file whose bytes are the player's only copy. Real characters (identity locked) always save.
+	if not _profile_is_valid(current_profile) and _read_profile_file(path).is_empty():
+		return false
 	_backup_before_write(active_slot_index)
 	# Never downgrade: a profile from a newer game keeps its (higher) schema version; everything else is written at the current one.
 	current_profile["schema_version"] = maxi(int(current_profile.get("schema_version", 0)), SCHEMA_VERSION)
@@ -326,8 +330,10 @@ func delete_slot(slot_index: int) -> void:
 	_backed_up_slots.erase(slot_index)
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
-		if active_slot_index == slot_index:
-			current_profile = get_default_profile()
+	# Independent of whether a main file existed: a slot that lived only in a recovered temp file was loaded into memory too, and a later quit /
+	# background save must not write the deleted character back.
+	if active_slot_index == slot_index:
+		current_profile = get_default_profile()
 
 
 # ══════════════════════════════════════════════════════════════

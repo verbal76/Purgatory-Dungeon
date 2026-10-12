@@ -60,6 +60,14 @@ with tempfile.TemporaryDirectory() as tmp:
     os.makedirs(out)
     build.extract_source(sha, out)
     check(open(os.path.join(out, "f.txt")).read() == "committed", "the extracted source is the commit, not the working tree")
+    # The native version comes from the commit being built, not from the checkout that happens to be open.
+    open(os.path.join(repo, "VERSION"), "w").write("3\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "v3"], cwd=repo, check=True, env=env)
+    sha3 = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    open(os.path.join(repo, "VERSION"), "w").write("4\n")
+    subprocess.run(["git", "commit", "-qam", "v4"], cwd=repo, check=True, env=env)
+    check(build.version_at(sha3) == 3 and build.version_at("HEAD") == 4, "version_at reads VERSION of the selected commit (3), not of HEAD (4)")
 
 # The command line: a dry run builds nothing and refuses an unknown commit.
 tool = os.path.join(ROOT, "tools", "build.py")

@@ -86,8 +86,8 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-def run(args: list, cwd: str = ROOT, check: bool = True) -> str:
-    p = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+def run(args: list, cwd: str = "", check: bool = True) -> str:
+    p = subprocess.run(args, cwd=cwd or ROOT, capture_output=True, text=True)
     if check and p.returncode != 0:
         raise RuntimeError(f"{' '.join(args)} failed ({p.returncode}): {(p.stderr or p.stdout).strip()[-600:]}")
     return p.stdout.strip()
@@ -108,7 +108,16 @@ def resolve_sha(ref: str) -> str:
 
 
 def read_build_number() -> int:
+    """VERSION of the working tree (only for the legacy --naming repo default); a build uses version_at(sha)."""
     return int(open(os.path.join(ROOT, "VERSION"), encoding="utf-8").read().strip())
+
+
+def version_at(sha: str) -> int:
+    """The native public version (VERSION) of the commit being built, never of whatever happens to be checked out."""
+    text = run(["git", "show", f"{sha}:VERSION"]).strip()
+    if not re.fullmatch(r"[1-9][0-9]*", text):
+        raise SystemExit(f"build: VERSION at {sha[:12]} is {text!r}, expected a positive integer")
+    return int(text)
 
 
 def godot_version(godot: str) -> str:
@@ -154,7 +163,7 @@ def top_folder(number: int, naming: str = "standard") -> str:
     return f"{TITLE.replace(' ', '-')}-{'Build-' if naming == 'standard' else 'v'}{number}"
 
 
-def package_files(folder: str, platform: str, number: int, sha: str, engine: str, naming: str = "standard") -> dict:
+def package_files(folder: str, platform: str, number: int, sha: str, engine: str, naming: str = "standard", native: int = 0) -> dict:
     """The exported files plus the same VERSION.txt / BUILD_INFO.txt a CI release carries. Returns {archive name: (bytes or path, mode)}."""
     files = {}
     for f in sorted(os.listdir(folder)):
@@ -164,7 +173,7 @@ def package_files(folder: str, platform: str, number: int, sha: str, engine: str
     label = {"windows": "Windows (x86-64)", "linux": "Linux (x86-64)"}[platform]
     start = "PurgatoryDungeon.exe" if platform == "windows" else "PurgatoryDungeon.x86_64"
     head = f"{TITLE} Build {number}" if naming == "standard" else f"{TITLE} v{number}"
-    files["VERSION.txt"] = ((f"{head}\nNative version: v{read_build_number()}\nPlatform: {label}\nInstall: extract ALL files into one folder, keep {start} and PurgatoryDungeon.pck together, then run {start}.\n"
+    files["VERSION.txt"] = ((f"{head}\nNative version: v{native or version_at(sha)}\nPlatform: {label}\nInstall: extract ALL files into one folder, keep {start} and PurgatoryDungeon.pck together, then run {start}.\n"
                              f"Saves: the PurgetoryDungeon folder (unchanged from earlier builds).\nSource commit: {sha}\n").encode(), 0o644)
     files["BUILD_INFO.txt"] = ((f"{TITLE} - {platform} build\nbuild_number={number}\nsource_sha={sha}\nref=local-build\ngodot={engine}\n"
                                 f"built_utc={datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
@@ -181,7 +190,7 @@ def build_windows(godot: str, src: str, dest: str, name: str, version: str, numb
     path = os.path.join(dest, name)
     top = top_folder(number, naming)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-        for arc, (data, _mode) in package_files(folder, "windows", number, sha, version, naming).items():
+        for arc, (data, _mode) in package_files(folder, "windows", number, sha, version, naming, version_at(sha)).items():
             if isinstance(data, str):
                 z.write(data, f"{top}/{arc}")
             else:
@@ -200,7 +209,7 @@ def build_linux(godot: str, src: str, dest: str, name: str, version: str, number
     path = os.path.join(dest, name)
     top = top_folder(number, naming)
     with tarfile.open(path, "w:gz") as t:
-        for arc, (data, mode) in package_files(folder, "linux", number, sha, version, naming).items():
+        for arc, (data, mode) in package_files(folder, "linux", number, sha, version, naming, version_at(sha)).items():
             info = tarfile.TarInfo(f"{top}/{arc}")
             info.mode = mode
             info.uid = info.gid = 0
@@ -327,7 +336,7 @@ def main() -> int:
                 print(f"  {platform}: built {name} ({os.path.getsize(path)} bytes)")
                 if platform != "android":
                     # Inspect the FINAL package (layout, executable, PCK content, and that it boots headless into the main menu), as the release does.
-                    vargs = ["--version", str(read_build_number())] + (["--build-number", str(number)] if a.naming == "standard" else [])
+                    vargs = ["--version", str(version_at(sha))] + (["--build-number", str(number)] if a.naming == "standard" else [])
                     v = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "verify_package.py"), path, *vargs, "--godot", a.godot],
                                        capture_output=True, text=True)
                     if v.returncode != 0:

@@ -216,6 +216,34 @@ class TestPackageBuildNumber(unittest.TestCase):
         self.assertTrue(any("build number" in p for p in self.run_check(9, 8)))
         self.assertTrue(any("build number" in p for p in self.run_check(9, None)))
 
+    def check_members(self, names, commit=SHA):
+        import verify_package as vp
+        vp.EXPECT_BUILD_NUMBER = 0
+        info = {"public_version": 8, "release": False, "runtime_id": "android-godot-4.6.0-r2", "runtime_fingerprint": "d" * 64, "ota_channel": "dev"}
+        if commit is not None:
+            info["commit"] = commit
+        problems, notes = [], []
+        vp.check_names(names, lambda n: json.dumps(info).encode() if n == "build_info.json" else b"x", "PCK", 8, True, False, SHA, problems, notes)
+        return problems
+
+    BASE = ["scenes/StudioSplash.tscn.remap", "scripts/studio_splash.gd.remap", "scenes/MainMenu.tscn.remap", "scripts/build_info.gd.remap", "build_info.json",
+            "godot/imported/Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png-x.ctex", "data/buffs.json", "data/globe_effects.json", "data/codex_lore.json"]
+
+    def test_required_members_match_exactly(self):
+        self.assertEqual(self.check_members(self.BASE), [])
+        self.assertEqual(self.check_members([n.replace(".remap", "") for n in self.BASE if not n.endswith(".ctex")] + [self.BASE[5]]), [], "plain and compiled forms are accepted too")
+        # a UID sidecar must not stand in for the script itself
+        sidecar = [n for n in self.BASE if "studio_splash" not in n] + ["scripts/studio_splash.gd.uid"]
+        self.assertTrue(any("studio_splash.gd" in p for p in self.check_members(sidecar)))
+        # nor may a path that merely ENDS with a required name
+        nested = [n for n in self.BASE if n != "data/buffs.json"] + ["old/data/buffs.json"]
+        self.assertTrue(any("data/buffs.json" in p for p in self.check_members(nested)))
+
+    def test_the_source_commit_must_be_present_and_equal(self):
+        self.assertTrue(any("commit" in p for p in self.check_members(self.BASE, commit=None)))
+        self.assertTrue(any("commit" in p for p in self.check_members(self.BASE, commit="")))
+        self.assertTrue(any("commit" in p for p in self.check_members(self.BASE, commit="b" * 40)))
+
     def test_no_expectation_no_check(self):
         self.assertEqual(self.run_check(0, 123), [])
 
