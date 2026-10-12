@@ -115,12 +115,13 @@ def runtime_identity(runtime_id: str = "", fingerprint: str = "", channel: str =
 
 
 def build_info(out: str, commit: str, run_id: str, release: bool, runtime: dict,
-               source_ref: str = "", platform: str = "", engine: str = "") -> None:
+               source_ref: str = "", platform: str = "", engine: str = "", build_number: int = 0) -> None:
     """Provenance of one build (docs/SOURCE_OF_TRUTH.md section 6). The extra fields are optional so older callers keep working; a
     coordinated release gives every platform's build the same `commit`."""
     info = {
         "product": PRODUCT,
         "public_version": read_version(),
+        **({"build_number": build_number} if build_number else {}),   # the coordinated build number (Purgatory Dungeon Build NN); public_version stays the native version
         "release": release,           # true only for a build made from tag v<VERSION>
         "commit": commit,
         "source_ref": source_ref,     # the branch or tag the build was made from (GITHUB_REF)
@@ -155,6 +156,7 @@ def main() -> int:
     b.add_argument("--ref", default="", help="source ref the build was made from (GITHUB_REF)")
     b.add_argument("--platform", default="", choices=["", "windows", "linux", "android"])
     b.add_argument("--engine", default="", help="engine release, e.g. 4.6-stable")
+    b.add_argument("--build-number", type=int, default=0, help="coordinated build number (Purgatory Dungeon Build NN)")
     sub.add_parser("next")
     a = ap.parse_args()
     if a.cmd == "check":
@@ -164,7 +166,7 @@ def main() -> int:
     elif a.cmd == "build-info":
         build_info(a.out, a.commit, a.run_id, a.release,
                    runtime_identity(a.runtime_id, a.runtime_fingerprint, a.ota_channel),
-                   source_ref=a.ref, platform=a.platform, engine=a.engine)
+                   source_ref=a.ref, platform=a.platform, engine=a.engine, build_number=a.build_number)
     elif a.cmd == "next":
         print(read_version() + 1)
     return 0

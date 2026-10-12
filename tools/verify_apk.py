@@ -63,8 +63,10 @@ def main():
     ap.add_argument("--require-logo", action="store_true")
     ap.add_argument("--sha", default="")
     ap.add_argument("--expect-cert", default="")
+    ap.add_argument("--build-number", type=int, default=0, help="the coordinated build number build_info.json must carry")
     ap.add_argument("--require-permission", action="append", default=[], help="android.permission.X that must be declared")
     a = ap.parse_args()
+    vp.EXPECT_BUILD_NUMBER = a.build_number
     problems, notes = [], []
     if not os.path.isfile(a.apk):
         print("APK not found:", a.apk)

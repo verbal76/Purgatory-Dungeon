@@ -3,7 +3,7 @@
 publishes anything; a GitHub Release, an OTA, Steam or Play upload are separate, owner-authorised actions (docs/RELEASES.md).
 
   python3 tools/build.py --platform windows|linux|android|all [--build-number N] [--source-sha SHA] [--out DIR] [--godot BIN]
-                         [--naming repo|standard] [--destination local_only] [--dry-run]
+                         [--naming standard|repo] [--destination local_only] [--dry-run]
 
 What it does, in the order the standard asks for:
   1. resolves the exact commit (default HEAD) and exports THAT commit, never the working tree: `git archive <sha>` into a scratch directory, so a build can not
@@ -19,8 +19,8 @@ Linux has no preset in export_presets.cfg (adding one would change the native fi
 scratch copy only. Android needs the SDK, a keystore and the signing secrets that live outside the repository (tools/android/build_apk.sh, docs/ANDROID.md); it is only
 attempted when ANDROID_HOME and the signing environment are present. Nothing here claims a platform was TESTED because it compiled.
 
---naming repo      Purgatory-Dungeon-v<N>-Windows.zip / -Linux.tar.gz / .apk     (docs/RELEASES.md; the established convention)
---naming standard  Purgatory Dungeon Build <N> EXE.zip / Linux.tar.gz / APK.apk  (master standard section 7; owner decision pending, docs/COMPLIANCE_AUDIT.md)
+--naming standard  Purgatory Dungeon Build <N> EXE.zip / Linux.tar.gz / APK.apk  (the convention for every future build; docs/RELEASES.md)
+--naming repo      Purgatory-Dungeon-v<N>-Windows.zip / -Linux.tar.gz / .apk     (the convention of releases v1-v8, kept for reproducing them)
 
 Standard library only (plus git and a Godot 4.6 binary).
 """
@@ -129,9 +129,11 @@ def extract_source(sha: str, dest: str) -> None:
         t.extractall(dest, filter="data")
 
 
-def stamp_build_info(src: str, sha: str, platform: str, engine: str, release: bool) -> None:
+def stamp_build_info(src: str, sha: str, platform: str, engine: str, release: bool, number: int = 0) -> None:
     args = [sys.executable, os.path.join(src, "tools", "release_tool.py"), "build-info", os.path.join(src, "build_info.json"),
-            "--commit", sha, "--run-id", "local", "--ref", "local-build", "--platform", platform, "--engine", engine]
+            "--commit", sha, "--run-id", os.environ.get("GITHUB_RUN_ID", "local"), "--ref", os.environ.get("GITHUB_REF", "local-build"), "--platform", platform, "--engine", engine]
+    if number:
+        args += ["--build-number", str(number)]
     if release:
         args.append("--release")
     run(args, cwd=src)
@@ -147,11 +149,12 @@ def export(godot: str, src: str, preset: str, out_rel: str) -> str:
     return out
 
 
-def top_folder(number: int) -> str:
-    return f"{TITLE.replace(' ', '-')}-v{number}"      # the folder inside every package (tools/verify_package.py expects it)
+def top_folder(number: int, naming: str = "standard") -> str:
+    """The folder inside every package (tools/verify_package.py expects it)."""
+    return f"{TITLE.replace(' ', '-')}-{'Build-' if naming == 'standard' else 'v'}{number}"
 
 
-def package_files(folder: str, platform: str, number: int, sha: str, engine: str) -> dict:
+def package_files(folder: str, platform: str, number: int, sha: str, engine: str, naming: str = "standard") -> dict:
     """The exported files plus the same VERSION.txt / BUILD_INFO.txt a CI release carries. Returns {archive name: (bytes or path, mode)}."""
     files = {}
     for f in sorted(os.listdir(folder)):
@@ -160,24 +163,25 @@ def package_files(folder: str, platform: str, number: int, sha: str, engine: str
             files[f] = (full, 0o755 if f.endswith(".x86_64") else 0o644)
     label = {"windows": "Windows (x86-64)", "linux": "Linux (x86-64)"}[platform]
     start = "PurgatoryDungeon.exe" if platform == "windows" else "PurgatoryDungeon.x86_64"
-    files["VERSION.txt"] = ((f"{TITLE} v{number}\nPlatform: {label}\nInstall: extract ALL files into one folder, keep {start} and PurgatoryDungeon.pck together, then run {start}.\n"
+    head = f"{TITLE} Build {number}" if naming == "standard" else f"{TITLE} v{number}"
+    files["VERSION.txt"] = ((f"{head}\nNative version: v{read_build_number()}\nPlatform: {label}\nInstall: extract ALL files into one folder, keep {start} and PurgatoryDungeon.pck together, then run {start}.\n"
                              f"Saves: the PurgetoryDungeon folder (unchanged from earlier builds).\nSource commit: {sha}\n").encode(), 0o644)
-    files["BUILD_INFO.txt"] = ((f"{TITLE} - {platform} build\nsource_sha={sha}\nref=local-build\ngodot={engine}\n"
+    files["BUILD_INFO.txt"] = ((f"{TITLE} - {platform} build\nbuild_number={number}\nsource_sha={sha}\nref=local-build\ngodot={engine}\n"
                                 f"built_utc={datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
                                 f"export_preset={'Windows Desktop' if platform == 'windows' else 'Linux'} (release, x86_64, external PCK)\nsha256:\n"
                                 + "".join(f"{sha256_file(v[0])}  {k}\n" for k, v in files.items() if isinstance(v[0], str))).encode(), 0o644)
     return files
 
 
-def build_windows(godot: str, src: str, dest: str, name: str, version: str, number: int, sha: str) -> str:
+def build_windows(godot: str, src: str, dest: str, name: str, version: str, number: int, sha: str, naming: str = "standard") -> str:
     if not have_template(version, "windows_release_x86_64.exe"):
         raise Blocked(f"Godot {version} Windows export template is not installed")
     exe = export(godot, src, "Windows Desktop", "build/windows/PurgatoryDungeon.exe")
     folder = os.path.dirname(exe)
     path = os.path.join(dest, name)
-    top = top_folder(number)
+    top = top_folder(number, naming)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-        for arc, (data, _mode) in package_files(folder, "windows", number, sha, version).items():
+        for arc, (data, _mode) in package_files(folder, "windows", number, sha, version, naming).items():
             if isinstance(data, str):
                 z.write(data, f"{top}/{arc}")
             else:
@@ -185,7 +189,7 @@ def build_windows(godot: str, src: str, dest: str, name: str, version: str, numb
     return path
 
 
-def build_linux(godot: str, src: str, dest: str, name: str, version: str, number: int, sha: str) -> str:
+def build_linux(godot: str, src: str, dest: str, name: str, version: str, number: int, sha: str, naming: str = "standard") -> str:
     if not have_template(version, "linux_release.x86_64"):
         raise Blocked(f"Godot {version} Linux export template (linux_release.x86_64) is not installed; install the official export templates tpz")
     with open(os.path.join(src, "export_presets.cfg"), "a", encoding="utf-8") as f:   # the scratch copy only; the tracked file is untouched
@@ -194,9 +198,9 @@ def build_linux(godot: str, src: str, dest: str, name: str, version: str, number
     folder = os.path.dirname(exe)
     os.chmod(exe, 0o755)
     path = os.path.join(dest, name)
-    top = top_folder(number)
+    top = top_folder(number, naming)
     with tarfile.open(path, "w:gz") as t:
-        for arc, (data, mode) in package_files(folder, "linux", number, sha, version).items():
+        for arc, (data, mode) in package_files(folder, "linux", number, sha, version, naming).items():
             info = tarfile.TarInfo(f"{top}/{arc}")
             info.mode = mode
             info.uid = info.gid = 0
@@ -273,17 +277,19 @@ def verify_manifest(dest: str) -> list:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--platform", required=True, choices=PLATFORMS + ("all",))
-    ap.add_argument("--build-number", type=int, default=0, help="default: ./VERSION")
+    ap.add_argument("--build-number", type=int, default=0, help="the coordinated build number (required with --naming standard); with --naming repo the default is ./VERSION")
     ap.add_argument("--source-sha", default="HEAD")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "dist"))
     ap.add_argument("--godot", default=os.environ.get("GODOT", "godot"))
-    ap.add_argument("--naming", choices=("repo", "standard"), default="repo")
+    ap.add_argument("--naming", choices=("repo", "standard"), default="standard")
     ap.add_argument("--destination", choices=("local_only",), default="local_only",
                     help="only local_only exists here: publishing to GitHub Releases is a separate, owner-authorised step")
     ap.add_argument("--dry-run", action="store_true", help="resolve and print the plan; build nothing")
     a = ap.parse_args()
 
     sha = resolve_sha(a.source_sha)
+    if a.naming == "standard" and a.build_number < 1:
+        raise SystemExit("build: --build-number N (a positive integer) is required: the build number is an explicit decision, never guessed from VERSION")
     number = a.build_number or read_build_number()
     wanted = list(PLATFORMS) if a.platform == "all" else [a.platform]
     dirty = run(["git", "status", "--porcelain", "--untracked-files=no"], check=False)
@@ -309,18 +315,19 @@ def main() -> int:
                 src = os.path.join(scratch, platform)
                 os.makedirs(src)
                 extract_source(sha, src)
-                stamp_build_info(src, sha, platform, f"{version}", release=False)
+                stamp_build_info(src, sha, platform, f"{version}", release=False, number=number if a.naming == "standard" else 0)
                 if platform == "windows":
-                    path = build_windows(a.godot, src, dest, name, version, number, sha)
+                    path = build_windows(a.godot, src, dest, name, version, number, sha, a.naming)
                 elif platform == "linux":
-                    path = build_linux(a.godot, src, dest, name, version, number, sha)
+                    path = build_linux(a.godot, src, dest, name, version, number, sha, a.naming)
                 else:
                     path = build_android(src, dest, name)
                 results[platform] = {"status": "built", "path": path}
                 print(f"  {platform}: built {name} ({os.path.getsize(path)} bytes)")
-                if platform != "android" and a.naming == "repo":
+                if platform != "android":
                     # Inspect the FINAL package (layout, executable, PCK content, and that it boots headless into the main menu), as the release does.
-                    v = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "verify_package.py"), path, "--version", str(number), "--godot", a.godot],
+                    vargs = ["--version", str(read_build_number())] + (["--build-number", str(number)] if a.naming == "standard" else [])
+                    v = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "verify_package.py"), path, *vargs, "--godot", a.godot],
                                        capture_output=True, text=True)
                     if v.returncode != 0:
                         raise RuntimeError("package verification failed:\n" + "\n".join(l for l in v.stdout.splitlines() if "PROBLEM" in l)[:500])

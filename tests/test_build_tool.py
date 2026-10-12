@@ -23,6 +23,7 @@ def check(cond: bool, label: str) -> None:
 
 
 # Names: both conventions, one per platform.
+check(build.top_folder(9) == "Purgatory-Dungeon-Build-9" and build.top_folder(9, "repo") == "Purgatory-Dungeon-v9", "package folders follow the naming")
 check(build.artifact_name("windows", 9, "repo") == "Purgatory-Dungeon-v9-Windows.zip", "repo naming: Windows zip")
 check(build.artifact_name("linux", 9, "repo") == "Purgatory-Dungeon-v9-Linux.tar.gz", "repo naming: Linux tar.gz")
 check(build.artifact_name("android", 9, "repo") == "Purgatory-Dungeon-v9.apk", "repo naming: APK")
@@ -63,7 +64,12 @@ with tempfile.TemporaryDirectory() as tmp:
 # The command line: a dry run builds nothing and refuses an unknown commit.
 tool = os.path.join(ROOT, "tools", "build.py")
 dry = subprocess.run([sys.executable, tool, "--platform", "all", "--dry-run", "--build-number", "9"], capture_output=True, text=True)
-check(dry.returncode == 0 and "Purgatory-Dungeon-v9-Windows.zip" in dry.stdout and "Linux.tar.gz" in dry.stdout, "dry run prints the plan for all three platforms")
+check(dry.returncode == 0 and "Purgatory Dungeon Build 9 EXE.zip" in dry.stdout and "Purgatory Dungeon Build 9 Linux.tar.gz" in dry.stdout
+      and "Purgatory Dungeon Build 9 APK.apk" in dry.stdout, "dry run prints the plan for all three platforms with the standard names")
+nonum = subprocess.run([sys.executable, tool, "--platform", "all", "--dry-run"], capture_output=True, text=True)
+check(nonum.returncode != 0 and "build-number" in (nonum.stdout + nonum.stderr), "the build number is never guessed from VERSION")
+legacy = subprocess.run([sys.executable, tool, "--platform", "all", "--dry-run", "--naming", "repo", "--build-number", "9"], capture_output=True, text=True)
+check(legacy.returncode == 0 and "Purgatory-Dungeon-v9-Windows.zip" in legacy.stdout, "the v1-v8 names stay available as --naming repo")
 bad = subprocess.run([sys.executable, tool, "--platform", "linux", "--source-sha", "deadbeef" * 5, "--dry-run"], capture_output=True, text=True)
 check(bad.returncode != 0, "an unknown source commit is refused")
 pub = subprocess.run([sys.executable, tool, "--platform", "linux", "--destination", "github_releases", "--dry-run"], capture_output=True, text=True)

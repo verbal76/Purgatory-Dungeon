@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Inspect a Windows package before it is delivered (a build directory or the final .zip).
 
-  verify_package.py <build_dir | package.zip> --version N [--require-logo] [--release]
+  verify_package.py <build_dir | package.zip | package.tar.gz> --version N [--build-number B] [--require-logo] [--release]
                     [--sha SHA] [--godot GODOT_BINARY]
 
 Checks the executable and Godot PCK are there, the PCK really contains the studio splash (scene,
@@ -24,6 +24,7 @@ import tempfile
 import zipfile
 
 LOGO = "Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png"
+EXPECT_BUILD_NUMBER = 0   # set by --build-number: standard names "Purgatory Dungeon Build N ...", top folder Purgatory-Dungeon-Build-N, build_info.build_number == N
 FORBIDDEN_PREFIXES = ("res://tests/", "res://archive/", "res://production/", "res://docs/", "res://tools/")
 FORBIDDEN_SUBSTR = ("fixture", "stress_generation", "/test_")
 
@@ -130,6 +131,8 @@ def check_names(names, read, what, version, require_logo, release, sha, problems
                                    ("runtime_fingerprint", r"[0-9a-f]{64}"), ("ota_channel", r"[a-z][a-z0-9-]{0,31}")):
                 if not isinstance(bi.get(field), str) or not re.fullmatch(pattern, bi[field]):
                     problems.append(f"build_info.json must carry a valid {field} (native runtime identity, docs/OTA.md section 3); got {bi.get(field)!r}")
+            if EXPECT_BUILD_NUMBER and int(bi.get("build_number", -1)) != EXPECT_BUILD_NUMBER:
+                problems.append(f"build_info.json carries build number {bi.get('build_number')!r}, expected {EXPECT_BUILD_NUMBER}")
             if int(bi.get("public_version", bi.get("version", -1))) != version:
                 problems.append(f"build_info.json is for v{bi.get('public_version', bi.get('version'))}, expected v{version}")
             if release and not bi.get("release", False):
@@ -144,27 +147,31 @@ def check_names(names, read, what, version, require_logo, release, sha, problems
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("target")
-    ap.add_argument("--version", type=int, required=True)
+    ap.add_argument("--version", type=int, required=True, help="the native public version (VERSION)")
+    ap.add_argument("--build-number", type=int, default=0, help="the coordinated build number: expect the standard names and folder")
     ap.add_argument("--require-logo", action="store_true")
     ap.add_argument("--release", action="store_true", help="build_info.json must be the release stamp")
     ap.add_argument("--sha", default="")
     ap.add_argument("--godot", default="")
     a = ap.parse_args()
+    global EXPECT_BUILD_NUMBER
+    EXPECT_BUILD_NUMBER = a.build_number
+    top = f"Purgatory-Dungeon-Build-{a.build_number}" if a.build_number else f"Purgatory-Dungeon-v{a.version}"
     problems, notes = [], []
     tmp = None
     root = a.target
     zip_sha = ""
-    zip_name_expected = f"Purgatory-Dungeon-v{a.version}-Windows.zip"
+    zip_name_expected = f"Purgatory Dungeon Build {a.build_number} EXE.zip" if a.build_number else f"Purgatory-Dungeon-v{a.version}-Windows.zip"
     if a.target.lower().endswith(".tar.gz"):     # the native Linux package: the same folder layout, an ELF executable with the executable bit
         import tarfile
-        expected = f"Purgatory-Dungeon-v{a.version}-Linux.tar.gz"
+        expected = f"Purgatory Dungeon Build {a.build_number} Linux.tar.gz" if a.build_number else f"Purgatory-Dungeon-v{a.version}-Linux.tar.gz"
         if os.path.basename(a.target) != expected:
             problems.append(f"package is named {os.path.basename(a.target)}, expected {expected}")
         zip_sha = sha256(a.target)
         tmp = tempfile.mkdtemp()
         with tarfile.open(a.target) as t:
             t.extractall(tmp, filter="data")
-        expected_top = f"Purgatory-Dungeon-v{a.version}"
+        expected_top = top
         if os.listdir(tmp) != [expected_top]:
             problems.append(f"archive must contain exactly the folder {expected_top}/ (found {os.listdir(tmp)})")
         root = os.path.join(tmp, expected_top)
@@ -185,7 +192,7 @@ def main():
                 problems.append(f"zip member is corrupt: {bad}")
             z.extractall(tmp)
         tops = os.listdir(tmp)
-        expected_top = f"Purgatory-Dungeon-v{a.version}"
+        expected_top = top
         if tops != [expected_top]:
             problems.append(f"zip must contain exactly the folder {expected_top}/ (found {tops})")
         root = os.path.join(tmp, expected_top)
@@ -193,8 +200,9 @@ def main():
             if not os.path.isfile(os.path.join(root, must)):
                 problems.append(f"{must} is missing from the zip")
         vt = os.path.join(root, "VERSION.txt")
-        if os.path.isfile(vt) and f"Purgatory Dungeon v{a.version}" not in open(vt, encoding="utf-8").read():
-            problems.append("VERSION.txt does not say Purgatory Dungeon v%d" % a.version)
+        say = f"Purgatory Dungeon Build {a.build_number}" if a.build_number else f"Purgatory Dungeon v{a.version}"
+        if os.path.isfile(vt) and say not in open(vt, encoding="utf-8").read():
+            problems.append(f"VERSION.txt does not say {say}")
     linux = os.path.isfile(os.path.join(root, "PurgatoryDungeon.x86_64"))
     exe = os.path.join(root, "PurgatoryDungeon.x86_64" if linux else "PurgatoryDungeon.exe")
     pck = os.path.join(root, "PurgatoryDungeon.pck")
