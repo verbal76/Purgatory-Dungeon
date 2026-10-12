@@ -14,27 +14,27 @@ Work classes: GREEN (safe, autonomous), YELLOW (autonomous with a regression tes
 | 1 | One authoritative source line (6) | PARTIAL | policy, lineage gate, ledger, `base-check` exist and are tested; `origin/main` still lags (owner: fast-forward via PR #1, RED-1) |
 | 2 | Branch recovery / ledger (6) | PASS | `docs/BRANCH_LEDGER.md`, `source_audit.py ledger --check`; no branch deleted |
 | 3 | Android build (5) | PASS | CI APK pipeline, signed with the persistent key, qualified; not rebuilt locally (no SDK/key here) |
-| 4 | Windows build (5) | PASS | exported and verified locally 2026-10-12 (470 MB; see RED-4) and by CI |
-| 5 | Native Linux build (5) | PARTIAL | `tools/build.py --platform linux` builds, verifies, boots headless; no tracked preset, no CI workflow, not run on hardware (RED-3, Q-7) |
+| 4 | Windows build (5) | PASS | exported and verified locally and by CI; the package no longer carries the ~300 MB of unused media after the `.gdignore` change (pass 4) |
+| 5 | Native Linux build (5) | PARTIAL | `tools/build.py --platform linux` builds, verifies, boots headless (also inside an empty network namespace); an explicit-dispatch `linux` job exists in `ci.yml` (never run: a dispatch needs the workflow on the default branch); no tracked preset (RED-3); not run on hardware |
 | 6 | One build number, one SHA (6) | PASS | `VERSION`, lineage gate, `SOURCE_SHA` in CI; `build.py` stamps one SHA on all targets |
 | 7 | Artifact naming (7) | FAIL (convention conflict) | repo convention `Purgatory-Dungeon-v<N>-Windows.zip` / `.apk` differs from the standard's `Purgatory Dungeon Build NN EXE.zip`; `build.py --naming standard` supports both; owner decision RED-2 |
 | 8 | GitHub Releases library (8) | PARTIAL | one release per number, Latest, immutable tags, never overwritten; no `build-manifest.json` / `checksums.sha256` attached by CI yet (Q-6); no Linux file |
-| 9 | Manual coordinated build workflow (9) | PARTIAL | local tool done (`build.py`); the hosted workflow with inputs `platform / source_sha / build_number / destination` is not written (Q-6, needs owner review of the workflow change) |
+| 9 | Manual coordinated build workflow (9) | PARTIAL | local tool done (`build.py`); `ci.yml` builds each target only on an explicit dispatch input (`build_windows`, `build_android`, `build_linux`) or a release ref; the single workflow with inputs `platform / source_sha / build_number / destination` and Release attachment is not written (RED-9: touches the release path) |
 | 10 | No accidental publication (9, 20) | PASS | PRs run only when ready, no push-triggered releases of OTA; release only by tag/release branch (owner action); OTA only by `ota/<channel>/<sha>` push |
 | 11 | Update architecture (10) | PASS | signed OTA + native baseline + runtime fingerprint + rollback (`docs/OTA.md`); Android only; Windows/Linux = new package (SteamPipe pending, RED-6) |
 | 12 | Publishing separation (10) | PASS | release, OTA, Steam are separate actions; `build.py` has no publish path (tested) |
 | 13 | Save schema, safe writes (11) | PARTIAL | atomic temp+rename for profile, settings, last slot and now codex; **no save schema version field, no backup of the previous good file** (RED-5) |
-| 14 | Corruption handling (11) | PARTIAL | a corrupt slot loads a fresh default profile; the next save overwrites the corrupt file (no `.bak`): data is not recoverable (RED-5) |
+| 14 | Corruption handling (11) | PARTIAL | a corrupt slot loads a fresh default profile and, found in pass 4, the quit / background path then saved over the unreadable file; fixed: the bytes are now kept as `profile_N.save.unreadable` (`test_save_manager`). Still no schema version and no automatic restore (RED-5) |
 | 15 | Steam Cloud (11) | BLOCKED | no Steam App ID, no Steamworks plugin; hardware-specific settings (graphics level) live in settings.json, which a cloud sync must exclude (design note in Q-9) |
 | 16 | Controller completeness (12.1) | PASS (software) | every menu reachable by pad (`test_controller_nav`, 35 checks); remap not disturbed; physical pad on a Deck UNVERIFIED |
 | 17 | On-screen keyboard (12.2) | PARTIAL | the in-game pad keyboard works (tested); the Steam floating keyboard (`ShowFloatingGamepadTextInput`) is **pending**, needs Steamworks/App ID (BLOCKED, RED-6) |
-| 18 | Mixed input (12.3) | PASS (software) | mouse motion no longer flips glyphs; light stick brush ignored (`test_input_desktop`). Simultaneous camera accumulation (mouse + stick) not tested: UNVERIFIED (Q-10) |
+| 18 | Mixed input (12.3) | PASS (software) | mouse motion no longer flips glyphs; light stick brush ignored (`test_input_desktop`); mouse look and stick look measured adding up for both classes (`test_mixed_look`). Real trackpad / gyro on a Deck: UNVERIFIED |
 | 19 | Camera sensitivity calibration (12.4) | N/A (optional) | default `0.0025` rad/px (= 0.143 deg/px) is not Valve's 0.022 deg/px; the recommendation is optional and the established feel is kept; no change |
-| 20 | Display and aspect ratios (12.5) | PASS (menus) | rendered at 1280x800, 1920x1200, 2560x1080: no clipping (`tests/deck_shots` run at those sizes); in-run HUD at ultrawide not rendered: UNVERIFIED |
+| 20 | Display and aspect ratios (12.5) | PASS (software) | menus rendered at 1280x800, 1920x1200, 2560x1080 and the in-run HUD, pause, death and win screens at 2560x1080: no clipping. One overlap found and fixed (run-start banner over the pause title, `test_toast_pause`) |
 | 21 | Graphics API (12.6) | UNVERIFIED | Windows uses D3D12 (Proton via vkd3d-proton), Linux native is Vulkan (booted on llvmpipe only); Vulkan-on-Windows is an owner/native decision (RED-7) |
 | 22 | Codecs (12.7) | PASS | the game plays no video; audio is OGG/WAV/MP3 decoded by Godot on every platform; the unreferenced MP4 is excluded from Android/Linux |
 | 23 | Graphics settings (12.8) | PASS | Quality / Balanced / Cool-Battery with "(Recommended)" per device, never locked, stored in settings.json, no gameplay or physics change. (No literal "Automatic" entry: the recommended level is the automatic default.) |
-| 24 | Offline play (12.9) | PARTIAL | single-player has no network dependency; OTA check fails soft and never blocks (docs/OTA.md); not exercised on a fresh Steam account: UNVERIFIED |
+| 24 | Offline play (12.9) | PASS (software) | only the Android OTA updater uses a network class (`test_offline.py`); the native Linux package launched to the main menu inside an empty network namespace with a fresh save root. Fresh Steam account offline first launch and cloud resync: UNVERIFIED (no Steam) |
 | 25 | No external launcher (12.10) | PASS | straight into splash and menu |
 | 26 | Steam Deck performance (12.11) | UNVERIFIED | never measured on hardware; 800p Balanced default built; headless CPU numbers only |
 | 27 | Stability / suspend-resume (12.12) | UNVERIFIED | cold start, clean quit and 12 s boot tested headless; suspend, resume, focus loss, reconnect not exercised (game does not pause on focus loss: owner decision) |
@@ -51,20 +51,20 @@ Work classes: GREEN (safe, autonomous), YELLOW (autonomous with a regression tes
 | Q-3 | Local three-platform build tool with manifest + checksums, exact-commit export | `tools/build.py`, `tests/test_build_tool.py`; Windows and Linux built and verified | P1 | GREEN | M | **Done** (f05896f, 9929b2f, 1ebf0f3) |
 | Q-4 | Codex lore missing from every packaged build | native Linux boot warning; PCK listing; `test_codex_save` | P0 | YELLOW | S | **Done** (ea48550); not shipped until the next release/OTA the owner authorises |
 | Q-5 | Atomic codex write; graphics names + Recommended marker | `test_codex_save` | P2 | YELLOW | S | **Done** (ae8c4c0) |
-| Q-6 | Hosted manual workflow (inputs platform/source_sha/build_number/destination), manifests + checksums on the Release, Linux asset | design only here | P1 | YELLOW | L | **Open**: `ci.yml` is validated by `tests/test_ota_workflows.py` and a release path change deserves the owner's eye; proposal in "Proposals" |
-| Q-7 | Linux CI template install + verify step | needs a hosted run to prove | P2 | YELLOW | S | Open (bundle with Q-6) |
+| Q-6 | Hosted manual workflow (inputs platform/source_sha/build_number/destination), manifests + checksums on the Release, Linux asset | `ci.yml` dispatch inputs per platform now exist (Q-7); the one workflow with a `destination` and Release attachment remains | P1 | RED (release publication path) | L | **Deferred**: `ci.yml` is validated by `tests/test_ota_workflows.py` and a release path change deserves the owner's eye; proposal in "Proposals" |
+| Q-7 | Linux CI template install + verify step | `ci.yml` job `linux`, tested statically (`test_build_tool.py`) | P2 | GREEN | S | **Done** (never executed on GitHub: needs the owner to dispatch it once the workflow is on `main`) |
 | Q-8 | Documentation set (PLATFORM_SUPPORT, THIRD_PARTY_ASSETS; UPDATES and STEAM_HARDWARE_CHECKLIST map to existing pages) | this commit | P2 | GREEN | S | **Done** |
 | Q-9 | Steam Cloud design: exclude `settings.json` graphics keys from sync; sync `saves/` + codex only | design note below | P2 | BLOCKED | M | Pending App ID |
-| Q-10 | Test simultaneous mouse + stick camera accumulation | brute/mage `_unhandled_input` + stick path read by inspection only | P2 | YELLOW | M | Open |
-| Q-11 | Render in-run HUD at 21:9 | tool exists for menus only | P3 | GREEN | S | Open |
+| Q-10 | Test simultaneous mouse + stick camera accumulation | `tests/test_mixed_look.gd` | P2 | YELLOW | M | **Done** |
+| Q-11 | Render in-run HUD at 21:9 | `tests/deck_game_shots` at 2560x1080 | P3 | GREEN | S | **Done** (found and fixed the banner overlap) |
 
 ### RED (documented, not done)
 
 - **RED-1** Fast-forward `main` to this line (PR #1): protected default branch.
 - **RED-2** Artifact/release naming: standard `Purgatory Dungeon Build NN ...` against the owner's `Purgatory Dungeon v<N>` convention (CLAUDE.md, docs/RELEASES.md, tests). Tool supports both; the owner picks.
 - **RED-3** Tracked Linux export preset: changes `export_presets.cfg` and therefore the native fingerprint (a new APK generation). The scratch-preset approach avoids it.
-- **RED-4** Windows preset trims (~300 MB of unused skyboxes/video/texture, as the Android preset already does): `export_presets.cfg` change, fingerprint bump, next APK generation.
-- **RED-5** Save-system hardening: add `schema_version`, keep a `.bak` of the last good profile and fall back to it on a parse failure. Touches `save_manager.gd` / `storage_paths.gd` (guarded files, the save format): needs a migration plan and the owner's approval; test with real saves first.
+- ~~RED-4~~ **Resolved in pass 4 without a preset change**: the unreferenced skyboxes, video and night-sky texture are hidden from Godot with `.gdignore` (moved, not deleted), so no preset edit or fingerprint bump was needed.
+- **RED-5** (narrowed in pass 4: unreadable bytes are now preserved) Save-system hardening still open: add `schema_version`, keep a `.bak` of the last good profile and fall back to it on a parse failure. Touches `save_manager.gd` / `storage_paths.gd` (guarded files, the save format): needs a migration plan and the owner's approval; test with real saves first.
 - **RED-6** Steamworks (GodotSteam plugin, App ID): Steam keyboard, Steam Cloud, SteamPipe uploads.
 - **RED-7** Windows renderer d3d12 -> vulkan (native, owner decision, already parked).
 - **RED-8** Remove or license UNVERIFIED assets; supply receipts.
@@ -87,3 +87,30 @@ SHA, number-uniqueness check against existing tags, the test suite, `python3 too
 | docs/STEAM_HARDWARE_CHECKLIST.md | `docs/STEAM_DECK.md` |
 | docs/BRANCH_LEDGER.md | `docs/BRANCH_LEDGER.md` |
 | docs/THIRD_PARTY_ASSETS.md | `docs/THIRD_PARTY_ASSETS.md` (new) |
+
+## Pass 4 (post-audit correction pass, source line head `bbe8b58` at the start)
+
+**PR #1 verification.** Open, draft, base `main` (`f0eaa47`), mergeable state clean, 289 commits, no reviews or comments. The one CI run on `bbe8b58` (`CI` run 100, event
+`pull_request`) concluded **skipped**, all four jobs (`validate-and-export`, `android`, `publish`, `promote`): the workflow's own rule skips draft PRs. "No failing checks"
+therefore meant **no hosted validation at all**; the only evidence for these commits is the local suite. Added `tools/preflight.sh` (Godot-free gate, ~15 s) so a push can be
+checked cheaply without Actions minutes; the full suite stays `tests/run_tests.sh`.
+
+**Workflow exposure review.** A push to `ccr-5f32885a-gvu16v` matches no `ci.yml` trigger that publishes. Publication needs a `v<N>` tag, a `release/v<N>` branch or a `promote/**`
+branch: deliberate release refs, not touched. The standard asks that pushes and tags never publish automatically; the owner's documented flow (docs/RELEASES.md) is exactly a tag
+push, so changing it is a release-process redesign (RED-9, recommendation: keep the tag as the authorisation, because a tag is an explicit human act and the lineage gate and tests run first;
+add a required-reviewer environment on the `publish` job if a second confirmation is wanted).
+
+**RED recommendations (Section N of the first report).**
+
+| Decision | Recommendation (evidence) | Class |
+|---|---|---|
+| Artifact naming `Purgatory Dungeon v<N>` vs `Purgatory Dungeon Build NN` | Keep v<N>. It is the owner's written mandate (CLAUDE.md), all eight releases use it, and the standard itself says to preserve an established compatible repository convention. `build.py --naming standard` produces the other form on request. | RED |
+| Save backups / schema version | Next APK: add `schema_version` (additive key, defaults backfill already tolerates it) and a `.bak` of the last good profile. Pass 4 already closed the data-loss path without a format change. | RED |
+| Steamworks, App ID, Steam keyboard, Steam Cloud | Blocked on an App ID. Cloud design when it exists: sync `saves/` and `codex.json`; never `settings.json` (it holds graphics level and resolution). The in-game pad keyboard stays the fallback. No speculative Steam call was written. | RED / BLOCKED |
+| Windows renderer d3d12 vs vulkan | Moot for the Deck if the native Linux build ships there (Vulkan natively). Leave Windows on d3d12 until a Windows GPU test says otherwise; decide at the next APK generation. | RED |
+| Fast-forward `main` | Do it once PR #1 is accepted; no branch needs to be deleted first (ledger is clean). | RED |
+| Unlicensed assets | Unused ones are now out of every build; for the used music, SFX, models and props supply receipts, or replace them before a Steam page. | RED |
+| Glyph license copy | Re-fetch attempted 2026-10-12: the author's page was not reachable from the sandbox and the web search did not find it. Owner: save the page (or its URL) under `docs/licenses/`. | owner |
+
+**Corrections made in pass 4:** `.gdignore` for unreferenced media (Windows package no longer ships ~300 MB of it); `tests/test_licenses.py`; `tests/test_offline.py`;
+`tests/test_mixed_look.gd`; banner-over-pause fix + `tests/test_toast_pause.gd`; unreadable-save preservation + test; `ci.yml` `build_linux` dispatch job + wiring tests.

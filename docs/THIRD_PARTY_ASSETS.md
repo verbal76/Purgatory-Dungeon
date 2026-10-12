@@ -9,7 +9,7 @@ asset's own notice; **GENERATED** = produced by this repository's own tool (no t
 
 | Asset | Where | License | Evidence | Status |
 |---|---|---|---|---|
-| Controller and keyboard glyphs ("Input Prompts" by JulioCacko) | `assets/ui/glyphs/` (147 of 1,580 files, `LIBRARY.json` lists each file's source path and sha256) | CC0 1.0 Universal (no attribution required; credited here as a courtesy) | AUTHOR PAGE: the owner supplied (2026-10-12) a screenshot of the distribution page stating *"License: CC0 1.0 Universal. Free to use in any project, commercial or non-commercial."*, asset license "Creative Commons Zero v1.0 Universal", published 2023-06-30, updated 2025-02-03, "No generative AI was used". The archive (`Source.zip`, sha256 `f6c75921b9d6ab2c…`) contains no license file and the screenshot is not stored in the repository. | CC0 per author; **keep a saved copy of the page and its URL in `docs/licenses/`** (open item) |
+| Controller and keyboard glyphs ("Input Prompts" by JulioCacko) | `assets/ui/glyphs/` (147 of 1,580 files, `LIBRARY.json` lists each file's source path and sha256) | CC0 1.0 Universal (no attribution required; credited here as a courtesy) | AUTHOR PAGE: the owner supplied (2026-10-12) a screenshot of the distribution page stating *"License: CC0 1.0 Universal. Free to use in any project, commercial or non-commercial."*, asset license "Creative Commons Zero v1.0 Universal", published 2023-06-30, updated 2025-02-03, "No generative AI was used". The archive (`Source.zip`, sha256 `f6c75921b9d6ab2c…`) contains no license file and the screenshot is not stored in the repository. | CC0 per author; **keep a saved copy of the page and its URL in `docs/licenses/`** (open item; a re-fetch was attempted 2026-10-12 and the page was not reachable from the build sandbox) |
 | Cinzel (Cinzel Project Authors) | `assets/fonts/Cinzel-*.woff2` | SIL OFL 1.1 | FILE `assets/fonts/OFL-Cinzel.txt`, `assets/fonts/README.md` | Verified |
 | Source Sans 3 (Adobe) | `assets/fonts/SourceSans3-*.woff2` | SIL OFL 1.1 | FILE `assets/fonts/OFL-SourceSans3.txt` | Verified |
 | Kenney UI SFX set | `addons/kenney_ui_audio/` | CC0 | FILE `addons/kenney_ui_audio/LICENSE.txt` | Verified |
@@ -22,8 +22,8 @@ asset's own notice; **GENERATED** = produced by this repository's own tool (no t
 | Brute model + 47 animations (`Brute_multi.gltf`, `animations/*.fbx`) | `characters/brute/` | unknown | none | **UNVERIFIED** |
 | Vampire mage model (`vampire-mage.gltf`) | `characters/Lutsch Mage/vampire gtlf/` | unknown | none | **UNVERIFIED** |
 | Dungeon props (`SM_*.fbx`, `SM_GeneralProps_*` textures) and chests / keys | `addons/props/` | unknown (the `SM_` / `Mat_..._AlbedoTransparency/MetallicSmoothness/Normal` naming is that of a commercial prop pack; which one and its license are not recorded) | none | **UNVERIFIED** |
-| AllSkyFree skyboxes | `addons/AllSkyFree/` | unknown | none; the assets are not referenced by any scene and the Android and Linux packages leave them out (the Windows package still ships ~300 MB of them: `docs/COMPLIANCE_AUDIT.md` RED-4) | **UNVERIFIED** (not used: candidate for removal) |
-| Menu backgrounds and textures: `background menu image.png`, `night_sky_with_beautiful_twinkling_stars.png`, `parchment.jpeg`, `jumpsc.png`, `[Simulation] Andromeda galaxy colliding with the Milky Way.mp4` | `Music & background images/` | unknown | none (the mp4 looks like a space-agency simulation video, whose terms differ by source; unreferenced by scenes, left out of the Android and Linux packages) | **UNVERIFIED** |
+| AllSkyFree skyboxes | `addons/AllSkyFree/` | unknown | none; the assets are not referenced by any scene and the Android and Linux packages leave them out (`addons/AllSkyFree/.gdignore` now hides them from every build, pass 4) | **UNVERIFIED** (not used, not shipped: candidate for removal) |
+| Menu backgrounds and textures: `background menu image.png`, `night_sky_with_beautiful_twinkling_stars.png`, `parchment.jpeg`, `jumpsc.png`, `[Simulation] Andromeda galaxy colliding with the Milky Way.mp4` | `Music & background images/` | unknown | none (the mp4 looks like a space-agency simulation video, whose terms differ by source; unreferenced by scenes; moved to `Music & background images/unused_media/` with a `.gdignore`, so no build contains them) | **UNVERIFIED** |
 | Dungeon modules (`dungeon modules/*.tscn`) and level geometry | `dungeon modules/` | studio-built scenes; their meshes and textures may come from a pack named above | none | **UNVERIFIED** for any embedded pack content |
 
 ## What this means
@@ -32,8 +32,7 @@ asset's own notice; **GENERATED** = produced by this repository's own tool (no t
   own art.
 - Needs the owner before a public release or a Steam page: every **UNVERIFIED** row. Supply, per row, the source, the license text or receipt, and any required credit line;
   this page then moves the row to Verified, and `NOTICE`/credits text can be added to the game's About screen if a license requires one.
-- Candidates for removal instead of verification (no scene uses them, saves ~300 MB in the Windows package): the AllSkyFree skyboxes, the Andromeda video, the
-  night-sky texture.
+- Already kept out of every build (no scene uses them): the AllSkyFree skyboxes, the Andromeda video, the night-sky texture; delete them when the owner decides.
 - Nothing was removed or replaced by this audit.
 
 ## How to add an asset

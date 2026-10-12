@@ -7,7 +7,7 @@ actually run, and what was not. "Compiled" is never written as "tested". Status 
 |---|---|---|---|
 | Artifact | `Purgatory-Dungeon-v<N>.apk` (arm64, API 30-36, signed with the persistent key) | `Purgatory-Dungeon-v<N>-Windows.zip` | `Purgatory-Dungeon-v<N>-Linux.tar.gz` (executable bit set) |
 | Export preset | `Android` in `export_presets.cfg` | `Windows Desktop` in `export_presets.cfg` | **none tracked**: `tools/build.py` appends a `Linux` preset to a scratch copy (a tracked preset would change the native fingerprint; `docs/COMPLIANCE_AUDIT.md` RED-3) |
-| Built by | `ci.yml` (`tools/android/build_apk.sh`; release tag or explicit dispatch) | `ci.yml` (release / dispatch) or `python3 tools/build.py --platform windows` | `python3 tools/build.py --platform linux` (local); **not yet in any workflow** |
+| Built by | `ci.yml` (`tools/android/build_apk.sh`; release tag or explicit dispatch) | `ci.yml` (release / dispatch) or `python3 tools/build.py --platform windows` | `python3 tools/build.py --platform linux` (local); `ci.yml` job `linux` on an explicit `build_linux` dispatch (never run; a dispatch needs the workflow on the default branch) |
 | Engine templates | Android (installed in CI) | Windows (installed in CI) | official 4.6-stable `linux_release.x86_64` (not installed in CI yet) |
 | Renderer | Mobile / Vulkan, 0.75 render scale, 1280x720 expand | Forward+ with D3D12 (`rendering_device/driver.windows`) | Forward+ / Vulkan (Godot's Linux default) |
 | Input | touch (`scripts/touch/`), Android back button handled | keyboard + mouse, gamepad | keyboard + mouse, gamepad |
@@ -20,14 +20,13 @@ actually run, and what was not. "Compiled" is never written as "tested". Status 
 |---|---|---|
 | Android | v6, v7, v8 APKs built by CI and qualified (signature, identity, API target, 16 KB alignment); OTA v8.1-v8.5 delivered; the owner has played on phones (his findings drove the v7.x / v8.x work) | automated device farm; current `main` line not rebuilt since v8 |
 | Windows | CI package verification (`tools/verify_package.py`: layout, PCK content, boots headless to the main menu); Windows zips were delivered as releases v1-v8 (owner playtesting on Windows is not recorded in the repository) | not run on a Steam Deck / Proton; D3D12 under vkd3d-proton unproven |
-| Linux | 2026-10-12: `tools/build.py --platform linux` exported the exact commit, packaged it (131 MB), `verify_package.py` passed, and the extracted `PurgatoryDungeon.x86_64` started under Xvfb with software Vulkan (llvmpipe, `--rendering-method mobile`, as the repository render probes do), ran the splash and reached the main menu with no script error. | no GPU, no audio device, no gamepad, no Steam Deck, no play-through: **UNVERIFIED on real hardware** |
+| Linux | 2026-10-12: `tools/build.py --platform linux` exported the exact commit, packaged it (131 MB), `verify_package.py` passed, and the extracted `PurgatoryDungeon.x86_64` started under Xvfb with software Vulkan (llvmpipe, `--rendering-method mobile`, as the repository render probes do), ran the splash and reached the main menu with no script error. | no GPU, no audio device, no gamepad, no Steam Deck, no play-through: **UNVERIFIED on real hardware**. Also launched inside an empty network namespace (offline, fresh save root): reached the main menu. |
 
 ## Defects found while building the Linux package
 
 - The Codex lore was a `.txt` that Godot does not export, so every packaged build (Windows, Linux and, by the same preset rules, the APK) had an empty Codex.
   Fixed: `data/codex_lore.json`, and `verify_package.py` now refuses a package without its runtime data files.
-- The Windows package ships ~300 MB of unreferenced skyboxes, a video and a texture that the Android preset already excludes (470 MB zip against 131 MB for Linux).
-  Not fixed: it needs an `export_presets.cfg` change (`COMPLIANCE_AUDIT.md` RED-4).
+- The Windows package shipped ~300 MB of unreferenced skyboxes, a video and a texture (470 MB zip against 131 MB for Linux). Fixed in pass 4 with `.gdignore` (no preset change).
 
 ## Cross-platform rules (unchanged)
 

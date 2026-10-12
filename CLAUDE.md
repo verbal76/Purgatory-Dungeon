@@ -63,7 +63,7 @@ platform never gets a different revision substituted. Every abandoned or unmerge
 `build-manifest.json` + `checksums.sha256`; it never uploads or releases. Native Linux x86-64 is a target (scratch export preset; no tracked preset because that would
 change the native fingerprint). The Hot Attic Games master standard v2.0 audit, scorecard and owner decisions (naming convention, Steamworks, save backups, asset licenses)
 are in `docs/COMPLIANCE_AUDIT.md`; third-party licenses in `docs/THIRD_PARTY_ASSETS.md` (never claim a license that is not evidenced there). Runtime data must be `.json`/resources:
-a `.txt` data file is not exported (`tools/verify_package.py` checks).
+a `.txt` data file is not exported (`tools/verify_package.py` checks). GitHub skips CI for a draft PR, so `tools/preflight.sh` (Godot-free, ~15 s) is the cheap local gate before a push; unreferenced, unlicensed media lives behind `.gdignore` (`tests/test_licenses.py`).
 
 ## Steam Deck / Steam Machine (held for the next APK; docs/STEAM_DECK.md)
 

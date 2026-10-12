@@ -48,5 +48,5 @@ The "E" at the top left of the HUD is the compass heading (east), not a key prom
 
 - `PURGATORY_FORCE_DECK=1` makes the game act like a Deck (Medium quality default, Deck button labels).
 - Plug a gamepad in; the prompts switch as soon as a button is pressed, and back to key names on the next key press or mouse click (mouse movement alone does not flip them: Deck trackpads and gyro send motion while a pad is in use, master standard 12.3).
-- Tests: `tests/test_controller_glyphs`, `tests/test_controller_nav`, `tests/test_steam_deck` (all in `tests/run_tests.sh`).
+- Tests: `tests/test_controller_glyphs`, `tests/test_controller_nav`, `tests/test_steam_deck`, `tests/test_mixed_look` (mouse + stick look add up), `tests/test_offline.py` (all in `tests/run_tests.sh`).
 - Screenshots of the prompts: `tests/glyph_shots` (manual tool, header explains how to run it).
