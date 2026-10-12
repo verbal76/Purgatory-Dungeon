@@ -1,6 +1,6 @@
 # Steam Deck / Steam Machine
 
-The Windows build runs on a Steam Deck through Proton (decision: no native Linux build for now). This page is Valve's "Deck Verified" input,
+The Deck can run the Windows build through Proton, and the repository now also builds a **native Linux x86-64 package** (`python3 tools/build.py --platform linux`, `docs/PLATFORM_SUPPORT.md`; the master standard requires it). The 2026-10-11 "Windows via Proton" decision stands for what has been tested; the Linux package has booted headless to the main menu and has NOT been run on a Deck. This page is Valve's "Deck Verified" input,
 display and performance checklist against what the game does, what was measured, and what still needs a real Deck. Nothing here is released:
 it is held for the next APK generation (owner decision, 2026-10-11).
 
@@ -11,7 +11,7 @@ it is held for the next APK generation (owner decision, 2026-10-11).
 | Controller support with the default configuration, no setting to change | Done, tested | Every action has a gamepad binding in `project.godot`; `tests/test_controller_nav` opens each menu screen (main menu, profiles, character select, every Options tab, Codex, Alchemist, pause, win screen, the on-screen keyboard) and checks a control has focus and every control is reachable by D-pad focus moves. The death screen and buff reel act on single buttons (Start / A / X, A). |
 | Glyphs match the input in use; no keyboard / mouse glyph while on a controller | Done, tested | `scripts/controller_glyphs.gd` + `glyph_prompt.gd`: prompts show original button art (`assets/ui/glyphs`, drawn by `tools/make_controller_glyphs.py`) in the Xbox or the Steam Deck / Steam Controller label set (L1/R1/L2/R2), read from the InputMap so a remap is followed; keyboard / mouse names show only while the keyboard / mouse is the active input. `tests/test_controller_glyphs`. Exception by design: Options > Controls > *Remap Bindings* keeps its keyboard column because that is where a key is rebound; its Quick Reference shows controller buttons only while a controller is in use. |
 | Text entry without a keyboard | Done, tested | The character name uses the game's own on-screen keyboard (`scripts/virtual_keyboard.gd`), opened with A, typed with the D-pad, X deletes, B closes. No Steamworks keyboard call is needed (the Steam keyboard was considered, and dropped: it would need the GodotSteam plugin and a Steam App ID for no gain). The custom seed field is removed from the UI (every run auto-generates its seed). |
-| Playable default: 30 fps at 800p | Built, NOT measured on a Deck | `Graphics Quality` (`scripts/graphics_quality.gd`, Options > Video): Medium on a Deck = FSR 1.0 upscaled from 77 % (about 985x616 inside the 1280x800 panel); Low = 59 %, no bloom; High = full resolution (the PC default, unchanged). Only the 3D scene is scaled: menus and text stay sharp. Needs a measurement on a real Deck (see below). |
+| Playable default: 30 fps at 800p | Built, NOT measured on a Deck | `Graphics Quality` (`scripts/graphics_quality.gd`, Options > Video): **Balanced** (saved level Medium) on a Deck = FSR 1.0 upscaled from 77 % (about 985x616 inside the 1280x800 panel); **Cool / Battery** (Low) = 59 %, no bloom; **Quality** (High) = full resolution (the PC default, unchanged). The device's default is marked "(Recommended)". Only the 3D scene is scaled: menus and text stay sharp. Needs a measurement on a real Deck (see below). |
 | No device-compatibility warning | Checked | No code path shows a GPU / OS / hardware warning (the only "incompatible" texts are the Android update system's). |
 | Launcher | None | The game starts straight into the studio splash and menu. |
 | Deck resolution 1280x800 / 1280x720 | Fine | Default window mode is borderless fullscreen at the display's resolution; the UI is laid out for 1280x720 and scales. |
@@ -28,7 +28,7 @@ The "E" at the top left of the HUD is the compass heading (east), not a key prom
 
 ## What is NOT proven (needs a Steam Deck)
 
-- Frame rate. The headless CPU side is unchanged by this work, but the GPU side was never measured: there is no Deck here. Test **Medium** on a Deck
+- Frame rate. The headless CPU side is unchanged by this work, but the GPU side was never measured: there is no Deck here. Test **Balanced** on a Deck
   in a busy fight and on the opening rooms; if it is under 40 fps, lower the default (the table is `SCALE` in `graphics_quality.gd`).
 - Proton behaviour: Windows Godot builds use Direct3D 12 (`rendering_device/driver.windows="d3d12"`), which Proton runs through vkd3d-proton.
 - Controller names under Steam Input: a Deck normally presents itself as an Xbox pad inside Proton, so `SteamDeck=1` (which Steam sets) forces the Deck
@@ -47,6 +47,6 @@ The "E" at the top left of the HUD is the compass heading (east), not a key prom
 ## Trying it on a PC
 
 - `PURGATORY_FORCE_DECK=1` makes the game act like a Deck (Medium quality default, Deck button labels).
-- Plug a gamepad in; the prompts switch as soon as a button is pressed, and back to key names on the next key or mouse move.
+- Plug a gamepad in; the prompts switch as soon as a button is pressed, and back to key names on the next key press or mouse click (mouse movement alone does not flip them: Deck trackpads and gyro send motion while a pad is in use, master standard 12.3).
 - Tests: `tests/test_controller_glyphs`, `tests/test_controller_nav`, `tests/test_steam_deck` (all in `tests/run_tests.sh`).
 - Screenshots of the prompts: `tests/glyph_shots` (manual tool, header explains how to run it).
