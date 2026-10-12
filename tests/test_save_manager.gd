@@ -102,6 +102,13 @@ func _ready() -> void:
 	SaveManager.load_slot(5)
 	_check(SaveManager.current_profile == {} or not SaveManager.current_profile_is_valid(), "loading corrupt slot yields invalid default profile")
 	_check(FileAccess.file_exists(SaveManager.get_file_path(5)), "loading corrupt slot does not delete it")
+	# The quit / background paths save the current profile: that must not destroy the only copy of the unreadable bytes.
+	var unreadable_path: String = SaveManager.get_file_path(5) + ".unreadable"
+	_check(FileAccess.file_exists(unreadable_path) and FileAccess.get_file_as_string(unreadable_path) == "{ this is not json", "loading a corrupt slot keeps a copy of its bytes")
+	SaveManager.save_profile()
+	_check(FileAccess.get_file_as_string(unreadable_path) == "{ this is not json", "...which survives the profile being saved over the slot")
+	_check(SaveManager.get_slot_state(5) != "empty" and SaveManager.find_first_empty_slot() == 1, "the .unreadable copy is not mistaken for a slot")
+	_check(not FileAccess.file_exists(SaveManager.get_file_path(1) + ".unreadable"), "a healthy or empty slot gets no copy")
 
 	# --- old schema backfill ------------------------------------------------
 	_write_raw(9, JSON.stringify({"character_name": "Old", "character_class": "mage", "initialized": true, "run_count": 4}))

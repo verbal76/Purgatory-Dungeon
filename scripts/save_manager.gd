@@ -199,6 +199,7 @@ func load_slot(slot_index: int) -> void:
 
 	var profile := peek_slot(slot_index)
 	if profile.is_empty():
+		_preserve_unreadable(slot_index)
 		current_profile = get_default_profile()
 	else:
 		current_profile = profile
@@ -224,6 +225,26 @@ func save_profile() -> bool:
 	# Always keep the last-slot preference in sync.
 	_save_last_slot_pref()
 	return true
+
+
+# A slot file that exists but cannot be read (garbage, truncated, not an object) is about to be replaced in memory by a default profile, and the
+# quit / background paths save the current profile: the unreadable bytes would then be overwritten for good. Keep a copy beside it first
+# (profile_N.save.unreadable, refreshed while the file stays unreadable). The save format and slot files are unchanged.
+func _preserve_unreadable(slot_index: int) -> void:
+	var path := get_file_path(slot_index)
+	if not FileAccess.file_exists(path):
+		return
+	var src := FileAccess.open(path, FileAccess.READ)
+	if src == null:
+		return
+	var bytes := src.get_buffer(src.get_length())
+	src.close()
+	var dst := FileAccess.open(path + ".unreadable", FileAccess.WRITE)
+	if dst == null:
+		push_warning("SaveManager: could not keep a copy of the unreadable save in slot %d." % slot_index)
+		return
+	dst.store_buffer(bytes)
+	dst.close()
 
 
 # Deletes a slot file from disk. If the deleted slot was the active
