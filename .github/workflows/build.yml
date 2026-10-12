@@ -1,0 +1,29 @@
+name: Build (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build
+        type: choice
+        options: [android, windows, linux, all]
+        default: all
+      source_sha:
+        description: Exact 40-character commit SHA
+        type: string
+        required: true
+      build_number:
+        description: Coordinated build number (positive integer)
+        type: string
+        required: true
+      destination:
+        description: local_only keeps artifacts private to Actions; github_releases publishes (all platforms only)
+        type: choice
+        options: [local_only, github_releases]
+        default: local_only
+permissions:
+  contents: read
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo skeleton
