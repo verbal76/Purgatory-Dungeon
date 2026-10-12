@@ -174,6 +174,16 @@ Every release build must contain the canonical Hot Attic Games logo
 | v8.1 | `dev-000003` | Repulse replaces the backward Slide; the opening enemy drought is fixed; Repulse and floor-mesh stability fixes |
 | v8.2 | `dev-000004` (assigned by the publisher from the live pointer) | Health balance ONLY: starting/max health Barbarian 150 -> 200, Mage 100 -> 135. No other gameplay change; follow-ups are in `docs/BACKLOG.md` |
 
+| v8.3 | `dev-000005` (source `e6fd6ec`) | Twin-stick ATTACK drag looks through the Classic swipe path (aim smoothing removed), spawn facing, the automatic update hand-off at cold launch, redrawn Kick and Repulse icons, Repulse cooldown presentation |
+| v8.4 | `dev-000006` | The game-feel ("juice") pass: sounds, camera, hit-stop, damage numbers, enemy bars, death camera, UI feel, Screen Shake and Vibration settings (`docs/GAME_FEEL.md`) |
+| v8.5 | `dev-000007` (source `a9099a4`) | Your own footstep sound; enemies stand down when the player is dead; a win pays 20 potions and banks its kills; no fireball mines within 35 m of the start; prop placement avoids low geometry; the buff reel is unchanged |
+
+### Held on the development line (NOT released; waits for the next APK)
+Source: `ccr-5f32885a-gvu16v` (draft pull request #1). Steam Deck / Steam Machine readiness (`docs/STEAM_DECK.md`: controller glyph art, controller-only navigation, Graphics
+Quality, Deck layout fixes, the Valve checklist), the one-history policy and release lineage gate (`docs/SOURCE_OF_TRUTH.md`, `docs/BRANCH_LEDGER.md`), and small polish found by
+rendering at 1280x800. All of it is scripts, assets and docs (OTA-safe by `tools/ota/classify.py`); it is held because the owner asked for the Steam Deck work to wait for the
+next APK. Not measured on a real Deck. Next native decisions: the Windows renderer (`d3d12` vs `vulkan`, `docs/STEAM_DECK.md`) and whether `main` is fast-forwarded to this line.
+
 Why the sequence starts here: the repository had no GitHub Releases, no tags, and no APK/AAB/EXE
 files when the convention was adopted (October 2026). The only playable builds ever delivered
 from it are the two above, so v1 and v2 are the honest count. Earlier pre-GitHub builds

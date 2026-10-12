@@ -17,6 +17,15 @@ it is held for the next APK generation (owner decision, 2026-10-11).
 | Deck resolution 1280x800 / 1280x720 | Fine | Default window mode is borderless fullscreen at the display's resolution; the UI is laid out for 1280x720 and scales. |
 | Text legible: nothing below 9 px at 1280x800 (12 px recommended) | Fine | The smallest UI text is the *caption* role: 16 px x 0.86 desktop scale = 14 px. No smaller font size exists in the project (searched `.gd`, `.tscn`, `.tres`). A user-configurable text size (Valve recommends it) is not built. |
 
+## Checked by rendering at 1280x800 (software Vulkan, `tests/deck_shots`, `tests/deck_game_shots`; manual tools, header says how to run)
+
+Main menu, profiles, character select, the on-screen keyboard, every Options tab, Codex, Alchemist, HUD, pause menu, death and win screens were rendered at the Deck's
+panel size with the Deck defaults and a controller in use. Defects found and fixed this way: the character-select form is 1348 px wide with its developer-toggles column
+(1280 on a Deck), so that column now yields where the screen is too narrow; gamepad bindings in Options read "Pad Btn 0" / "Pad Axis1-" (now "A", "R1", "Left Stick Up");
+a pending controller remap could only be cancelled with Escape (it now cancels itself after 6 s); empty profile slots said "click" to a controller player (now "press A").
+The "E" at the top left of the HUD is the compass heading (east), not a key prompt. Tool pitfall: render screens as children of the root window, as the game does
+(a plain parent Node does not pass the UI theme down, which makes parchment screens look white-on-white).
+
 ## What is NOT proven (needs a Steam Deck)
 
 - Frame rate. The headless CPU side is unchanged by this work, but the GPU side was never measured: there is no Deck here. Test **Medium** on a Deck
@@ -24,7 +33,9 @@ it is held for the next APK generation (owner decision, 2026-10-11).
 - Proton behaviour: Windows Godot builds use Direct3D 12 (`rendering_device/driver.windows="d3d12"`), which Proton runs through vkd3d-proton.
 - Controller names under Steam Input: a Deck normally presents itself as an Xbox pad inside Proton, so `SteamDeck=1` (which Steam sets) forces the Deck
   labels; a docked Deck with another brand of pad uses that pad's labels (Xbox style is the fallback).
-- Suspend / resume, the Steam overlay, and the on-screen keyboard overlay were not exercised.
+- Suspend / resume and the Steam overlay were not exercised. The game does not pause when the window loses focus (the Steam overlay or the Deck's quick-access menu
+  open over a running game); changing that would alter Windows behaviour too, so it is left as an owner decision.
+- Not built (recommendations, not requirements): a user-configurable text size (the smallest text is 14 px), a controller look-sensitivity slider.
 
 ## For the next APK generation (native files: do NOT change in an OTA)
 
