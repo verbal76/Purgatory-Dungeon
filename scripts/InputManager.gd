@@ -16,8 +16,13 @@ const GraphicsQuality := preload("res://scripts/graphics_quality.gd")
 enum Scheme { KEYBOARD, GAMEPAD, TOUCH }
 
 var current_scheme : Scheme = Scheme.KEYBOARD
-# Which label set the controller prompts use (Glyphs.Style: Xbox or Steam Deck / Steam Controller). Follows the pad last used.
+# Which family of pad the prompts are drawn for (Glyphs.Style: Xbox, PlayStation, Switch or Steam Deck / Steam Controller). Follows the pad last used, unless the
+# player fixed it in Options > Controls (prompt_override: 0 = automatic, 1 Xbox, 2 PlayStation, 3 Switch, 4 Steam Deck).
 var controller_style : int = Glyphs.Style.XBOX
+var prompt_override : int = 0
+var _detected_style : int = Glyphs.Style.XBOX
+const OVERRIDE_STYLES := [-1, Glyphs.Style.XBOX, Glyphs.Style.PLAYSTATION, Glyphs.Style.SWITCH, Glyphs.Style.DECK]
+const OVERRIDE_KEY := "ControllerPrompts"
 
 signal input_method_changed(scheme: Scheme)
 signal controller_style_changed(style: int)
@@ -25,6 +30,8 @@ signal controller_style_changed(style: int)
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	prompt_override = clampi(int(SettingsManager.get_setting(OVERRIDE_KEY, 0.0)), 0, OVERRIDE_STYLES.size() - 1)
+	_apply_style()
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	# Phones start on touch prompts (and the Android back button must not quit the game).
 	if TouchControls.is_touch_platform():
@@ -47,10 +54,14 @@ func _input(event: InputEvent) -> void:
 			return
 		if TouchControls.is_touch_platform():
 			return
+		# Mixed input (Steam Deck trackpads and gyro send mouse motion while a pad is in use): moving the mouse never flips a controller's prompts
+		# back to key caps; a deliberate click, or a key, does.
+		if event is InputEventMouseMotion and current_scheme == Scheme.GAMEPAD:
+			return
 		_set_scheme(Scheme.KEYBOARD)
 	elif event is InputEventJoypadButton or event is InputEventJoypadMotion:
-		# Ignore analog stick drift below the dead zone.
-		if event is InputEventJoypadMotion and absf(event.axis_value) < 0.2:
+		# Ignore analog stick drift (and a light brush of a stick or trigger) so prompts do not flicker; a real push, or any button, switches.
+		if event is InputEventJoypadMotion and absf(event.axis_value) < (0.2 if current_scheme == Scheme.GAMEPAD else 0.5):
 			return
 		_set_controller_style(Glyphs.style_for_joy_name(Input.get_joy_name(event.device)))
 		_set_scheme(Scheme.GAMEPAD)
@@ -59,6 +70,19 @@ func _input(event: InputEvent) -> void:
 
 
 func _set_controller_style(style: int) -> void:
+	_detected_style = style
+	_apply_style()
+
+
+## Options > Controls > Controller Prompts: 0 = follow the pad in use, otherwise draw prompts for that family. Saved with the other settings.
+func set_prompt_override(value: int) -> void:
+	prompt_override = clampi(value, 0, OVERRIDE_STYLES.size() - 1)
+	SettingsManager.update_setting(OVERRIDE_KEY, float(prompt_override))
+	_apply_style()
+
+
+func _apply_style() -> void:
+	var style: int = _detected_style if prompt_override == 0 else int(OVERRIDE_STYLES[prompt_override])
 	if controller_style == style:
 		return
 	controller_style = style

@@ -76,7 +76,21 @@ func _ready() -> void:
 	var mm := InputEventMouseMotion.new()
 	mm.relative = Vector2(3, 0)
 	im._input(mm)
-	_check(im.is_keyboard(), "a real mouse selects the keyboard scheme")
+	_check(im.is_gamepad(), "mouse motion alone does not flip a pad's prompts (trackpad / gyro while a pad is in use)")
+	var lightpush := InputEventJoypadMotion.new()
+	lightpush.axis = JOY_AXIS_LEFT_X
+	lightpush.axis_value = 0.3
+	im.current_scheme = im.Scheme.KEYBOARD
+	im._input(lightpush)
+	_check(im.is_keyboard(), "a light brush of a stick does not switch keyboard prompts to the pad")
+	im.current_scheme = im.Scheme.GAMEPAD
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	im._input(click)
+	_check(im.is_keyboard(), "a deliberate mouse click selects the keyboard scheme")
+	im._input(mm)
+	_check(im.is_keyboard(), "mouse motion keeps keyboard prompts")
 	var tt := InputEventScreenTouch.new()
 	tt.pressed = true
 	im._input(tt)
