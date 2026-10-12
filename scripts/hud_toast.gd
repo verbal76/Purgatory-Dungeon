@@ -81,6 +81,17 @@ func _place(l: Label, y_frac: float) -> void:
 	l.pivot_offset = l.size * 0.5
 
 
+# The banner's timer runs in _process, which stops while the game is paused: a banner shown just before the pause menu opened used to stay frozen on
+# screen over the PAUSED title. Hide it while paused; it carries on where it was when the game resumes.
+func _notification(what: int) -> void:
+	if _banner == null:
+		return
+	if what == NOTIFICATION_PAUSED:
+		_banner.visible = false
+	elif what == NOTIFICATION_UNPAUSED:
+		_banner.visible = _banner_t < FADE_IN + _banner_hold + FADE_OUT and is_processing()
+
+
 func _process(delta: float) -> void:
 	_banner_t += delta
 	var total: float = FADE_IN + _banner_hold + FADE_OUT
