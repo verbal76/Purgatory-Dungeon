@@ -196,6 +196,30 @@ class TestSet(unittest.TestCase):
         self.assertTrue(G.verify_set(self.out, "all", SHA, 9))
 
 
+class TestPackageBuildNumber(unittest.TestCase):
+    """verify_package / verify_apk insist that build_info.json carries the coordinated build number."""
+
+    def run_check(self, expect, carried):
+        import verify_package as vp
+        vp.EXPECT_BUILD_NUMBER = expect
+        names = ["scenes/StudioSplash.tscn", "scripts/studio_splash.gd", "scenes/MainMenu.tscn", "scripts/build_info.gd", "build_info.json", vp.LOGO,
+                 "data/buffs.json", "data/globe_effects.json", "data/codex_lore.json"]
+        info = {"public_version": 8, "release": False, "commit": SHA, "runtime_id": "android-godot-4.6.0-r2", "runtime_fingerprint": "d" * 64, "ota_channel": "dev",
+                **({"build_number": carried} if carried is not None else {})}
+        problems, notes = [], []
+        vp.check_names(names, lambda n: json.dumps(info).encode() if n == "build_info.json" else b"x", "PCK", 8, True, False, SHA, problems, notes)
+        vp.EXPECT_BUILD_NUMBER = 0
+        return problems
+
+    def test_the_number_must_match(self):
+        self.assertEqual(self.run_check(9, 9), [])
+        self.assertTrue(any("build number" in p for p in self.run_check(9, 8)))
+        self.assertTrue(any("build number" in p for p in self.run_check(9, None)))
+
+    def test_no_expectation_no_check(self):
+        self.assertEqual(self.run_check(0, 123), [])
+
+
 class TestAuthorize(unittest.TestCase):
     def test_roles(self):
         self.assertEqual(G.authorize("admin", "github_releases", "all"), [])
