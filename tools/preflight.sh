@@ -15,6 +15,7 @@ step "build tool"                     python3 tests/test_build_tool.py
 step "workflow safety"                python3 tests/test_ota_workflows.py
 step "source of truth"                python3 tests/test_source_of_truth.py
 step "licence inventory"              python3 tests/test_licenses.py
+step "offline guard"                  python3 tests/test_offline.py
 step "git: no unstaged or untracked source left behind" bash -c 'test -z "$(git status --porcelain)"'
 [ "$rc" -eq 0 ] && echo "preflight OK ($(git rev-parse --short HEAD))" || echo "preflight FAILED"
 exit $rc

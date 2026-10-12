@@ -83,6 +83,8 @@ python3 tests/test_ota_workflows.py || { echo "!!! FAILED: OTA / CI workflow eco
 STAGE_TIMES+=("$((SECONDS - T_PY)) python: tests/test_ota_workflows.py")
 echo "=== licence inventory (tests/test_licenses.py)"
 python3 tests/test_licenses.py || { echo "!!! FAILED: licence inventory"; rc=1; }
+echo "=== offline guard (tests/test_offline.py)"
+python3 tests/test_offline.py || { echo "!!! FAILED: offline guard"; rc=1; }
 echo "=== build tool (tests/test_build_tool.py)"
 T_PY=$SECONDS
 python3 tests/test_build_tool.py || { echo "!!! FAILED: build tool tests"; rc=1; }
