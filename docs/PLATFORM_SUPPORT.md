@@ -20,7 +20,7 @@ actually run, and what was not. "Compiled" is never written as "tested". Status 
 |---|---|---|
 | Android | v6, v7, v8 APKs built by CI and qualified (signature, identity, API target, 16 KB alignment); OTA v8.1-v8.5 delivered; the owner has played on phones (his findings drove the v7.x / v8.x work) | automated device farm; current `main` line not rebuilt since v8 |
 | Windows | CI package verification (`tools/verify_package.py`: layout, PCK content, boots headless to the main menu); Windows zips were delivered as releases v1-v8 (owner playtesting on Windows is not recorded in the repository) | not run on a Steam Deck / Proton; D3D12 under vkd3d-proton unproven |
-| Linux | 2026-10-12: `tools/build.py --platform linux` exported the exact commit, packaged it (131 MB), `verify_package.py` passed, and the extracted `PurgatoryDungeon.x86_64` started under Xvfb with software Vulkan (llvmpipe, `--rendering-method mobile`, because the software driver does not run Forward+), ran the splash and reached the main menu with no script error. | no GPU, no audio device, no gamepad, no Steam Deck, no play-through: **UNVERIFIED on real hardware** |
+| Linux | 2026-10-12: `tools/build.py --platform linux` exported the exact commit, packaged it (131 MB), `verify_package.py` passed, and the extracted `PurgatoryDungeon.x86_64` started under Xvfb with software Vulkan (llvmpipe, `--rendering-method mobile`, as the repository render probes do), ran the splash and reached the main menu with no script error. | no GPU, no audio device, no gamepad, no Steam Deck, no play-through: **UNVERIFIED on real hardware** |
 
 ## Defects found while building the Linux package
 
