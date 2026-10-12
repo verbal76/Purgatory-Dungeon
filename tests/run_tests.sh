@@ -81,6 +81,10 @@ echo "=== ota workflows (tests/test_ota_workflows.py)"
 T_PY=$SECONDS
 python3 tests/test_ota_workflows.py || { echo "!!! FAILED: OTA / CI workflow economics and safety tests"; rc=1; }
 STAGE_TIMES+=("$((SECONDS - T_PY)) python: tests/test_ota_workflows.py")
+echo "=== build tool (tests/test_build_tool.py)"
+T_PY=$SECONDS
+python3 tests/test_build_tool.py || { echo "!!! FAILED: build tool tests"; rc=1; }
+STAGE_TIMES+=("$((SECONDS - T_PY)) python: tests/test_build_tool.py")
 echo "=== source of truth: lineage gate, CI wiring, policy, branch ledger (tests/test_source_of_truth.py)"
 T_PY=$SECONDS
 python3 tests/test_source_of_truth.py || { echo "!!! FAILED: source-of-truth enforcement tests"; rc=1; }

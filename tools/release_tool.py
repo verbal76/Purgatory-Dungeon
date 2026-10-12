@@ -124,7 +124,7 @@ def build_info(out: str, commit: str, run_id: str, release: bool, runtime: dict,
         "release": release,           # true only for a build made from tag v<VERSION>
         "commit": commit,
         "source_ref": source_ref,     # the branch or tag the build was made from (GITHUB_REF)
-        "platform": platform,         # "windows" | "android"
+        "platform": platform,         # "windows" | "linux" | "android"
         "engine": engine,             # the engine release, e.g. "4.6-stable"
         "build_config": "release" if release else "development",
         "ci_run": run_id,
@@ -153,7 +153,7 @@ def main() -> int:
     b.add_argument("--runtime-fingerprint", default="")
     b.add_argument("--ota-channel", default="")
     b.add_argument("--ref", default="", help="source ref the build was made from (GITHUB_REF)")
-    b.add_argument("--platform", default="", choices=["", "windows", "android"])
+    b.add_argument("--platform", default="", choices=["", "windows", "linux", "android"])
     b.add_argument("--engine", default="", help="engine release, e.g. 4.6-stable")
     sub.add_parser("next")
     a = ap.parse_args()
