@@ -64,6 +64,20 @@ func _reachable(start: Control) -> Dictionary:
 	return seen
 
 
+# Character selection at the Deck's 1280 px: its three columns must not push the form off the screen (the dev toggles column yields).
+func _check_fits_deck(sel: Node) -> void:
+	var columns: Control = sel.find_child("CenterContent", true, false)
+	var margin: MarginContainer = sel.find_child("Margin", true, false)
+	var panel: Control = sel.find_child("DebugPanel", true, false)
+	var m: float = float(margin.get_theme_constant("margin_left") + margin.get_theme_constant("margin_right"))
+	sel._fit_debug_panel(1280.0)
+	_check(columns.get_combined_minimum_size().x + m <= 1280.0, "character select fits a 1280 px screen (needs %d)" % int(columns.get_combined_minimum_size().x + m))
+	_check(panel == null or not panel.visible, "the developer toggles column yields on a 1280 px screen")
+	sel._fit_debug_panel(2400.0)
+	_check(panel == null or panel.visible, "the developer toggles column is still shown on a wide desktop window")
+	sel._fit_debug_panel(1280.0)
+
+
 # Every Options tab: the tab bar takes focus, left / right changes tab, and each tab's controls can be reached from it.
 func _check_options_tabs(opts: Node) -> void:
 	var tc: TabContainer = opts.find_child("TabContainer", true, false)
@@ -191,6 +205,8 @@ func _ready() -> void:
 			_check(unreachable.is_empty(), "%s: every control is reachable by controller focus moves (%d of %d not: %s)" % [name_, unreachable.size(), all.size(), ", ".join(unreachable.slice(0, 8))])
 		if name_ == "OptionsScreen":
 			await _check_options_tabs(inst)
+		if name_ == "CharacterSelection":
+			_check_fits_deck(inst)
 		inst.queue_free()
 		await get_tree().process_frame
 		await get_tree().process_frame

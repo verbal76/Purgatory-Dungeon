@@ -460,6 +460,8 @@ func _build_debug_panel() -> void:
 	var header := PUI.label("Developer toggles", "SectionHeading")
 	vbox.add_child(header)
 	var note := PUI.label("A ticked box keeps the feature in the run.", "CaptionLabel")
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART   # a one-line note made this column ~380 px wide
+	note.custom_minimum_size.x = 220.0
 	vbox.add_child(note)
 
 	_btn_brutes       = _make_debug_toggle("Brutes",       GlobalRunData.debug_no_brutes)
@@ -506,12 +508,30 @@ func _build_debug_panel() -> void:
 	var columns := find_child("CenterContent", true, false)
 	if columns != null:
 		columns.add_child(_debug_panel)
+		resized.connect(_fit_debug_panel)
+		_fit_debug_panel.call_deferred()
 	elif start_btn and start_btn.get_parent():
 		var parent := start_btn.get_parent()
 		parent.add_child(_debug_panel)
 		parent.move_child(_debug_panel, start_btn.get_index())
 	else:
 		add_child(_debug_panel)
+
+
+# The developer toggles are a third column. Where the screen is too narrow for all three (a Steam Deck is 1280 px wide) it is dropped
+# rather than pushing the whole form off both edges of the screen; on a normal desktop window it is shown as before.
+func _fit_debug_panel(available_width: float = -1.0) -> void:
+	if _debug_panel == null or not is_instance_valid(_debug_panel) or TouchControls.is_touch_platform():
+		return
+	var columns := _debug_panel.get_parent() as Control
+	var margin := find_child("Margin", true, false) as MarginContainer
+	if columns == null or margin == null:
+		return
+	if available_width < 0.0:
+		available_width = size.x
+	_debug_panel.visible = true
+	var margins: float = float(margin.get_theme_constant("margin_left") + margin.get_theme_constant("margin_right"))
+	_debug_panel.visible = columns.get_combined_minimum_size().x + margins <= available_width
 
 
 # Brand check box (iron square, ember tick). Ticked = the feature stays in the run; unticked = switched off.

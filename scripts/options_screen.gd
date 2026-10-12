@@ -47,6 +47,7 @@ const MAX_COLUMN_W : int = 1180
 var _listening_action : String = ""   # action name currently being rebound
 var _listening_type   : String = ""   # "keyboard" or "gamepad"
 var _listening_btn    : Button = null # the button showing "Press key…"
+var listen_timeout    : float = 6.0   # seconds a pending remap waits before it cancels itself
 var _controls_tab_vb  : VBoxContainer = null
 
 const REMAPPABLE_ACTIONS : Array = [
@@ -694,7 +695,8 @@ func _populate_controls_tab(t: VBoxContainer) -> void:
 
 	# ── Remappable bindings ──────────────────────────────────────────────────
 	_section(t, "Remap Bindings")
-	_hint(t, "Select a binding to remap it. Press Esc to cancel.")
+	# A controller player is not told about a key; a pending remap also cancels itself (see _start_listen).
+	_hint(t, "Select a binding to remap it. It cancels by itself after a few seconds." if InputManager.is_gamepad() else "Select a binding to remap it. Press Esc to cancel, or wait.")
 	_table_header(t)
 
 	# ── One row per action ──────────────────────────────────────────────────
@@ -755,6 +757,13 @@ func _start_listen(action: String, bind_type: String, btn: Button) -> void:
 	_listening_btn    = btn
 	btn.text          = "Press a key..." if bind_type == "keyboard" else "Press a button..."
 	_set_listening_look(btn, true)
+	# Only Escape used to cancel, so a controller-only player who opened a binding by accident had to assign SOME button. It now gives up on its own.
+	get_tree().create_timer(listen_timeout).timeout.connect(_on_listen_timeout.bind(btn))
+
+
+func _on_listen_timeout(btn: Button) -> void:
+	if _listening_btn == btn and is_instance_valid(btn):
+		_cancel_listen()
 
 
 # The waiting button wears the same ember look as a selected choice elsewhere in the game.
@@ -930,10 +939,8 @@ func _event_label(e: InputEvent) -> String:
 			MOUSE_BUTTON_RIGHT:  return "RMB"
 			MOUSE_BUTTON_MIDDLE: return "MMB"
 			_: return "Mouse %d" % e.button_index
-	if e is InputEventJoypadButton:
-		return "Pad Btn %d" % e.button_index
-	if e is InputEventJoypadMotion:
-		return "Pad Axis%d%s" % [e.axis, "+" if e.axis_value > 0 else "-"]
+	if e is InputEventJoypadButton or e is InputEventJoypadMotion:
+		return InputManager.Glyphs.joy_event_text(e, InputManager.controller_style)   # "A", "R1", "Left Stick Up"... not engine indices
 	return "Unbound"
 
 

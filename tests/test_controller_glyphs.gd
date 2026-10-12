@@ -88,6 +88,16 @@ func _ready() -> void:
 	InputManager._set_scheme(InputManager.Scheme.KEYBOARD)
 	await get_tree().process_frame
 	_check(line.form() == "text", "switching back to keyboard swaps the picture for the key name")
+
+	# Touch: a phone has no button to press, so the prompt names the on-screen control (no controller art, no key).
+	line.action = "equip"
+	line.bracket_keys = true
+	InputManager._set_scheme(InputManager.Scheme.TOUCH)
+	await get_tree().process_frame
+	seen.clear()
+	_labels_text(line, seen)
+	_check(line.form() == "text" and "USE" in seen and not ("[USE]" in seen) and not ("E" in seen), "touch: the prompt names the on-screen control (%s)" % [seen])
+	InputManager._set_scheme(InputManager.Scheme.KEYBOARD)
 	host.queue_free()
 
 	# --- glyph() text follows the InputMap and the pad in use ---------------------------------------------------------------
@@ -113,6 +123,41 @@ func _ready() -> void:
 			_check("W A S D" in texts and "LMB" in texts and texts.count("Keyboard / Mouse") == 2, "keyboard: Options' Quick Reference lists keys and buttons")
 		opts.queue_free()
 		await get_tree().process_frame
+
+	# --- bindings are named in the pad's own words, not engine indices -----------------------------------------------------------
+	var jb := InputEventJoypadButton.new()
+	jb.button_index = JOY_BUTTON_A
+	_check(Glyphs.joy_event_text(jb, Glyphs.Style.XBOX) == "A", "binding label: button 0 is A")
+	jb.button_index = JOY_BUTTON_RIGHT_SHOULDER
+	_check(Glyphs.joy_event_text(jb, Glyphs.Style.XBOX) == "RB" and Glyphs.joy_event_text(jb, Glyphs.Style.DECK) == "R1", "binding label: right shoulder is RB / R1")
+	var jm := InputEventJoypadMotion.new()
+	jm.axis = JOY_AXIS_LEFT_Y
+	jm.axis_value = -1.0
+	_check(Glyphs.joy_event_text(jm, Glyphs.Style.XBOX) == "Left Stick Up", "binding label: left stick up (%s)" % Glyphs.joy_event_text(jm, Glyphs.Style.XBOX))
+	jm.axis = JOY_AXIS_RIGHT_X
+	jm.axis_value = 1.0
+	_check(Glyphs.joy_event_text(jm, Glyphs.Style.XBOX) == "Right Stick Right", "binding label: right stick right")
+	jm.axis = JOY_AXIS_TRIGGER_RIGHT
+	_check(Glyphs.joy_event_text(jm, Glyphs.Style.DECK) == "R2", "binding label: right trigger is R2 on a Deck")
+
+	# --- a pending remap cancels itself (a controller player has no Escape) --------------------------------------------------------
+	InputManager._set_scheme(InputManager.Scheme.GAMEPAD)
+	var opts2 := (load("res://scenes/OptionsScreen.tscn") as PackedScene).instantiate()
+	add_child(opts2)
+	for i in 8:
+		await get_tree().process_frame
+	opts2.listen_timeout = 0.3
+	var jump_before: String = opts2._get_gp_label("jump")
+	_check(jump_before == "B", "Options shows the jump binding as B (%s)" % jump_before)
+	var tbtn := Button.new()
+	opts2.add_child(tbtn)
+	opts2._start_listen("jump", "gamepad", tbtn)
+	_check(opts2._listening_action == "jump" and tbtn.text == "Press a button...", "a remap waits for a button")
+	await get_tree().create_timer(0.8).timeout
+	_check(opts2._listening_action == "" and tbtn.text == "B", "an unanswered remap cancels itself and leaves the binding alone (%s)" % tbtn.text)
+	_check(Glyphs.token_for_action("jump") == "b", "the binding was not changed")
+	opts2.queue_free()
+	InputManager._set_scheme(InputManager.Scheme.KEYBOARD)
 
 	print("test_controller_glyphs: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)

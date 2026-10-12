@@ -660,7 +660,8 @@ func _update_player_arrow() -> void:
 
 
 func _update_compass_labels() -> void:
-	if _player == null:
+	# The player can be gone or out of the tree for a frame (scene change, death, a test tearing down): reading its transform then only logs an engine error.
+	if _player == null or not is_instance_valid(_player) or not _player.is_inside_tree():
 		return
 
 	var heading_degrees : int = _get_player_heading_degrees()

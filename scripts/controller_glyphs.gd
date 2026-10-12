@@ -91,3 +91,23 @@ static func text(token: String, style: int) -> String:
 	if deck_text.has(t):
 		return deck_text[t]
 	return TEXT_XBOX.get(t, t.to_upper())
+
+
+const AXIS_TEXT := {0: "Left Stick %s", 1: "Left Stick %s", 2: "Right Stick %s", 3: "Right Stick %s"}
+
+
+## A controller input event in words ("A", "R1", "Left Stick Up", "RT"...): what a binding is called in Options. "" for other events.
+static func joy_event_text(ev: InputEvent, style: int) -> String:
+	if ev is InputEventJoypadButton:
+		var tok: String = BUTTON_TOKENS.get((ev as InputEventJoypadButton).button_index, "")
+		return text(tok, style) if tok != "" else "Button %d" % (ev as InputEventJoypadButton).button_index
+	if ev is InputEventJoypadMotion:
+		var m := ev as InputEventJoypadMotion
+		if AXIS_TOKENS.has(m.axis):
+			return text(AXIS_TOKENS[m.axis], style)
+		if AXIS_TEXT.has(m.axis):
+			var horizontal: bool = m.axis == 0 or m.axis == 2
+			var dir: String = ("Right" if m.axis_value > 0.0 else "Left") if horizontal else ("Down" if m.axis_value > 0.0 else "Up")
+			return AXIS_TEXT[m.axis] % dir
+		return "Axis %d" % m.axis
+	return ""
