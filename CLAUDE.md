@@ -143,7 +143,7 @@ checkpoints; repairing defects never invalidates them.
 | `GlobeManager` | Mystery sphere pickup effects (defined in `data/globe_effects.json`) |
 | `PlayerWallet` | Currency HUD; used by `AlchemistStore` mid-run |
 | `SettingsManager` | Audio/video/gameplay preferences |
-| `CodexManager` | Lore/bestiary data from `data/codex_lore.txt` |
+| `CodexManager` | Lore/bestiary data from `data/codex_lore.json` |
 
 ### Main Game Scene
 
@@ -171,7 +171,7 @@ Exploration tracking is throttled to 0.5 s intervals (not every frame).
 
 - `data/buffs.json` — 49 buffs with `effect_type`, `stat`, `tradeoff` fields; extensible. Percent-style stats (`BuffManager.PERCENT_OF_BASE_STATS`) are fractions of the player's base value; the pick pool only offers buffs whose stats exist on the current player (`tests/test_buffs.gd` enforces both)
 - `data/globe_effects.json` — Mystery sphere pickup effects
-- `data/codex_lore.txt` — Bestiary/lore entries
+- `data/codex_lore.json` — Bestiary/lore entries (a JSON array: a `.txt` data file is NOT packed by the Godot export, see tests/test_codex_save.gd)
 
 ### Key Manager Scripts
 

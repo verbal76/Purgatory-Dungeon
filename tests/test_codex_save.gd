@@ -31,6 +31,11 @@ func _ready() -> void:
 	CodexManager._load_codex_data()
 	_check(CodexManager.get_total_completions() == before + 1, "the total survives a reload")
 
+	# The lore is a .json because a .txt is not packed by the Godot export (every packaged build had an empty Codex).
+	_check(CodexManager.LORE_FILE_PATH.ends_with(".json"), "the lore file is a JSON file (exported with the game)")
+	_check(CodexManager.get_total_lore_count() >= 10, "the lore loads (%d entries)" % CodexManager.get_total_lore_count())
+	_check(not FileAccess.file_exists("res://data/codex_lore.txt"), "no unexported lore .txt is left next to the JSON")
+
 	_check(GraphicsQuality.NAMES[GraphicsQuality.Level.HIGH] == "Quality" and GraphicsQuality.NAMES[GraphicsQuality.Level.MEDIUM] == "Balanced"
 			and GraphicsQuality.NAMES[GraphicsQuality.Level.LOW] == "Cool / Battery", "graphics levels are named Quality / Balanced / Cool / Battery")
 	var opts := (load("res://scenes/OptionsScreen.tscn") as PackedScene).instantiate()

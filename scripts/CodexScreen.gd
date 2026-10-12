@@ -7,7 +7,7 @@
 #
 #  DESCRIPTION:
 #    Displays the lore codex - lore entries that unlock one at a time as the player completes runs
-#    (death or day-30 finish). Entries come from res://data/codex_lore.txt via CodexManager. The
+#    (death or day-30 finish). Entries come from res://data/codex_lore.json via CodexManager. The
 #    screen rebuilds its entry list every time it opens, so it always reflects the current
 #    completion count and lore file contents.
 #
@@ -17,7 +17,7 @@
 #    sealed, and an iron Back button beneath the page. Escape / ui_cancel fires Back.
 #
 #  MOD NOTES:
-#    - To add lore entries, append lines to res://data/codex_lore.txt.
+#    - To add lore entries, append strings to res://data/codex_lore.json.
 #    - The screen always reads live data - no restart required after editing the lore file.
 #    - Wording of the progress/empty lines is unchanged by the visual pass.
 # ==============================================================================

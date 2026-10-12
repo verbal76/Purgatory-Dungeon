@@ -224,14 +224,13 @@ func _test_data_strings() -> void:
 			for entry in parsed:
 				shown += _check_json_strings(path, entry)
 	_check(shown > 100, "the data scan found the buff / globe strings (%d)" % shown)
-	var lore: PackedStringArray = FileAccess.get_file_as_string("res://data/codex_lore.txt").split("\n")
+	var lore: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://data/codex_lore.json"))
+	_check(lore is Array, "the codex lore parses")
 	var entries := 0
-	for line in lore:
-		if line.strip_edges() == "" or line.begins_with("#"):
-			continue
+	for line in (lore as Array if lore is Array else []):
 		entries += 1
 		for key in FONT_KEYS:
-			_check(PUI.can_render(key, line), "codex lore line %d draws in %s (missing '%s')" % [entries, key, PUI.missing_glyphs(key, line)])
+			_check(PUI.can_render(key, String(line)), "codex lore line %d draws in %s (missing '%s')" % [entries, key, PUI.missing_glyphs(key, String(line))])
 	_check(entries >= 10, "the codex has entries (%d)" % entries)
 
 

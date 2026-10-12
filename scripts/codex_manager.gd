@@ -12,8 +12,9 @@
 #    entries to reveal in the Codex screen.
 #
 #    Lore source:
-#      res://data/codex_lore.txt
-#        • One lore entry per line.
+#      res://data/codex_lore.json
+#        • A JSON array, one lore entry (string) per element. (JSON, not .txt: a Godot export packs only resources and
+#          data it knows, so a .txt next to the game was missing from every packaged build.)
 #        • Lines beginning with # are comments — ignored.
 #        • Blank lines are ignored.
 #        • Add entries by appending new lines at the bottom.
@@ -33,13 +34,13 @@
 #    determines how many new entries become visible.
 #
 #  ADJUSTABLE SETTINGS:
-#    LORE_FILE_PATH  — path to lore text file inside the project
+#    LORE_FILE_PATH  — path to the lore JSON file inside the project
 #    GAME_FOLDER     — parent folder in Documents (must match SaveManager)
 #    CODEX_FILE_NAME — filename for the global counter JSON
 #
 #  MOD NOTES:
-#    • To add lore: append lines to codex_lore.txt and redistribute.
-#    • To change existing lore: edit the lines freely. Players see the
+#    • To add lore: append strings to codex_lore.json and redistribute.
+#    • To change existing lore: edit the strings freely. Players see the
 #      new text for already-unlocked slots on next Codex Screen open.
 #    • increment_completions() is called by you_died_screen.gd (_ready)
 #      and should be called by any future day-30 completion screen too.
@@ -49,13 +50,13 @@
 extends Node
 
 # ── Configurable paths ─────────────────────────────────────────────────────────
-const LORE_FILE_PATH  : String = "res://data/codex_lore.txt"
+const LORE_FILE_PATH  : String = "res://data/codex_lore.json"
 const GAME_FOLDER     : String = StoragePaths.GAME_FOLDER   # Must match SaveManager
 const CODEX_FILE_NAME : String = "codex.json"
 
 # ── Runtime state ──────────────────────────────────────────────────────────────
 # Lore lines loaded from the file. Rebuilt whenever get_unlocked_entries() is
-# called so edits to codex_lore.txt take effect without restarting the game.
+# called so edits to codex_lore.json take effect without restarting the game.
 var _lore_lines        : Array[String] = []
 
 # Total run-end events (death or day-30 finish) across ALL characters.
@@ -86,8 +87,7 @@ func _build_path() -> void:
 #  LORE FILE
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Reads codex_lore.txt and populates _lore_lines.
-# Empty lines and lines starting with # are skipped.
+# Reads codex_lore.json (an array of strings) and populates _lore_lines. Blank entries are skipped.
 # Safe to call multiple times — clears and rebuilds from scratch each time.
 func _load_lore_file() -> void:
 	_lore_lines.clear()
@@ -96,19 +96,15 @@ func _load_lore_file() -> void:
 		push_warning("CodexManager: lore file not found at " + LORE_FILE_PATH)
 		return
 
-	var file := FileAccess.open(LORE_FILE_PATH, FileAccess.READ)
-	if file == null:
-		push_warning("CodexManager: could not open lore file.")
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(LORE_FILE_PATH))
+	if not (parsed is Array):
+		push_warning("CodexManager: lore file is not a JSON array.")
 		return
 
-	while not file.eof_reached():
-		var line : String = file.get_line().strip_edges()
-		# Skip blank lines and comment lines.
-		if line == "" or line.begins_with("#"):
-			continue
-		_lore_lines.append(line)
-
-	file.close()
+	for entry in parsed:
+		var line : String = String(entry).strip_edges()
+		if line != "":
+			_lore_lines.append(line)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -156,7 +152,7 @@ func increment_completions() -> void:
 
 
 # Returns the lore lines that have been unlocked so far.
-# Re-reads the lore file before returning so any edits to codex_lore.txt
+# Re-reads the lore file before returning so any edits to codex_lore.json
 # (e.g. a mod update or in-development content addition) take effect
 # immediately on the next Codex Screen open.
 #

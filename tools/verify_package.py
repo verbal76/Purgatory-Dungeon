@@ -101,6 +101,11 @@ def check_names(names, read, what, version, require_logo, release, sha, problems
         norm = n if n.startswith("res://") else "res://" + n   # APK assets carry no res:// prefix
         if norm.startswith(FORBIDDEN_PREFIXES) or any(x in n.lower() for x in FORBIDDEN_SUBSTR) or n.endswith(".md"):
             problems.append(f"the {what} contains a file that must not ship: {n}")
+    # Runtime data the game reads from res:// must be in the package: the export packs resources and known data (.json), NOT arbitrary files such as
+    # .txt (the Codex lore was a .txt and every packaged build lacked it).
+    for must in ("data/buffs.json", "data/globe_effects.json", "data/codex_lore.json"):
+        if not has(must):
+            problems.append(f"the {what} does not contain the runtime data file {must}")
     # OTA (docs/OTA.md v7): the client is scripts/boot/ota_core.gd and its public key is compiled into
     # scripts/boot/ota_config.gd, so a package carries no trust-anchor file, no channel file and no key material.
     if has("scripts/boot/ota_core"):
