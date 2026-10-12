@@ -64,6 +64,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: "Release lineage gate (a release must descend from every earlier release, so no outdated or side branch can publish)"
+        if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/v')
+        run: |
+          set -euo pipefail
+          # Commits and trees only (no file contents): a small fetch that makes the ancestry of the release tags checkable.
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then git fetch --no-tags --unshallow --filter=blob:none origin; fi
+          git fetch --no-tags --filter=blob:none origin '+refs/tags/*:refs/tags/*'
+          rel=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then rel="$GITHUB_REF_NAME"; fi
+          if [[ "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="v${GITHUB_REF_NAME#release/v}"; fi
+          python3 tools/source_audit.py lineage-gate --sha "$SOURCE_SHA" --tag "$rel"
+
       - name: Cache Godot editor + export templates
         id: godot-cache
         uses: actions/cache@v4
@@ -152,7 +164,7 @@ jobs:
         run: |
           rel=""
           if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="--release"; fi
-          python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" $rel
+          python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" --ref "$GITHUB_REF" --platform windows --engine "$GODOT_RELEASE" $rel
 
       - name: Export Windows build
         if: steps.winbuild.outputs.build == 'true'
@@ -272,7 +284,7 @@ jobs:
         run: |
           rel=""
           if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_REF" == refs/heads/release/v* ]]; then rel="--release"; fi
-          python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" $rel
+          python3 tools/release_tool.py build-info build_info.json --commit "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" --ref "$GITHUB_REF" --platform android --engine "$GODOT_RELEASE" $rel
 
       - name: Android signing key
         env:
@@ -360,6 +372,16 @@ jobs:
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           if [[ "$flag" == "notlatest" ]]; then echo "latest=false" >> "$GITHUB_OUTPUT"; else echo "latest=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Release lineage gate for the promoted commit
+        env:
+          PROMOTE_SHA: ${{ steps.p.outputs.sha }}
+          PROMOTE_VER: ${{ steps.p.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then git fetch --no-tags --unshallow --filter=blob:none origin; fi
+          git fetch --no-tags --filter=blob:none origin '+refs/tags/*:refs/tags/*'
+          git cat-file -e "${PROMOTE_SHA}^{commit}" || git fetch --no-tags --filter=blob:none origin "$PROMOTE_SHA"
+          python3 tools/source_audit.py lineage-gate --sha "$PROMOTE_SHA" --tag "v${PROMOTE_VER}"
       - uses: actions/download-artifact@v4
         with:
           run-id: ${{ steps.p.outputs.run }}

@@ -114,12 +114,19 @@ def runtime_identity(runtime_id: str = "", fingerprint: str = "", channel: str =
     return got
 
 
-def build_info(out: str, commit: str, run_id: str, release: bool, runtime: dict) -> None:
+def build_info(out: str, commit: str, run_id: str, release: bool, runtime: dict,
+               source_ref: str = "", platform: str = "", engine: str = "") -> None:
+    """Provenance of one build (docs/SOURCE_OF_TRUTH.md section 6). The extra fields are optional so older callers keep working; a
+    coordinated release gives every platform's build the same `commit`."""
     info = {
         "product": PRODUCT,
         "public_version": read_version(),
         "release": release,           # true only for a build made from tag v<VERSION>
         "commit": commit,
+        "source_ref": source_ref,     # the branch or tag the build was made from (GITHUB_REF)
+        "platform": platform,         # "windows" | "android"
+        "engine": engine,             # the engine release, e.g. "4.6-stable"
+        "build_config": "release" if release else "development",
         "ci_run": run_id,
         "built_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         **runtime,
@@ -145,6 +152,9 @@ def main() -> int:
     b.add_argument("--runtime-id", default="")
     b.add_argument("--runtime-fingerprint", default="")
     b.add_argument("--ota-channel", default="")
+    b.add_argument("--ref", default="", help="source ref the build was made from (GITHUB_REF)")
+    b.add_argument("--platform", default="", choices=["", "windows", "android"])
+    b.add_argument("--engine", default="", help="engine release, e.g. 4.6-stable")
     sub.add_parser("next")
     a = ap.parse_args()
     if a.cmd == "check":
@@ -153,7 +163,8 @@ def main() -> int:
         set_version(a.n)
     elif a.cmd == "build-info":
         build_info(a.out, a.commit, a.run_id, a.release,
-                   runtime_identity(a.runtime_id, a.runtime_fingerprint, a.ota_channel))
+                   runtime_identity(a.runtime_id, a.runtime_fingerprint, a.ota_channel),
+                   source_ref=a.ref, platform=a.platform, engine=a.engine)
     elif a.cmd == "next":
         print(read_version() + 1)
     return 0

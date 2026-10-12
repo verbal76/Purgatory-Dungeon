@@ -46,6 +46,17 @@ from the signature + runtime fingerprint, not the host. **Verified repository vi
 never assume it: `curl -s https://api.github.com/repos/verbal76/Purgatory-Dungeon`, `"private": false`); so never commit keys or private artifacts.
 Publishing an actual OTA to players needs the owner's explicit authorization.
 
+## One game, one history (permanent engineering policy: docs/SOURCE_OF_TRUTH.md)
+
+We are developing **ONE GAME** that runs on Android and Windows, not an Android game and a Windows game. One authoritative codebase and one integrated history; every
+platform build, OTA and release derives from a commit in it; platform differences are small, named, gated branches (table in the policy). A fix for one platform is checked
+against every platform. Branches are temporary workspaces: start from the authoritative line (`docs/source_authority.json`; `main` is intended, the file names the interim
+line while `origin/main` lags), integrate when validated, never delete a branch, rewrite shared history or merge into `main` without the owner. Agents first run
+`python3 tools/source_audit.py base-check` (a worktree cut from the stale default branch says STALE BASE: stop). A release must descend from every earlier release tag
+(`tools/source_audit.py lineage-gate`, enforced in `ci.yml` before anything is built); Windows and Android of one release are built from the same `SOURCE_SHA`; a failed
+platform never gets a different revision substituted. Every abandoned or unmerged piece of work is accounted for in `docs/BRANCH_LEDGER.md` before anything is discarded
+(`tools/source_audit.py ledger --check`). Tested by `tests/test_source_of_truth.py`.
+
 ## Steam Deck / Steam Machine (held for the next APK; docs/STEAM_DECK.md)
 
 The Windows build is meant to run on a Deck through Proton. Controller glyphs (`scripts/controller_glyphs.gd`, `glyph_prompt.gd`, art in `assets/ui/glyphs`),

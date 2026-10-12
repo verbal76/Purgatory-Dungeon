@@ -81,6 +81,10 @@ echo "=== ota workflows (tests/test_ota_workflows.py)"
 T_PY=$SECONDS
 python3 tests/test_ota_workflows.py || { echo "!!! FAILED: OTA / CI workflow economics and safety tests"; rc=1; }
 STAGE_TIMES+=("$((SECONDS - T_PY)) python: tests/test_ota_workflows.py")
+echo "=== source of truth: lineage gate, CI wiring, policy, branch ledger (tests/test_source_of_truth.py)"
+T_PY=$SECONDS
+python3 tests/test_source_of_truth.py || { echo "!!! FAILED: source-of-truth enforcement tests"; rc=1; }
+STAGE_TIMES+=("$((SECONDS - T_PY)) python: tests/test_source_of_truth.py")
 # Refresh the import cache + global class registry (needed on a fresh clone).
 echo "=== import"
 T_IMPORT=$SECONDS
