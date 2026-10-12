@@ -6,9 +6,9 @@
 #   One Graphics Quality setting for the desktop game (Options > Video). It only moves the cost of the 3D picture; nothing here changes
 #   gameplay. Phones are untouched (their project settings already render at 0.75 scale).
 #
-#       High    full resolution (what Windows always did)
-#       Medium  FSR 1.0 upscaled from 77 % of the screen          <- the default on a Steam Deck
-#       Low     FSR 1.0 upscaled from 59 % of the screen, no bloom
+#       Quality         full resolution (what Windows always did)             <- the default on a PC
+#       Balanced        FSR 1.0 upscaled from 77 % of the screen              <- the default on a Steam Deck
+#       Cool / Battery  FSR 1.0 upscaled from 59 % of the screen, no bloom
 #
 #   The menu and HUD are drawn at full resolution at every level (only the 3D scene is scaled). Static helper, no node, no class_name:
 #   `const GraphicsQuality := preload("res://scripts/graphics_quality.gd")`.
@@ -21,9 +21,11 @@ enum Level { LOW, MEDIUM, HIGH }
 
 const KEY := "GraphicsQuality"
 const SCALE := {Level.LOW: 0.59, Level.MEDIUM: 0.77, Level.HIGH: 1.0}
-const NAMES := {Level.LOW: "Low", Level.MEDIUM: "Medium", Level.HIGH: "High"}
+# Player-facing names (master standard: Quality / Balanced / Cool-Battery); the saved value stays the level number.
+const NAMES := {Level.LOW: "Cool / Battery", Level.MEDIUM: "Balanced", Level.HIGH: "Quality"}
 
 
+## The level this device starts on (the one Options marks "(Recommended)").
 static func default_level() -> int:
 	return Level.MEDIUM if SteamDeck.is_deck() else Level.HIGH
 

@@ -137,12 +137,9 @@ func _load_codex_data() -> void:
 
 # Writes _total_completions to codex.json.
 func _save_codex_data() -> void:
-	var file := FileAccess.open(_codex_path, FileAccess.WRITE)
-	if file == null:
+	# Temp file + rename (StoragePaths.write_text_atomic): a crash or power loss mid-write cannot truncate the player's progress.
+	if not StoragePaths.write_text_atomic(_codex_path, JSON.stringify({"total_completions": _total_completions})):
 		push_warning("CodexManager: could not write codex.json — progress not saved.")
-		return
-	file.store_string(JSON.stringify({"total_completions": _total_completions}))
-	file.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

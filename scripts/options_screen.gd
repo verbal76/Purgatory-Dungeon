@@ -327,7 +327,7 @@ func _build_video_tab() -> void:
 	gq_option.name = "GraphicsQuality"
 	gq_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for lvl in [GraphicsQuality.Level.LOW, GraphicsQuality.Level.MEDIUM, GraphicsQuality.Level.HIGH]:
-		gq_option.add_item(GraphicsQuality.NAMES[lvl], lvl)
+		gq_option.add_item(GraphicsQuality.NAMES[lvl] + (" (Recommended)" if lvl == GraphicsQuality.default_level() else ""), lvl)
 	gq_option.select(GraphicsQuality.level())
 	gq_option.item_selected.connect(func(idx: int) -> void:
 		SettingsManager.update_setting(GraphicsQuality.KEY, float(idx))
