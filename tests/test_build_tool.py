@@ -69,5 +69,19 @@ check(bad.returncode != 0, "an unknown source commit is refused")
 pub = subprocess.run([sys.executable, tool, "--platform", "linux", "--destination", "github_releases", "--dry-run"], capture_output=True, text=True)
 check(pub.returncode != 0, "the local tool offers no way to publish")
 
+# The hosted Linux job exists, runs only on an explicit dispatch, can not publish, and calls the same local tool.
+try:
+    import yaml
+    wf = yaml.safe_load(open(os.path.join(ROOT, ".github", "workflows", "ci.yml"), encoding="utf-8"))
+    job = wf["jobs"]["linux"]
+    check("workflow_dispatch" in job["if"] and "inputs.build_linux" in job["if"] and "refs/" not in job["if"], "ci.yml linux job runs only on an explicit build_linux dispatch")
+    check(job["permissions"] == {"contents": "read"}, "ci.yml linux job has a read-only token")
+    check("tools/build.py --platform linux" in json.dumps(job), "ci.yml linux job runs tools/build.py")
+    check("gh release" not in json.dumps(job["steps"]) and "action-gh-release" not in json.dumps(job["steps"]), "ci.yml linux job creates no release")
+    check("linux" not in str(wf["jobs"]["publish"].get("needs", "")), "the release publish job does not depend on the Linux job")
+    check("build_linux" in wf[True]["workflow_dispatch"]["inputs"], "build_linux is a dispatch input")
+except ImportError:
+    print("NOTICE: PyYAML missing; the ci.yml linux job checks were skipped")
+
 print(f"test_build_tool: {fails} failures")
 sys.exit(1 if fails else 0)

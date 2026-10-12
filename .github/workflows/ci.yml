@@ -39,6 +39,10 @@ on:
         description: Also build, sign and qualify the Android APK (only when a phone-testable artifact is needed)
         type: boolean
         default: false
+      build_linux:
+        description: Also build, verify and package the native Linux x86-64 build (tar.gz + build-manifest.json + checksums.sha256 as a 7-day artifact; never published)
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -210,6 +214,62 @@ jobs:
             build/windows/BUILD_INFO.txt
           retention-days: 7
           compression-level: 6
+
+  # Native Linux x86-64 (Steam Deck / Steam Machine, master standard 5): ONLY on an explicit workflow_dispatch with build_linux, after the full suite is green.
+  # It runs tools/build.py, the same local tool anyone can run (exact commit via git archive, scratch Linux preset so export_presets.cfg and the native
+  # fingerprint are untouched, package verification, manifest and checksums). Read-only token: it publishes nothing; a Release needs the owner.
+  linux:
+    needs: validate-and-export
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_linux }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot editor + Linux and Windows export templates
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_RELEASE }}-linux-templates-v1
+
+      - name: Install Godot ${{ env.GODOT_RELEASE }} + Linux templates
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}"
+          mkdir -p ~/godot-bin && cd ~/godot-bin
+          curl -fsSL -O "${base}/SHA512-SUMS.txt"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          curl -fsSL -O "${base}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          grep -E "Godot_v${GODOT_RELEASE}_(linux.x86_64.zip|export_templates.tpz)$" SHA512-SUMS.txt | sha512sum -c -
+          unzip -q "Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          tpl="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$tpl"
+          unzip -q "Godot_v${GODOT_RELEASE}_export_templates.tpz" 'templates/linux_*' 'templates/version.txt' -d tmp
+          mv tmp/templates/* "$tpl"/
+          rm -rf tmp *.zip *.tpz
+
+      - name: Locate Godot
+        run: echo "GODOT=$HOME/godot-bin/Godot_v${GODOT_RELEASE}_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: Build, verify and package Linux from the exact commit
+        run: python3 tools/build.py --platform linux --godot "$GODOT" --source-sha "$SOURCE_SHA" --out build/dist
+
+      - name: Upload Linux build
+        uses: actions/upload-artifact@v4
+        with:
+          name: PurgatoryDungeon-linux-${{ env.SOURCE_SHA }}
+          path: |
+            build/dist/*.tar.gz
+            build/dist/build-manifest.json
+            build/dist/checksums.sha256
+          retention-days: 7
+          compression-level: 0
 
   # Android APK: built, signed with the stable app key and qualified (identity, API 36 target, 16 KB
   # alignment, signature, game content) by the same scripts anyone can run (tools/android/).
