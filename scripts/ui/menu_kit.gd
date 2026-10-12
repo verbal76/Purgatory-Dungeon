@@ -12,6 +12,15 @@
 class_name MenuKit
 extends RefCounted
 
+## "tap" on a phone, "press A" (the pad's own button name) while a controller is in use, otherwise "click": no mouse word for a controller player.
+static func _select_verb() -> String:
+	if _is_touch():
+		return "tap"
+	if InputManager.is_gamepad():
+		return "press " + InputManager.glyph("ui_accept")
+	return "click"
+
+
 static var _veil_tex: Texture2D = null
 static var _empty_box: StyleBoxEmpty = null
 
@@ -147,7 +156,7 @@ static func slot_card(slot_number: int, data: Dictionary) -> Dictionary:
 	var sub: Label
 	if empty:
 		top = PUI.label("Empty slot", "StatLabel")
-		sub = PUI.label("Slot %d  ·  %s to create a character" % [slot_number, "tap" if _is_touch() else "click"], "MetaLabel")
+		sub = PUI.label("Slot %d  ·  %s to create a character" % [slot_number, _select_verb()], "MetaLabel")
 	elif broken:
 		top = PUI.label("Corrupted save", "DangerTitle")
 		sub = PUI.label("Slot %d  ·  can be cleared" % slot_number, "MetaLabel")

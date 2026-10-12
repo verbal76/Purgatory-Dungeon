@@ -180,6 +180,7 @@ func _ready() -> void:
 		printerr("FAIL: refusing to run without PURGATORY_SAVE_ROOT")
 		get_tree().quit(2)
 		return
+	await get_tree().process_frame   # the root window is still busy setting up its children during _ready
 	SaveManager.load_slot(0)
 	SaveManager.create_initial_identity("NavTester", "mage")
 	SaveManager.load_slot(1)
@@ -188,7 +189,7 @@ func _ready() -> void:
 	for path in SCENES:
 		var name_: String = path.get_file().get_basename()
 		var inst: Node = (load(path) as PackedScene).instantiate()
-		add_child(inst)
+		get_tree().root.add_child(inst)   # as the game does: the root window carries the UI theme (fonts decide the widths)
 		for i in 12:
 			await get_tree().process_frame
 		var focused: Control = get_viewport().gui_get_focus_owner()

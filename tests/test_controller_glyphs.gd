@@ -159,5 +159,14 @@ func _ready() -> void:
 	opts2.queue_free()
 	InputManager._set_scheme(InputManager.Scheme.KEYBOARD)
 
+	# --- a controller player is not told to "click" ---------------------------------------------------------------------------------
+	const MenuKitScript := preload("res://scripts/ui/menu_kit.gd")
+	InputManager._set_scheme(InputManager.Scheme.KEYBOARD)
+	_check(MenuKitScript._select_verb() == "click", "keyboard / mouse: 'click' (%s)" % MenuKitScript._select_verb())
+	InputManager._set_controller_style(Glyphs.Style.DECK)
+	InputManager._set_scheme(InputManager.Scheme.GAMEPAD)
+	_check(MenuKitScript._select_verb() == "press A", "controller: 'press A' (%s)" % MenuKitScript._select_verb())
+	InputManager._set_scheme(InputManager.Scheme.KEYBOARD)
+
 	print("test_controller_glyphs: %d checks, %d failures" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)

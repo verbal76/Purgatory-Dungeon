@@ -18,7 +18,7 @@ func _shot(name: String) -> void:
 
 func _screen(path: String) -> Node:
 	var inst: Node = (load(path) as PackedScene).instantiate()
-	add_child(inst)
+	get_tree().root.add_child(inst)   # like the game: a scene is a child of the root window, which is what carries the UI theme
 	return inst
 
 
@@ -27,6 +27,7 @@ func _ready() -> void:
 	if _out == "":
 		_out = ProjectSettings.globalize_path("user://deck_shots")
 	DirAccess.make_dir_recursive_absolute(_out)
+	await get_tree().process_frame
 	SaveManager.load_slot(0)
 	SaveManager.create_initial_identity("Deckard", "mage")
 	InputManager._set_controller_style(Glyphs.Style.DECK)
@@ -49,4 +50,9 @@ func _ready() -> void:
 		tc.current_tab = i
 		await _shot("4_options_%d_%s" % [i, tc.get_tab_title(i)])
 	s.queue_free()
+	for pair in [["5_profile", "res://scenes/ProfileScreen.tscn"], ["6_alchemist", "res://scenes/AlchemistStore.tscn"], ["7_codex", "res://scenes/CodexScreen.tscn"]]:
+		await get_tree().process_frame
+		s = _screen(pair[1])
+		await _shot(pair[0])
+		s.queue_free()
 	get_tree().quit()
