@@ -11,7 +11,7 @@ lives in `CLAUDE.md`; this page is the full rule, how it is enforced, and how to
 - There is ONE authoritative history. Every platform build, every OTA and every release derives from a commit in it.
 - One codebase is not one binary. The mechanism in this project (GDScript on Godot 4.6, no new engine or build system):
   - the same scripts, scenes and data for every target; platform differences are small, named, gated branches (below);
-  - one export preset per target (`export_presets.cfg`: "Windows Desktop", "Android") built from the same checkout by one workflow (`ci.yml`);
+  - one export preset per tracked target (`export_presets.cfg`: "Windows Desktop", "Android"; the native Linux preset is added to a scratch copy by `tools/build.py`) built from the same commit by one workflow (`ci.yml`, manual);
   - one version number (`VERSION`) for all targets of a release.
 - A fix made for one platform is evaluated against every platform before it is called done. No platform may silently fall behind.
 
@@ -51,10 +51,11 @@ branches. Findings of the 2026-10-12 audit, and the classification of every disc
 
 ## 4. Release lineage gate and provenance
 
-`python3 tools/source_audit.py lineage-gate --sha <commit> --tag vN` refuses (exit 1) unless **all of**: `VERSION` is N and the tag is `vN`; every earlier release tag
-`v1..v(N-1)` exists and is an ancestor of the commit; tag `vN`, if it already exists, points at this very commit (one number = one binary, never reused or moved).
-Exit 2 means "cannot decide" (shallow clone, tags missing): a failure, never a pass. It runs in `ci.yml` first thing for every release (`v<N>` tag or
-`release/v<N>` branch) and for every `promote/` helper branch, before anything is built, so a stale or side branch cannot publish.
+`python3 tools/source_audit.py lineage-gate --sha <commit> --tag vN` (the v1-v8 release gate) refuses unless `VERSION` is N, every earlier release tag exists and is an ancestor of the commit, and
+tag `vN`, if it exists, points at this very commit. Exit 2 means "cannot decide" (shallow clone, tags missing): a failure, never a pass.
+Every numbered build runs `python3 tools/build_gate.py source` first thing in `ci.yml` (the manual build workflow): the commit being built is the checked-out one, it is reachable from the authoritative
+line (`docs/source_authority.json`, read from the TRUSTED workflow commit, never from the commit being judged), it contains every release tag, and the workflow commit is on that line too.
+A stale or side branch can therefore neither build nor publish. `build_gate.py number` refuses a consumed or non-monotonic build number, and a build's tag is `build-NN`, never moved.
 
 Every build records where it came from, in `build_info.json` (shipped inside the game, `scripts/build_info.gd`) and `BUILD_INFO.txt` / `ANDROID_BUILD_INFO.txt` next to
 the artifact: `commit` (full SHA), `source_ref` (branch or tag), `public_version`, `platform`, `engine`, `build_config`, `built_utc`, `ci_run`, the runtime id and fingerprint,
@@ -62,8 +63,8 @@ the package checksums and the Godot version. `tools/verify_package.py --sha` tie
 
 ### Coordinated multiplatform releases
 
-The Windows package and the Android APK of one release come from ONE `ci.yml` run, stamped with the same `SOURCE_SHA`; `publish` downloads both artifacts *by that
-SHA* (`PurgatoryDungeon-windows-<sha>`, `PurgatoryDungeon-android-<sha>`), so a release cannot mix commits. If one platform fails validation the run stops there: a
+The APK, the Windows package and the Linux package of one build come from ONE `ci.yml` run, built from the same `source_sha` with the same build number; `assemble` rejects a part built from another
+commit or number, and `publish` re-verifies the assembled set before creating the release, so a release cannot mix commits. If one platform fails the run stops there: a
 different source revision is never substituted. Platform packaging and signing are the only per-platform steps.
 
 ## 5. OTA and native releases
@@ -76,15 +77,14 @@ creates a second history. Not every change is OTA-compatible: `project.godot`, `
 
 | Rule | Enforced by | Proven by |
 |---|---|---|
-| A release descends from all earlier releases; numbers are never reused | `lineage-gate` step in `ci.yml` (release + promote) | `tests/test_source_of_truth.py` (throwaway repositories: side branch, stale snapshot, unrelated history, moved tag, shallow clone) |
-| Every platform build is stamped with the one source commit | `--commit "$SOURCE_SHA"` on both `build-info` calls; artifacts named by that SHA | `tests/test_source_of_truth.py` (workflow wiring) |
+| A build is on the authoritative line and descends from all earlier releases; numbers are never reused | `build_gate.py source` / `number` in `ci.yml` `gate` (and again in `publish`) | `tests/test_build_gate.py`, `tests/test_source_of_truth.py` (throwaway repositories: side branch, stale snapshot, unrelated history, moved tag, shallow clone) |
+| Every platform build is stamped with the one source commit and build number | `--commit "$SOURCE_SHA"` / `--build-number` in `build_info.json`; `assemble` checks every part | `tests/test_source_of_truth.py`, `tests/test_build_gate.py` (workflow wiring) |
 | Provenance recorded | `release_tool.py build-info --ref --platform --engine` | `tests/test_source_of_truth.py` |
 | Nothing left behind | `source_audit.py ledger --check`, `docs/source_authority.json` | `tests/test_source_of_truth.py` (full clones) |
 | The rule is discoverable | `CLAUDE.md`, this page, `docs/BRANCH_LEDGER.md` | `tests/test_source_of_truth.py` (policy files) |
 | The suite really ran | `tests/run_tests.sh` fails a stage that exits non-zero or prints `SCRIPT ERROR`; the python stages print a NOTICE when a check cannot run in a single-branch clone | `tests/run_tests.sh` |
 
-CI checks out a single commit, so the whole-repository branch audit cannot run there: it prints a visible NOTICE and the release gate (which fetches commits and trees,
-never file contents) does the part that matters at release time. Run the full audit in a normal clone before a release.
+CI checks out a single commit, so the whole-repository branch audit cannot run there: it prints a visible NOTICE and the build gate (which fetches full history) does the part that matters at build time. Run the full audit in a normal clone before a release.
 
 ## 7. Not allowed without the owner
 
@@ -97,4 +97,4 @@ Anything destructive, irreversible, or that materially changes established behav
 1. `git fetch --tags` then `python3 tools/source_audit.py base-check` (your checkout descends from the latest release).
 2. Work on a short-lived branch from the authoritative line; keep it small; integrate it when validated.
 3. `tests/run_tests.sh`, `python3 tools/ota_runtime.py --check`, `python3 tools/ota/classify.py <base> HEAD` as in `CLAUDE.md`.
-4. Before a release: `python3 tools/source_audit.py ledger --check` and `lineage-gate --sha HEAD --tag v<N>` in a full clone.
+4. Before a build: `python3 tools/source_audit.py ledger --check` in a full clone; the build workflow runs `tools/build_gate.py source` and `number` itself.

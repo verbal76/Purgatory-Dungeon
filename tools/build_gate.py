@@ -60,7 +60,25 @@ def check_inputs(platform: str, sha: str, number: str, destination: str) -> list
 
 # ── source authority ──────────────────────────────────────────────────────────────────────────────────────────
 
-def check_source(repo: "SA.Repo", sha: str, workflow_sha: str = "") -> tuple:
+def authoritative_line(repo: "SA.Repo", authority_root: str = "") -> tuple:
+    """(ref, note) like source_audit.authoritative_ref, but the authority file is read from `authority_root` (the TRUSTED workflow checkout), never from the
+    commit being judged: a source commit must not be able to declare itself authoritative."""
+    if not authority_root:
+        return SA.authoritative_ref(repo)
+    auth = SA.load_authority(authority_root)
+    branch = auth.get("authoritative_branch", "main")
+    tags = repo.release_tags()
+    latest = repo.resolve(tags[max(tags)]) if tags else ""
+    main_ref = f"origin/{branch}"
+    if repo.resolve(main_ref) and (not latest or repo.is_ancestor(latest, repo.resolve(main_ref))):
+        return main_ref, f"{main_ref} (the authoritative branch)"
+    interim = auth.get("current_line", {}).get("branch", "")
+    if interim and repo.resolve(f"origin/{interim}"):
+        return f"origin/{interim}", f"origin/{interim} (interim: {main_ref} does not yet contain the latest release)"
+    return "HEAD", "no declared authoritative line found"
+
+
+def check_source(repo: "SA.Repo", sha: str, workflow_sha: str = "", authority_root: str = "") -> tuple:
     """(exit code, messages). The commit being built is HEAD, is reachable from the authoritative line and contains every release tag."""
     msgs = []
     head = repo.resolve("HEAD")
@@ -71,7 +89,7 @@ def check_source(repo: "SA.Repo", sha: str, workflow_sha: str = "") -> tuple:
         return 1, [f"the checked-out commit {head[:12]} is not the requested source {commit[:12]}: build exactly the requested commit"]
     if repo.is_shallow():
         return 2, ["this clone is shallow: authority and lineage cannot be proven (fetch-depth 0)"]
-    auth_ref, note = SA.authoritative_ref(repo)
+    auth_ref, note = authoritative_line(repo, authority_root)
     if auth_ref == "HEAD" or not repo.resolve(auth_ref):
         return 2, [f"no authoritative line could be resolved ({note})"]
     if not repo.is_ancestor(commit, auth_ref):
@@ -117,14 +135,14 @@ def check_number(number: int, tags: list, release_names: list, version: int) -> 
 
 # ── packaging records and the coordinated set ─────────────────────────────────────────────────────────────────
 
-def package_one(platform: str, file: str, out: str, sha: str, number: int, engine: str) -> str:
+def package_one(platform: str, file: str, out: str, sha: str, number: int, engine: str, details: dict = None) -> str:
     """Copy a built artifact to its standard name in `out` and write that platform's manifest fragment + checksums."""
     os.makedirs(out, exist_ok=True)
     name = B.artifact_name(platform, number, "standard")
     dest = os.path.join(out, name)
     if os.path.abspath(file) != os.path.abspath(dest):
         shutil.copyfile(file, dest)
-    B.write_manifest(out, number, sha, engine, "standard", {platform: {"status": "built", "path": dest}})
+    B.write_manifest(out, number, sha, engine, "standard", {platform: {"status": "built", "path": dest, **({"details": details} if details else {})}})
     return dest
 
 
@@ -242,6 +260,7 @@ def main() -> int:
     s = sub.add_parser("source")
     s.add_argument("--sha", required=True)
     s.add_argument("--workflow-sha", default="")
+    s.add_argument("--authority-root", default="", help="checkout whose docs/source_authority.json names the authoritative line (the trusted workflow commit)")
     s.add_argument("--repo", default=ROOT)
     s = sub.add_parser("number")
     s.add_argument("--build-number", type=int, required=True)
@@ -254,6 +273,7 @@ def main() -> int:
     s.add_argument("--source-sha", required=True)
     s.add_argument("--build-number", type=int, required=True)
     s.add_argument("--engine", default="4.6.stable")
+    s.add_argument("--detail", action="append", default=[], metavar="KEY=VALUE", help="a fact about the artifact recorded in the manifest (e.g. package, version_code, cert_sha256)")
     for name in ("assemble", "verify"):
         s = sub.add_parser(name)
         s.add_argument("--in" if name == "assemble" else "--dir", dest="src", required=True)
@@ -271,7 +291,7 @@ def main() -> int:
     if a.cmd == "inputs":
         return _report(check_inputs(a.platform, a.source_sha, a.build_number, a.destination), "inputs OK")
     if a.cmd == "source":
-        code, msgs = check_source(SA.Repo(a.repo), a.sha, a.workflow_sha)
+        code, msgs = check_source(SA.Repo(a.repo), a.sha, a.workflow_sha, a.authority_root)
         for m in msgs:
             print(m)
         return code
@@ -286,7 +306,8 @@ def main() -> int:
             return 2
         return _report(check_number(a.build_number, tags, names, version), f"build number {a.build_number} is unused and above every consumed number")
     if a.cmd == "package":
-        path = package_one(a.platform, a.file, a.out, a.source_sha, a.build_number, a.engine)
+        details = dict(d.split("=", 1) for d in a.detail if "=" in d)
+        path = package_one(a.platform, a.file, a.out, a.source_sha, a.build_number, a.engine, details)
         print(f"packaged {path} ({os.path.getsize(path)} bytes, sha256 {B.sha256_file(path)})")
         return 0
     if a.cmd == "assemble":

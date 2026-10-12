@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
+# HISTORICAL: how "Purgatory Dungeon v1" ... "v8" were published (tag / release-branch / promote pushes). NO workflow calls this script any more: from build 9 the
+# only publisher is the guarded `publish` job of the manual build workflow (.github/workflows/ci.yml, docs/RELEASES.md). Kept as the record of how v1-v8 were made.
 # Publishes "Purgatory Dungeon v<N>" as a GitHub Release from an already-built artifact.
-# Used by .github/workflows/ci.yml (tag builds and "promote an existing build" dispatches).
 #
 # usage: publish_release.sh <version> <source_sha> <artifact_dir> <ci_run_id> <make_latest:true|false> [extra_notes_file]
 #   artifact_dir must contain PurgatoryDungeon.exe, PurgatoryDungeon.pck (and BUILD_INFO.txt).

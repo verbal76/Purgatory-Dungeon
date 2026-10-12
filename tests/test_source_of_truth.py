@@ -211,6 +211,8 @@ class ProvenanceFields(unittest.TestCase):
 
 
 class CiWiring(unittest.TestCase):
+    """The unified manual build workflow (.github/workflows/ci.yml): every platform of a build comes from ONE validated commit (more in tests/test_build_workflow.py)."""
+
     @classmethod
     def setUpClass(cls):
         cls.text = open(os.path.join(ROOT, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
@@ -225,45 +227,49 @@ class CiWiring(unittest.TestCase):
         if self.wf is None:
             self.skipTest("PyYAML not installed")
 
-    def test_every_build_info_call_stamps_the_one_source_sha(self):
+    def test_every_build_info_is_stamped_with_the_one_source_sha(self):
+        # Android writes build_info.json itself; Windows and Linux go through tools/build.py, which stamps the commit it exports.
         calls = re.findall(r"release_tool\.py build-info[^\n]*", self.text)
-        self.assertGreaterEqual(len(calls), 2, "Windows and Android must each write build_info.json")
-        for c in calls:
-            self.assertIn('--commit "$SOURCE_SHA"', c, c)
-        self.assertEqual(sorted(re.findall(r"--platform (\w+)", " ".join(calls))), ["android", "windows"])
-        self.assertTrue(all("--ref " in c and "--engine " in c for c in calls), "build_info records the ref and the engine")
+        self.assertEqual(len(calls), 1)
+        self.assertIn('--commit "$SOURCE_SHA"', calls[0])
+        self.assertIn("--platform android", calls[0])
+        self.assertIn("--engine", calls[0])
+        self.assertIn('--build-number "$BUILD_NUMBER"', calls[0])
+        for platform in ("windows", "linux"):
+            self.assertRegex(self.text, rf'tools/build\.py --platform {platform} --godot "\$GODOT" --source-sha "\$SOURCE_SHA" --build-number "\$BUILD_NUMBER"')
+        build_py = open(os.path.join(ROOT, "tools", "build.py"), encoding="utf-8").read()
+        self.assertIn('"--commit", sha', build_py)
+        self.assertIn('"git", "archive"', build_py)
 
-    def test_source_sha_is_the_real_head_commit_not_a_merge_ref(self):
-        self.assertIn("SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}", self.text)
-
-    def test_both_platform_artifacts_are_named_and_fetched_by_the_same_sha(self):
-        self.assertIn("PurgatoryDungeon-windows-${{ env.SOURCE_SHA }}", self.text)
-        self.assertIn("PurgatoryDungeon-android-${{ env.SOURCE_SHA }}", self.text)
-        # publish downloads both by that name, so a release can only combine builds of one commit
-        self.assertEqual(self.text.count("name: PurgatoryDungeon-windows-${{ env.SOURCE_SHA }}"), 2)   # upload + publish download
-        self.assertEqual(self.text.count("name: PurgatoryDungeon-android-${{ env.SOURCE_SHA }}"), 2)
-
-    def test_lineage_gate_runs_first_for_releases_and_promotes(self):
+    def test_source_sha_is_the_dispatched_input_and_every_job_checks_it_out(self):
         self.need_yaml()
-        steps = self.wf["jobs"]["validate-and-export"]["steps"]
-        names = [s.get("name", "") or "" for s in steps]
-        gate = [i for i, n in enumerate(names) if n.startswith("Release lineage gate")]
-        self.assertEqual(len(gate), 1)
-        self.assertLess(gate[0], min(i for i, n in enumerate(names) if n.startswith("Install Godot") or n.startswith("Cache Godot")),
-                        "the gate must run before anything is built or downloaded")
-        cond = steps[gate[0]]["if"]
-        self.assertIn("refs/tags/v", cond)
-        self.assertIn("refs/heads/release/v", cond)
-        self.assertIn("lineage-gate", steps[gate[0]]["run"])
-        self.assertIn("--sha \"$SOURCE_SHA\"", steps[gate[0]]["run"])
-        promote = [s.get("name", "") or "" for s in self.wf["jobs"]["promote"]["steps"]]
-        self.assertTrue(any(n.startswith("Release lineage gate") for n in promote))
-        self.assertLess([i for i, n in enumerate(promote) if n.startswith("Release lineage gate")][0],
-                        [i for i, n in enumerate(promote) if n.startswith("Publish")][0])
+        self.assertEqual(self.wf["env"]["SOURCE_SHA"], "${{ inputs.source_sha }}")
+        for job in ("validate", "windows", "linux", "android", "assemble"):
+            ref = [s["with"]["ref"] for s in self.wf["jobs"][job]["steps"] if s.get("uses", "").startswith("actions/checkout")]
+            self.assertEqual(ref, ["${{ inputs.source_sha }}"], f"{job} builds / checks the exact requested commit")
 
-    def test_publish_needs_the_validated_build_and_the_apk(self):
+    def test_the_platform_parts_are_assembled_and_checked_against_the_one_sha(self):
         self.need_yaml()
-        self.assertEqual(sorted(self.wf["jobs"]["publish"]["needs"]), ["android", "validate-and-export"])
+        self.assertIn("build_gate.py assemble", self.text)
+        self.assertIn('--source-sha "$SOURCE_SHA" --build-number "$BUILD_NUMBER"', self.text)
+        self.assertEqual(sorted(self.wf["jobs"]["assemble"]["needs"]), ["android", "gate", "linux", "validate", "windows"])
+
+    def test_the_authority_gate_runs_first_and_everything_waits_for_it(self):
+        self.need_yaml()
+        names = [s.get("name", "") or "" for s in self.wf["jobs"]["gate"]["steps"]]
+        order = [next(i for i, n in enumerate(names) if n.startswith(p)) for p in ("Validate the inputs", "Source commit", "Source authority", "Build number")]
+        self.assertEqual(order, sorted(order))
+        authority = next(s for s in self.wf["jobs"]["gate"]["steps"] if s.get("name", "").startswith("Source authority"))["run"]
+        self.assertIn("build_gate.py source", authority)
+        self.assertIn('--sha "$SOURCE_SHA"', authority)
+        self.assertIn('--workflow-sha "$GITHUB_SHA"', authority)
+        self.assertIn("--authority-root .", authority)
+        for job in ("validate", "windows", "linux", "android"):
+            self.assertIn("gate", self.wf["jobs"][job]["needs"] if isinstance(self.wf["jobs"][job]["needs"], list) else [self.wf["jobs"][job]["needs"]], job)
+
+    def test_publish_needs_the_gate_and_the_assembled_set(self):
+        self.need_yaml()
+        self.assertEqual(sorted(self.wf["jobs"]["publish"]["needs"]), ["assemble", "gate"])
 
 
 class PolicyIsDurable(unittest.TestCase):

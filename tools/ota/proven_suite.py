@@ -11,7 +11,7 @@ publication may REUSE a green result, but only one it can verify through the Git
         (always exit 0: a missing proof is not an error, it just means the suite runs)
   proven_suite.py same-tree --sha SHA40
         exit 0 only when the tree of HEAD is the tree of SHA40 (the checked-out tree IS the commit's tree); used by the
-        "Exact-SHA attestation" steps of ci.yml and ota-tests.yml
+        "Exact-SHA attestation" steps of tests.yml, ci.yml and ota-tests.yml
   proven_suite.py sources
         the allow-list as JSON (the workflow tests compare it with the real workflow files)
 
@@ -47,11 +47,18 @@ OTA_SUITE_JOB = "Full test suite on the exact SHA / Full test suite on the exact
 
 # workflow file path -> what a verified green result of the suite looks like there
 SOURCES = {
-    ".github/workflows/ci.yml": {
-        "name": "CI",
+    ".github/workflows/tests.yml": {
+        "name": "Tests",
         "events": ("push", "pull_request"),
         "run_conclusions": ("success",),            # a red run (any job) is never reused, even when the suite job was green
-        "job": "validate-and-export",
+        "job": "validate",
+        "steps": (SUITE_STEP_CI, ATTEST_STEP),
+    },
+    ".github/workflows/ci.yml": {                   # the manual build workflow: its own `validate` job is the same full suite on the exact source commit
+        "name": "Build (manual)",
+        "events": ("workflow_dispatch",),
+        "run_conclusions": ("success", "failure"),   # a build that failed AFTER its green suite job (the job decides)
+        "job": "validate",
         "steps": (SUITE_STEP_CI, ATTEST_STEP),
     },
     ".github/workflows/ota-publish.yml": {

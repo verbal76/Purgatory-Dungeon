@@ -13,6 +13,10 @@ python3 tools/ota/classify.py "$BASE" HEAD | grep -E "safe=|RESULT|GUARDED|APK_R
 step "base is on the release line"    python3 tools/source_audit.py base-check
 step "res:// paths"                   python3 tests/check_res_paths.py
 step "build tool"                     python3 tests/test_build_tool.py
+step "build gate"                     python3 tests/test_build_gate.py
+step "build workflow policy"          python3 tests/test_build_workflow.py
+if command -v actionlint >/dev/null 2>&1; then step "actionlint (all workflows)" actionlint .github/workflows/*.yml; else echo "NOTE: actionlint is not installed; skipped (pip install actionlint-py)"; fi
+step "shell syntax of the CI scripts"  bash -c 'for f in tools/android/*.sh tools/*.sh tests/run_tests.sh; do bash -n "$f" || exit 1; done' 
 step "workflow safety"                python3 tests/test_ota_workflows.py
 step "source of truth"                python3 tests/test_source_of_truth.py
 step "licence inventory"              python3 tests/test_licenses.py

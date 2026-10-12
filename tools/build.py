@@ -233,7 +233,8 @@ def write_manifest(dest: str, number: int, sha: str, engine: str, naming: str, r
         "title": TITLE, "build_number": number, "source_sha": sha, "engine": engine, "configuration": "release", "naming": naming,
         "built_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "toolchain": {"python": sys.version.split()[0], "godot_export": engine},
-        "platforms": {p: {"status": r["status"], **({"reason": r["reason"]} if "reason" in r else {})} for p, r in results.items()},
+        "platforms": {p: {"status": r["status"], **({"reason": r["reason"]} if "reason" in r else {}), **({"details": r["details"]} if "details" in r else {})}
+                      for p, r in results.items()},
         "artifacts": artifacts,
         "tested_on_device": False,     # a package that compiled is not a package that was tested (master standard step 4)
     }

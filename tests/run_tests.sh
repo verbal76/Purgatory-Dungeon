@@ -85,6 +85,14 @@ echo "=== licence inventory (tests/test_licenses.py)"
 python3 tests/test_licenses.py || { echo "!!! FAILED: licence inventory"; rc=1; }
 echo "=== offline guard (tests/test_offline.py)"
 python3 tests/test_offline.py || { echo "!!! FAILED: offline guard"; rc=1; }
+echo "=== build gate: inputs, source authority, build numbers, coordinated set (tests/test_build_gate.py)"
+T_PY=$SECONDS
+python3 tests/test_build_gate.py || { echo "!!! FAILED: build gate tests"; rc=1; }
+STAGE_TIMES+=("$((SECONDS - T_PY)) python: tests/test_build_gate.py")
+echo "=== build workflow policy (tests/test_build_workflow.py)"
+T_PY=$SECONDS
+python3 tests/test_build_workflow.py || { echo "!!! FAILED: build workflow policy tests"; rc=1; }
+STAGE_TIMES+=("$((SECONDS - T_PY)) python: tests/test_build_workflow.py")
 echo "=== build tool (tests/test_build_tool.py)"
 T_PY=$SECONDS
 python3 tests/test_build_tool.py || { echo "!!! FAILED: build tool tests"; rc=1; }

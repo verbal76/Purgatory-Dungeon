@@ -29,12 +29,13 @@ its saves. The key is never in the repository, release notes, logs or CI artifac
 3. Only the public certificate SHA-256 is printed (release notes list it so installs can be checked):
    `tools/verify_apk.py --expect-cert` fails a build signed with any other key.
 
-## Build and qualification (GitHub Actions, job `android`)
-`tests` subset (touch, input, UI, lifecycle, splash) -> signing -> `tools/android/build_apk.sh`
-(installs SDK pieces, unpacks the Android gradle template, enables ETC2/ASTC import, exports) ->
-`tools/verify_apk.py` (identity, API levels, arm64, 16 KB, signature, PCK content incl. the studio
-logo) -> artifact. `publish` (on `release/v<N>` or tag `v<N>`) attaches the APK to the release after
-verifying it again.
+## Build and qualification (GitHub Actions, job `android` of the manual "Build (manual)" workflow, `ci.yml`)
+The full suite on the exact commit (`validate`) -> signing with the EXISTING key only (`ANDROID_REQUIRE_EXISTING_KEY=1`; the job can not generate a key or create a release) ->
+`tools/android/build_apk.sh` (installs SDK pieces, unpacks the Android gradle template, enables ETC2/ASTC import, exports) -> `tools/verify_apk.py` (identity, API levels, arm64,
+16 KB, signature against the install line's certificate, PCK content incl. the studio logo, runtime identity, the build number) -> a private run artifact named
+`Purgatory Dungeon Build NN APK.apk` with its manifest (package id, version code, certificate SHA-256, runtime id and fingerprint). Only the separate `publish` job
+(`destination=github_releases`, all three platforms, admin/maintain actor) attaches it to the release `Purgatory Dungeon Build NN`, after re-verifying the set (docs/RELEASES.md).
+The APK's `versionCode` / `versionName` are the native version (`./VERSION`) until the next native release; the build number is in the names and manifests.
 
 ## Controls (touch)
 Everything feeds the same semantic input actions as keyboard and controller; gameplay code has no

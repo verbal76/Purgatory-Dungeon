@@ -8,17 +8,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Release convention (mandatory — read before delivering any build)
 
-The owner identifies builds only as **`Purgatory Dungeon v<N>`** (plain sequential integers; current
-number in `./VERSION`). Deliver every playable build as a GitHub Release titled exactly
-`Purgatory Dungeon v<N>`, marked Latest, with a file named `Purgatory-Dungeon-v<N>-Windows.zip`. Never use
-codenames, SHAs, build counters or CI artifact links in anything the owner sees; keep those as
-engineering metadata in the release notes. One number = one delivered binary; never reuse or overwrite.
-Full procedure, tooling and history: **docs/RELEASES.md** (`tools/release_tool.py`, tag `vN` triggers CI publishing).
+From the first build after v8 the owner identifies builds only as **`Purgatory Dungeon Build NN`** (one monotonically increasing sequence that continues the release series:
+v1-v8 are builds 1-8, the next is 9; the number is independent of `./VERSION`, the native version). Deliver every coordinated build as ONE GitHub Release titled exactly
+`Purgatory Dungeon Build NN` (tag `build-NN` at the exact commit) with `Purgatory Dungeon Build NN APK.apk`, `... EXE.zip`, `... Linux.tar.gz`, `build-manifest.json` and
+`checksums.sha256`. Never use codenames, SHAs or CI artifact links in anything the owner sees; keep those as engineering metadata in the release notes. One number = one
+source commit = one set of artifacts; never reuse or overwrite. Releases v1-v8 and their tags/assets are history and are never renamed or touched.
+**Building and publishing are separate:** the only build workflow is `.github/workflows/ci.yml` ("Build (manual)", `workflow_dispatch` only; inputs platform / source_sha /
+build_number / destination, default `local_only`); a push, pull request, merge, tag or test run never builds for release or publishes. `github_releases` needs all three platforms,
+a repository admin/maintain actor, and is the only way to create the release. Full procedure, tooling and history: **docs/RELEASES.md** (`tools/build.py`, `tools/build_gate.py`).
 
 ## Android (same product, same version number)
 
-The game also ships as an Android APK (`Purgatory-Dungeon-v<N>.apk`) attached to the same GitHub
-Release as the Windows zip. Package `com.hotatticgames.purgatorydungeon`, arm64, API 30-36, signed with one
+The game also ships as an Android APK (`Purgatory Dungeon Build NN APK.apk`) attached to the same GitHub
+Release as the Windows zip and the Linux package. Package `com.hotatticgames.purgatorydungeon`, arm64, API 30-36, signed with one
 persistent key (never in the repo/logs/notes). Touch input feeds the same semantic actions as keyboard
 and controller (`scripts/touch/`); all touch/phone behaviour is gated by `TouchControls.is_touch_platform()`
 so Windows is unchanged. Details, controls table and build pipeline: **docs/ANDROID.md**.
@@ -53,7 +55,7 @@ platform build, OTA and release derives from a commit in it; platform difference
 against every platform. Branches are temporary workspaces: start from the authoritative line (`docs/source_authority.json`; `main` is intended, the file names the interim
 line while `origin/main` lags), integrate when validated, never delete a branch, rewrite shared history or merge into `main` without the owner. Agents first run
 `python3 tools/source_audit.py base-check` (a worktree cut from the stale default branch says STALE BASE: stop). A release must descend from every earlier release tag
-(`tools/source_audit.py lineage-gate`, enforced in `ci.yml` before anything is built); Windows and Android of one release are built from the same `SOURCE_SHA`; a failed
+(`tools/source_audit.py lineage-gate`, and `tools/build_gate.py source` at the start of every build run); all platforms of one build come from the same validated `source_sha`; a failed
 platform never gets a different revision substituted. Every abandoned or unmerged piece of work is accounted for in `docs/BRANCH_LEDGER.md` before anything is discarded
 (`tools/source_audit.py ledger --check`). Tested by `tests/test_source_of_truth.py`.
 
@@ -83,9 +85,8 @@ GitHub can give. Rules:
 - Not appropriate: building every platform on every push; Windows EXEs when Windows was not requested; APKs for an OTA-only change; re-running a workflow to see
   whether an intermittent test passes (root-cause it locally instead); rebuilding the same SHA when a verified result/artifact can be reused; release validation
   for docs/comments/bookkeeping; using CI instead of local debugging.
-- How `ci.yml` enforces it: pull requests run only when ready for review (never drafts) and never for docs-only changes; a newer commit cancels the superseded
-  run; ordinary runs execute the tests only; the Windows package and the Android APK are built only for a release (tag `v<N>` / branch `release/v<N>`) or an
-  explicit `workflow_dispatch` (`build_windows` / `build_android`); promote branches never rebuild. Keep PRs as drafts until a candidate is really close to release.
+- How the workflows enforce it: `tests.yml` runs the tests only, for pull requests that are ready for review (never drafts) and never for docs-only changes, and a newer
+  commit cancels the superseded run; `ci.yml` (manual dispatch only) is the one place anything is built, and builds exactly the platforms asked for. Keep PRs as drafts until a candidate is really close to release.
 - Release safety is NOT traded for minutes: signing verification, runtime/OTA compatibility, the release gates, rollback protections and the full test suite on
   the exact OTA SHA (`ota-tests.yml`) stay mandatory. Do not publish a release/OTA/APK merely because workflows were audited or edited.
 - Prefer one verified run per SHA; push several commits together rather than one at a time; do not push to a branch with an open non-draft PR for every small edit.

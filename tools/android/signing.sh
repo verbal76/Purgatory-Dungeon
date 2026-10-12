@@ -7,7 +7,7 @@
 #   2. A stored key: the private DRAFT release "Android signing key (do not delete)" in this repository
 #      (assets android-release.p12 + android-release.pw; a draft is visible only to people with write
 #      access and is never published or marked Latest).
-#   3. First run only: generate a new 4096-bit key, then store it as (2).
+#   3. First run only: generate a new 4096-bit key, then store it as (2). Refused when ANDROID_REQUIRE_EXISTING_KEY=1 (the manual build workflow).
 # The key is NEVER printed, committed, put in release notes or uploaded as a build artifact; the
 # password is masked in logs. Only the certificate SHA-256 fingerprint (public information) is shown.
 #
@@ -38,6 +38,11 @@ else
     done
     PW="$(cat "$KS_DIR/release.pw")"
   else
+    # The unified manual build workflow (ci.yml) must never invent a signing identity or write a release: it sets ANDROID_REQUIRE_EXISTING_KEY=1.
+    if [[ "${ANDROID_REQUIRE_EXISTING_KEY:-}" == "1" ]]; then
+      echo "signing: no stored or secret key found and this run may only use an EXISTING key (ANDROID_REQUIRE_EXISTING_KEY=1): refusing to generate one"
+      exit 1
+    fi
     echo "signing: no stored key yet - generating the Android signing identity for this app line"
     PW="$(openssl rand -base64 36 | tr -d '/+=\n' | cut -c1-40)"
     echo "::add-mask::$PW"

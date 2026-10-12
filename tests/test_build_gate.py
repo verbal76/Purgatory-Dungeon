@@ -118,6 +118,15 @@ class TestSource(unittest.TestCase):
         code, msgs = G.check_source(repo, self.side_tip)
         self.assertEqual(code, 1, msgs)
 
+    def test_the_authority_file_of_the_judged_commit_is_not_trusted(self):
+        # a side commit that declares ITSELF the authoritative line must still be refused when the trusted root says main
+        trusted = os.path.join(self.t, "trusted")
+        os.makedirs(os.path.join(trusted, "docs"))
+        json.dump({"authoritative_branch": "main"}, open(os.path.join(trusted, "docs", "source_authority.json"), "w"))
+        repo = self.checkout(self.side_tip)
+        code, msgs = G.check_source(repo, self.side_tip, authority_root=trusted)
+        self.assertEqual(code, 1, msgs)
+
     def test_a_workflow_from_a_side_branch_is_never_trusted(self):
         code, msgs = G.check_source(self.checkout(self.main_tip), self.main_tip, workflow_sha=self.side_tip)
         self.assertEqual(code, 1, msgs)

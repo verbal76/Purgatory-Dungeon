@@ -1,68 +1,74 @@
-# Releases and public version numbers
+# Releases, build numbers and the build workflow
 
-**Product:** Purgatory Dungeon  **Public name format:** `Purgatory Dungeon v<N>` (N = 1, 2, 3, ...)
+**Product:** Purgatory Dungeon  **Public name format (from the first build after v8):** `Purgatory Dungeon Build NN` (NN = 9, 10, 11, ...)
+Releases v1-v8 keep their names, tags, assets and notes exactly as published (see History); nothing here renames, moves or rewrites them.
 
-The owner must never have to decode a branch name, SHA, build counter, codename or CI run to
-know which file to play. The answer is always the GitHub **Releases** page: the release marked
-**Latest** is the newest playable build.
+The owner must never have to decode a branch name, SHA, codename or CI run to know which file to play. The answer is always the GitHub **Releases** page: the release
+marked **Latest** is the newest playable build. Building and publishing are separate operations; nothing is ever published by a push, a pull request, a merge, a tag
+or a test run.
 
 ## The rule
-- Every playable build that is intentionally delivered to the owner (for testing or release)
-  gets the next sequential number: v1, v2, v3, ... Plain integers. No semantic versions, no
-  `b9` / `build-17` / `final` / `candidate` / `launch-g2` style names anywhere public.
-- A number identifies exactly one delivered build. Never reuse a number; never replace a
-  published release's binary with a different one. (Tooling refuses to overwrite.)
-- Failed or developer-only CI builds that are not delivered do not consume a number.
-- The public number is **not** the Godot engine version, the Git SHA, or (later) the Android
-  `versionCode`. Those stay as engineering metadata.
-- If Android and Windows builds are the same release they share the same `vN`
-  (`Purgatory-Dungeon-vN-Windows.zip`, `Purgatory-Dungeon-vN.apk`; package, signing and 16 KB details: `docs/ANDROID.md`). Platform counters such as
-  `versionCode` stay internal and may differ.
+- One **build number** per coordinated build, one monotonically increasing sequence for the whole product. It continues the release series: v1-v8 are builds 1-8, so the next
+  number is **9**. A number is consumed by a tag `build-NN`, a tag `v<N>` or a release titled `Purgatory Dungeon Build NN`; it is never reused and must be above every consumed
+  number (`tools/build_gate.py number`). OTA ids (`#000007`, `v8.5`) are a different counter and consume no build number.
+- A build number identifies exactly one source commit (full 40-character SHA) and one set of artifacts. All platforms of a build come from that one commit.
+- The build number is **independent of the native version** in `./VERSION`, which still says 8 and changes only with a native release (it is inside `project.godot` and
+  `export_presets.cfg`, the native runtime fingerprint: `docs/OTA.md`). The APK's `versionCode` / `versionName` therefore stay 8 until the owner authorises the next native
+  generation; the build number lives in the file names, `build-manifest.json`, `build_info.json` inside every package, and the release. The in-game footer is unchanged by this.
+- Failed or developer-only runs that are not delivered do not consume a number.
 
 ## Names
-- GitHub Release title: exactly `Purgatory Dungeon v<N>`.
-- Windows file: `Purgatory-Dungeon-v<N>-Windows.zip` (extract all files into one folder, keep
-  `PurgatoryDungeon.exe` and `PurgatoryDungeon.pck` together; the inner `.exe`/`.pck` names are
-  fixed because Godot loads the `.pck` that shares the exe's name).
-- Release notes start with the file name and install steps; technical provenance (source
-  commit, CI run, SHA-256s, engine) follows under "Technical details".
-- **Never give the owner a CI artifact link.** CI artifacts (`PurgatoryDungeon-windows-<sha>`)
-  are engineering-only and expire after 7 days. Deliver through a Release.
+- GitHub Release title: exactly `Purgatory Dungeon Build NN`; tag `build-NN` at the exact source commit.
+- Release files (the standard set):
+  - `Purgatory Dungeon Build NN APK.apk`
+  - `Purgatory Dungeon Build NN EXE.zip` (Windows: extract everything into one folder, run `PurgatoryDungeon.exe`; the inner `.exe`/`.pck` names are fixed because Godot loads the `.pck` that shares the exe's name)
+  - `Purgatory Dungeon Build NN Linux.tar.gz` (native Linux x86-64: Steam Deck, Steam Machine, desktops)
+  - `build-manifest.json` (title, build number, source SHA, engine, configuration, timestamps, per platform status and facts such as package id, version code and signing
+    certificate, per artifact SHA-256 and size) and `checksums.sha256`
+  GitHub turns spaces in uploaded file names into dots; the workflow sets each asset's display label to the standard name.
+- Inside each package the single top folder is `Purgatory-Dungeon-Build-NN/` with the game, `VERSION.txt` and `BUILD_INFO.txt`.
+- Release notes start with the file names and install steps; technical provenance (source commit, run, hashes) follows under "Technical details".
+- Never give the owner a CI artifact link; artifacts expire after 7 days and are only for the pipeline. A release is the delivery.
+- (`tools/build.py --naming repo` still produces the v1-v8 names, `Purgatory-Dungeon-v<N>-Windows.zip`, to reproduce an old package.)
 
-## How the version is stored (one source)
-`./VERSION` holds the integer. `tools/release_tool.py set N` updates it together with
-`project.godot` (`application/config/version`) and the Windows file/product version in
-`export_presets.cfg`; `tools/release_tool.py check` (run by CI and `tests/run_tests.sh`)
-verifies they agree and that this document and `CLAUDE.md` still describe the convention.
-In the game, `BuildInfo` (`scripts/build_info.gd`) shows the version on the main menu and prints
-diagnostics (version, source commit, CI run, build time, engine) at startup. CI writes
-`build_info.json` into every build. A build is labelled plainly `Purgatory Dungeon vN` only when
-CI built it from tag `vN` or from the branch `release/vN`; any other build says `development build after vN`.
+## The one build workflow (`.github/workflows/ci.yml`, "Build (manual)")
+Trigger: **`workflow_dispatch` only**, with the inputs `platform` (android | windows | linux | all), `source_sha` (exact 40-hex commit), `build_number` and
+`destination` (`local_only` default | `github_releases`). Run it from the Actions tab (or the API) by choosing the branch that holds the workflow.
 
-## Delivering the next build (N = current VERSION + 1)
-1. Finish and merge/test the work to be delivered; ensure `tests/run_tests.sh` is green.
-2. `python3 tools/release_tool.py set N` and commit it (this commit is the release commit).
-3. Push the tag: `git tag vN <release-commit> && git push origin vN`. Where tags cannot be pushed
-   (the agent environment), push the branch `release/vN` at the release commit instead
-   (`git push origin <release-commit>:refs/heads/release/vN`); CI treats it exactly like the tag.
-4. CI (`.github/workflows/ci.yml`, job `publish`) tests and builds that exact commit, stamps the
-   build as the release build (so the game shows plainly "Purgatory Dungeon vN"), and
-   publishes the Release "Purgatory Dungeon vN" as **Latest**, with the zip attached. The version
-   check refuses the run if `VERSION` is not N.
-5. Tell the owner: "Purgatory Dungeon vN" and the exact file name. Nothing else.
+| Job | What it does |
+|---|---|
+| `gate` | validates the inputs; checks out the source commit; proves (with the TRUSTED tools and authority file of the workflow commit) that the commit is the checked-out one, is on the authoritative line (`docs/source_authority.json`; the interim line while `main` lags), descends from every release tag, and that the workflow commit itself is on that line; proves the build number is unused and above every consumed number |
+| `validate` | the full headless suite on the exact source commit (`tests/run_tests.sh`), version and native-runtime checks; nothing is built or signed before it is green |
+| `windows`, `linux` | `tools/build.py` exports the exact commit (git archive, never a working tree), packages it, verifies the package (layout, PCK content, headless boot) and writes its manifest and checksums |
+| `android` | signs with the EXISTING app key only (`ANDROID_REQUIRE_EXISTING_KEY=1`: the job can neither generate a key nor create a release), builds, then `tools/verify_apk.py` checks package id, version code, signing certificate, runtime identity (`runtime_id` / `runtime_fingerprint`), 16 KB alignment, content and the build number |
+| `assemble` | merges the platform parts into one set and rejects an incomplete, mixed-commit, mixed-number, altered or unlisted set (`tools/build_gate.py assemble`); uploads the verified set as a private artifact of the run |
+| `publish` | runs **only** for `destination=github_releases` with `platform=all`, and is the only job with a write token for releases. It first re-validates the source authority and the build number, reads the triggering actor's repository role from GitHub (admin or maintain only, never from an input), re-verifies every checksum and that the set is byte-identical to the one `assemble` produced, then creates the tag and the release |
 
-To publish a build CI already made, without rebuilding it: create a helper branch
-`promote/v<N>/<ci_run_id>/<full_40_char_sha>` (append `/notlatest` for a historical release) from a
-commit that contains `.github/workflows/ci.yml` and push it; wait for the `promote` job; then delete
-the helper branch. The job downloads that run's artifact and publishes exactly those bytes, so
-no binary drift. (A branch push is used because `workflow_dispatch` only works for workflows on the
-default branch, and the agent environment cannot push tags or download CI artifacts directly.)
-That is how v1 and v2 were published; their release notes were then edited to add a plain-English summary.
+`local_only` never tags, releases, uploads or publishes anything: the artifacts stay private to the Actions run (7-day retention). A coordinated public release needs all three
+platforms. Two dispatches for one number never run at once; a started build is never cancelled. Validation of pushes and pull requests is a different workflow, `tests.yml`
+(tests only, read-only token, drafts never run); an OTA is published only by `ota-publish.yml` (docs/OTA.md), a separate, owner-authorised mechanism that a push to an
+`ota/<channel>/<sha>` branch starts and that never creates a build or a `Purgatory Dungeon Build NN` release.
+
+The replaced mechanism: until build 9 a push of tag `v<N>` (or branch `release/v<N>`) built and published `Purgatory Dungeon v<N>`, and a `promote/**` branch published an earlier
+run's artifact. Both are gone from the workflow (they published as a side effect of a push); `tools/publish_release.sh` remains only as the record of how v1-v8 were made.
+Existing `release/v*` and `promote/*` branches are inert history.
+
+## Local builds (no GitHub)
+```
+python3 tools/build.py --platform windows|linux|android|all --build-number NN --godot <godot-4.6> [--source-sha SHA] [--out DIR]
+```
+builds the exact commit, verifies each package, writes the manifest and checksums, and never publishes. Android is BLOCKED locally (SDK and signing key). `tools/preflight.sh`
+is the Godot-free gate before a push.
+
+## Delivering a numbered build (owner)
+1. Merge or choose the validated source commit on the authoritative line; run `tools/preflight.sh` and `tests/run_tests.sh` locally.
+2. Dispatch `Build (manual)` with `platform=all`, that SHA, the next number and `destination=local_only`; download the verified artifact set from the run and test it.
+3. Dispatch again with `destination=github_releases` (same SHA and number: the number gate passes while no tag or release carries it, and a failed publish leaves none behind) to publish.
+4. Tell the owner: "Purgatory Dungeon Build NN" and the file names. Nothing else.
 
 ## CI cost (GitHub Actions budget policy)
-`ci.yml` runs the tests on ready-for-review PRs and ordinary pushes, and builds the Windows package and the Android APK only for a release
-(tag `v<N>` / branch `release/v<N>`) or an explicit `workflow_dispatch` (`build_windows`, `build_android`). Drafts and docs-only PRs cost nothing; a newer
-commit cancels the superseded PR run. All OTA safety gates are unchanged; how they are satisfied is optimised (docs/OTA.md 11a). See CLAUDE.md.
+`tests.yml` runs the tests on ready-for-review PRs and pushes to main; `ci.yml` builds and (only on request) publishes, by manual dispatch only. Drafts and docs-only PRs
+cost nothing; a newer commit cancels the superseded PR run. (The tables below are the measurements of the earlier combined `ci.yml`; the suite job is now `validate`.) All OTA safety gates are unchanged; how they are satisfied is optimised (docs/OTA.md 11a). See CLAUDE.md.
 
 GitHub bills per job, rounded UP to the minute (Linux 1x). Numbers below come from the public job/step timings of the real runs.
 
@@ -147,7 +153,7 @@ Use the next real OTA candidate, so nothing is spent on a throwaway run. Do **no
    (expect `reuse=0` with the reason, and the suite running as before).
 
 ## Package verification
-`tools/verify_package.py` inspects the package itself: CI runs it on the exported build directory
+`tools/verify_package.py` inspects the package itself (`--build-number NN` expects the standard names and folder; `.tar.gz` for Linux): the build tooling runs it on every package
 (PCK contents, studio splash scene/script, canonical logo, generated `build_info.json` for the right
 version, nothing from `tests/`/`archive/`/`docs/` exported, and a headless boot of the packaged PCK
 through the splash to the main menu reporting `vN`), and `tools/publish_release.sh` runs it on the

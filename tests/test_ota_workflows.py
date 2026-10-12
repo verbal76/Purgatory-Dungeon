@@ -69,7 +69,16 @@ def load_yaml(text):
 
 
 RECORDED = json.load(open(os.path.join(OTA, "fixtures", "suite_runs_recorded.json"), encoding="utf-8"))
-REC_CI_RUN = next(r for r in RECORDED["runs"] if r["path"].endswith("ci.yml"))
+# The fixture is real API output recorded when the validation job lived in ci.yml as `validate-and-export` (workflow "CI"). The suite now lives in tests.yml
+# (workflow "Tests", job `validate`); the API SHAPES are unchanged, so the recorded runs are re-labelled to the new identity here.
+for _r in RECORDED["runs"]:
+    if _r["path"].endswith("/ci.yml"):
+        _r["path"], _r["name"] = _r["path"][: -len("ci.yml")] + "tests.yml", "Tests"
+for _jobs in RECORDED["jobs"].values():
+    for _j in _jobs:
+        if _j["name"] == "validate-and-export":
+            _j["name"] = "validate"
+REC_CI_RUN = next(r for r in RECORDED["runs"] if r["path"].endswith("tests.yml"))
 REC_OTA_RUN = next(r for r in RECORDED["runs"] if r["path"].endswith("ota-publish.yml"))
 
 
@@ -270,7 +279,7 @@ class TestProvenSuiteDecision(unittest.TestCase):
 
     def test_any_other_failed_step_in_the_job_refuses(self):
         run, jobs = case("ci")
-        j = next(x for x in jobs if x["name"] == "validate-and-export")
+        j = next(x for x in jobs if x["name"] == "validate")
         j["steps"][-1]["conclusion"] = "failure"   # e.g. "Upload Windows build" after a green suite: the run is red, not trusted
         self.refused(run, jobs, "failure")
 
@@ -606,11 +615,12 @@ rm -rf "$SCRATCH"
         self.assertEqual(len(set(roots)), 6, "every concurrent stage has its own PURGATORY_SAVE_ROOT")
 
     def test_ci_switch_is_a_variable_defaulting_to_sequential(self):
-        ci = load_yaml(wf("ci.yml"))
-        if ci is None:
-            self.skipTest("PyYAML not installed")
-        step = next(s for s in ci["jobs"]["validate-and-export"]["steps"] if s.get("name") == ps.SUITE_STEP_CI)
-        self.assertEqual(step["env"]["TEST_JOBS"], "${{ vars.CI_TEST_JOBS }}")
+        for name in ("tests.yml", "ci.yml"):
+            wfd = load_yaml(wf(name))
+            if wfd is None:
+                self.skipTest("PyYAML not installed")
+            step = next(s for s in wfd["jobs"]["validate"]["steps"] if s.get("name") == ps.SUITE_STEP_CI)
+            self.assertEqual(step["env"]["TEST_JOBS"], "${{ vars.CI_TEST_JOBS }}", name)
         self.assertNotIn("TEST_JOBS", wf("ota-tests.yml"), "the release gate of an OTA stays sequential until the owner decides otherwise")
 
 
@@ -630,16 +640,20 @@ def eval_expr(expr, ctx):
 class TestWorkflowStructure(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.pub_text, cls.tests_text, cls.ci_text = wf("ota-publish.yml"), wf("ota-tests.yml"), wf("ci.yml")
-        cls.pub, cls.tests, cls.ci = (load_yaml(t) for t in (cls.pub_text, cls.tests_text, cls.ci_text))
+        cls.pub_text, cls.tests_text, cls.ci_text, cls.tw_text = wf("ota-publish.yml"), wf("ota-tests.yml"), wf("ci.yml"), wf("tests.yml")
+        cls.pub, cls.tests, cls.ci, cls.tw = (load_yaml(t) for t in (cls.pub_text, cls.tests_text, cls.ci_text, cls.tw_text))
         if cls.pub is None:
             raise unittest.SkipTest("PyYAML not installed")
 
     # ---- the constants that tie the verifier to the files
     def test_verifier_constants_equal_the_workflow_files(self):
-        ci_job = self.ci["jobs"]["validate-and-export"]
+        ci_job = self.tw["jobs"]["validate"]
         self.assertNotIn("name", ci_job, "the API reports the job key as its name; a name: would break the verifier's job constant")
-        self.assertEqual(ps.SOURCES[".github/workflows/ci.yml"]["job"], "validate-and-export")
+        self.assertEqual(ps.SOURCES[".github/workflows/tests.yml"]["job"], "validate")
+        self.assertEqual(ps.SOURCES[".github/workflows/ci.yml"]["job"], "validate")
+        self.assertNotIn("name", self.ci["jobs"]["validate"])
+        self.assertEqual(self.tw["name"], ps.SOURCES[".github/workflows/tests.yml"]["name"])
+        self.assertEqual(self.ci["name"], ps.SOURCES[".github/workflows/ci.yml"]["name"])
         suite = next(s for s in ci_job["steps"] if s.get("name") == ps.SUITE_STEP_CI)
         self.assertEqual(suite["run"].strip(), 'tests/run_tests.sh "$GODOT"', "the FULL suite")
         self.assertNotIn("TEST_FILTER", json.dumps(suite), "no subset")
@@ -656,7 +670,7 @@ class TestWorkflowStructure(unittest.TestCase):
         self.assertLess(osteps.index(ps.SUITE_STEP_OTA), osteps.index(ps.ATTEST_STEP))
         suite2 = next(s for s in self.tests["jobs"]["suite"]["steps"] if s.get("name") == ps.SUITE_STEP_OTA)
         self.assertEqual(suite2["run"].strip(), 'tests/run_tests.sh "$GODOT"')
-        for steps in (ci_job["steps"], self.tests["jobs"]["suite"]["steps"]):
+        for steps in (ci_job["steps"], self.ci["jobs"]["validate"]["steps"], self.tests["jobs"]["suite"]["steps"]):
             by = {s.get("name"): s for s in steps}
             self.assertEqual(by[ps.ATTEST_STEP]["if"], "steps.exacttree.outputs.same == 'true'", "skipped (not failed) unless the trees are identical")
             check = next(s for s in steps if s.get("id") == "exacttree")
@@ -666,10 +680,12 @@ class TestWorkflowStructure(unittest.TestCase):
 
     def test_sources_only_name_events_their_workflow_triggers(self):
         self.assertTrue(set(ps.SOURCES[".github/workflows/ci.yml"]["events"]) <= set(self.ci[True]))
+        self.assertTrue(set(ps.SOURCES[".github/workflows/tests.yml"]["events"]) <= set(self.tw[True]))
         self.assertTrue(set(ps.SOURCES[".github/workflows/ota-publish.yml"]["events"]) <= set(self.pub[True]))
         for path in ps.SOURCES:
             self.assertTrue(os.path.isfile(os.path.join(ROOT, path)), path)
-        self.assertEqual(sorted(ps.SOURCES), [".github/workflows/ci.yml", ".github/workflows/ota-publish.yml"], "adding a source is a reviewed change to this test")
+        self.assertEqual(sorted(ps.SOURCES), [".github/workflows/ci.yml", ".github/workflows/ota-publish.yml", ".github/workflows/tests.yml"],
+                         "adding a source is a reviewed change to this test")
         out = subprocess.run([sys.executable, os.path.join(OTA, "proven_suite.py"), "sources"], capture_output=True, text=True).stdout
         self.assertEqual(json.loads(out)["ota_suite_job"], ps.OTA_SUITE_JOB)
 
@@ -811,20 +827,19 @@ class TestWorkflowStructure(unittest.TestCase):
             self.assertNotIn("concurrency", job)
 
     def test_only_test_only_runs_are_cancellable(self):
-        group = self.ci["concurrency"]
-        self.assertEqual(group["cancel-in-progress"], "${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}")
-        for ref in ("refs/tags/v7", "refs/heads/release/v7", "refs/heads/promote/v7/1/" + SHA):
-            ctx = {"event": "push", "ref": ref}
-            self.assertFalse(ctx["event"] == "pull_request" or ctx["ref"] == "refs/heads/main", "releases and promotions are never cancelled: " + ref)
+        # tests.yml is validation only: a newer commit supersedes an older run. ci.yml builds and may publish: a started build is never cancelled.
+        self.assertTrue(self.tw["concurrency"]["cancel-in-progress"] is True)
+        self.assertEqual(self.ci["concurrency"]["cancel-in-progress"], False)
+        self.assertEqual(self.ci["jobs"]["publish"]["concurrency"]["cancel-in-progress"], False)
         self.assertNotIn("cancel-in-progress: true", self.pub_text)
         self.assertEqual(self.ci["jobs"]["android"]["concurrency"]["cancel-in-progress"], False, "the signing-key job is never cancelled")
 
     def test_secrets_are_never_printed_or_traced(self):
-        for name, text in (("ota-publish.yml", self.pub_text), ("ota-tests.yml", self.tests_text), ("ci.yml", self.ci_text)):
+        for name, text in (("ota-publish.yml", self.pub_text), ("ota-tests.yml", self.tests_text), ("ci.yml", self.ci_text), ("tests.yml", self.tw_text)):
             for bad in ("set -x", "set -o xtrace", "ACTIONS_STEP_DEBUG", "ACTIONS_RUNNER_DEBUG", "--debug", "curl -v", "::add-mask::"):
                 self.assertNotIn(bad, text, f"{name}: {bad}")
         runs = []
-        for wfd in (self.pub, self.tests, self.ci):
+        for wfd in (self.pub, self.tests, self.ci, self.tw):
             for job in wfd["jobs"].values():
                 for s in job.get("steps", []):
                     runs.append(str(s.get("run", "")))
@@ -855,7 +870,7 @@ class TestWorkflowStructure(unittest.TestCase):
 
     # ---- a local stand-in for actionlint (not installable offline): shell syntax and expression references
     def all_jobs(self):
-        for label, wfd in (("ota-publish", self.pub), ("ota-tests", self.tests), ("ci", self.ci)):
+        for label, wfd in (("ota-publish", self.pub), ("ota-tests", self.tests), ("ci", self.ci), ("tests", self.tw)):
             for name, job in wfd["jobs"].items():
                 yield label, name, job, wfd
 
@@ -921,7 +936,7 @@ class TestWorkflowStructure(unittest.TestCase):
 
     # ---- economics
     def test_no_job_can_run_for_hours(self):
-        for label, wfd in (("ota-publish", self.pub), ("ota-tests", self.tests), ("ci", self.ci)):
+        for label, wfd in (("ota-publish", self.pub), ("ota-tests", self.tests), ("ci", self.ci), ("tests", self.tw)):
             for name, job in wfd["jobs"].items():
                 if "uses" in job:
                     continue
@@ -929,22 +944,24 @@ class TestWorkflowStructure(unittest.TestCase):
                 self.assertLessEqual(job["timeout-minutes"], 60, f"{label}.{name}")
 
     def test_the_suite_is_not_duplicated_inside_one_ci_run(self):
-        code = re.sub(r"(?m)^\s*#.*$", "", self.ci_text + self.pub_text + self.tests_text)
+        code = re.sub(r"(?m)^\s*#.*$", "", self.ci_text + self.pub_text + self.tests_text + self.tw_text)
         self.assertNotIn("TEST_FILTER", code, "no subset of the suite is re-run on the same commit")
-        runners = [(n, j) for n, j in self.ci["jobs"].items() if any("run_tests.sh" in str(s.get("run", "")) for s in j.get("steps", []))]
-        self.assertEqual([n for n, _ in runners], ["validate-and-export"], "one job runs the suite per ci.yml run")
-        self.assertEqual(self.ci["jobs"]["android"]["needs"], "validate-and-export")
-        self.assertEqual(sorted(self.ci["jobs"]["publish"]["needs"]), ["android", "validate-and-export"])
+        for label, wfd in (("ci.yml", self.ci), ("tests.yml", self.tw)):
+            runners = [n for n, j in wfd["jobs"].items() if any("run_tests.sh" in str(s.get("run", "")) for s in j.get("steps", []))]
+            self.assertEqual(runners, ["validate"], f"one job runs the suite per {label} run")
+        for job in ("windows", "linux", "android"):
+            self.assertEqual(sorted(self.ci["jobs"][job]["needs"]), ["gate", "validate"], f"{job} builds only after the suite on the exact commit is green")
+        self.assertEqual(sorted(self.ci["jobs"]["publish"]["needs"]), ["assemble", "gate"])
 
     def test_docs_only_changes_cost_nothing(self):
-        pr = self.ci[True]["pull_request"]
+        pr = self.tw[True]["pull_request"]
         self.assertEqual(pr["types"], ["opened", "synchronize", "reopened", "ready_for_review"])
         for p in ("docs/**", "**/*.md"):
             self.assertIn(p, pr["paths-ignore"])
-        self.assertIn("!github.event.pull_request.draft", self.ci["jobs"]["validate-and-export"]["if"], "drafts never run")
+        self.assertIn("!github.event.pull_request.draft", self.tw["jobs"]["validate"]["if"], "drafts never run")
 
     def test_artifacts_expire(self):
-        for text in (self.pub_text, self.ci_text):
+        for text in (self.pub_text, self.ci_text, self.tw_text):
             d = load_yaml(text)
             for job in d["jobs"].values():
                 for s in job.get("steps", []):
