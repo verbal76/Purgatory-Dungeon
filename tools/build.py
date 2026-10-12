@@ -318,6 +318,13 @@ def main() -> int:
                     path = build_android(src, dest, name)
                 results[platform] = {"status": "built", "path": path}
                 print(f"  {platform}: built {name} ({os.path.getsize(path)} bytes)")
+                if platform != "android" and a.naming == "repo":
+                    # Inspect the FINAL package (layout, executable, PCK content, and that it boots headless into the main menu), as the release does.
+                    v = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "verify_package.py"), path, "--version", str(number), "--godot", a.godot],
+                                       capture_output=True, text=True)
+                    if v.returncode != 0:
+                        raise RuntimeError("package verification failed:\n" + "\n".join(l for l in v.stdout.splitlines() if "PROBLEM" in l)[:500])
+                    print(f"  {platform}: package verification passed (boots headless to the main menu; this is not a device test)")
             except Blocked as e:
                 results[platform] = {"status": "blocked", "reason": str(e)}
                 print(f"  {platform}: BLOCKED: {e}")

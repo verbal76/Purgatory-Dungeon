@@ -155,7 +155,26 @@ def main():
     root = a.target
     zip_sha = ""
     zip_name_expected = f"Purgatory-Dungeon-v{a.version}-Windows.zip"
-    if a.target.lower().endswith(".zip"):
+    if a.target.lower().endswith(".tar.gz"):     # the native Linux package: the same folder layout, an ELF executable with the executable bit
+        import tarfile
+        expected = f"Purgatory-Dungeon-v{a.version}-Linux.tar.gz"
+        if os.path.basename(a.target) != expected:
+            problems.append(f"package is named {os.path.basename(a.target)}, expected {expected}")
+        zip_sha = sha256(a.target)
+        tmp = tempfile.mkdtemp()
+        with tarfile.open(a.target) as t:
+            t.extractall(tmp, filter="data")
+        expected_top = f"Purgatory-Dungeon-v{a.version}"
+        if os.listdir(tmp) != [expected_top]:
+            problems.append(f"archive must contain exactly the folder {expected_top}/ (found {os.listdir(tmp)})")
+        root = os.path.join(tmp, expected_top)
+        for must in ("VERSION.txt", "BUILD_INFO.txt"):
+            if not os.path.isfile(os.path.join(root, must)):
+                problems.append(f"{must} is missing from the archive")
+        lx = os.path.join(root, "PurgatoryDungeon.x86_64")
+        if os.path.isfile(lx) and not os.access(lx, os.X_OK):
+            problems.append("PurgatoryDungeon.x86_64 is not executable")
+    elif a.target.lower().endswith(".zip"):
         if os.path.basename(a.target) != zip_name_expected:
             problems.append(f"package is named {os.path.basename(a.target)}, expected {zip_name_expected}")
         zip_sha = sha256(a.target)
@@ -176,14 +195,18 @@ def main():
         vt = os.path.join(root, "VERSION.txt")
         if os.path.isfile(vt) and f"Purgatory Dungeon v{a.version}" not in open(vt, encoding="utf-8").read():
             problems.append("VERSION.txt does not say Purgatory Dungeon v%d" % a.version)
-    exe = os.path.join(root, "PurgatoryDungeon.exe")
+    linux = os.path.isfile(os.path.join(root, "PurgatoryDungeon.x86_64"))
+    exe = os.path.join(root, "PurgatoryDungeon.x86_64" if linux else "PurgatoryDungeon.exe")
     pck = os.path.join(root, "PurgatoryDungeon.pck")
     for p in (exe, pck):
         if not os.path.isfile(p) or os.path.getsize(p) == 0:
             problems.append(f"{os.path.basename(p)} is missing or empty")
     if os.path.isfile(exe):
         with open(exe, "rb") as f:
-            if f.read(2) != b"MZ":
+            head = f.read(4)
+            if linux and head != b"\x7fELF":
+                problems.append("PurgatoryDungeon.x86_64 is not a Linux executable (no ELF header)")
+            if not linux and head[:2] != b"MZ":
                 problems.append("PurgatoryDungeon.exe is not a Windows executable (no MZ header)")
         notes.append("exe sha256 " + sha256(exe))
     if os.path.isfile(pck):
