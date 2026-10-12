@@ -43,7 +43,10 @@ TITLE = "Purgatory Dungeon"
 PLATFORMS = ("windows", "linux", "android")
 MANIFEST = "build-manifest.json"
 CHECKSUMS = "checksums.sha256"
-EXCLUDE = "tests/*, archive/*, production/*, tools/*, ota/*, *.md"
+# Same exclusions as the Android preset: the unreferenced AllSkyFree skyboxes, the intro video and the night-sky texture are ~300 MB of the desktop PCK that no
+# scene uses (the Windows preset still ships them; trimming it changes export_presets.cfg and so the native fingerprint, docs/COMPLIANCE_AUDIT.md RED-4).
+EXCLUDE = ("tests/*, archive/*, production/*, tools/*, ota/*, *.md, addons/AllSkyFree/*, Music & background images/*.mp4, "
+           "Music & background images/night_sky_with_beautiful_twinkling_stars.png")
 
 LINUX_PRESET = """
 [preset.2]
