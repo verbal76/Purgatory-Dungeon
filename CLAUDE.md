@@ -57,6 +57,14 @@ line while `origin/main` lags), integrate when validated, never delete a branch,
 platform never gets a different revision substituted. Every abandoned or unmerged piece of work is accounted for in `docs/BRANCH_LEDGER.md` before anything is discarded
 (`tools/source_audit.py ledger --check`). Tested by `tests/test_source_of_truth.py`.
 
+## Three-platform builds and the master standard (docs/PLATFORM_SUPPORT.md, docs/COMPLIANCE_AUDIT.md)
+
+`python3 tools/build.py --platform windows|linux|android|all` builds the EXACT commit locally (never the working tree), verifies each package, and writes
+`build-manifest.json` + `checksums.sha256`; it never uploads or releases. Native Linux x86-64 is a target (scratch export preset; no tracked preset because that would
+change the native fingerprint). The Hot Attic Games master standard v2.0 audit, scorecard and owner decisions (naming convention, Steamworks, save backups, asset licenses)
+are in `docs/COMPLIANCE_AUDIT.md`; third-party licenses in `docs/THIRD_PARTY_ASSETS.md` (never claim a license that is not evidenced there). Runtime data must be `.json`/resources:
+a `.txt` data file is not exported (`tools/verify_package.py` checks).
+
 ## Steam Deck / Steam Machine (held for the next APK; docs/STEAM_DECK.md)
 
 The Windows build is meant to run on a Deck through Proton. Controller glyphs (`scripts/controller_glyphs.gd`, `glyph_prompt.gd`, art in `assets/ui/glyphs`),
