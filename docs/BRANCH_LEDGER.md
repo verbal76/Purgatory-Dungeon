@@ -101,8 +101,8 @@ They are garbage-collectable; nothing in them is wanted. They are listed so the 
 
 ## 5. Files that existed in a release and are gone from the line
 
-All removals were deliberate and recorded by a commit: the first-generation OTA client and workflow (`scripts/ota/*`, `tools/ota/*`, `.github/workflows/ota.yml`, `ota_channel.json`;
-commits `06e2af3`, `6c03a92`, `c0cc33b`: replaced by the native `scripts/boot/` layer), `tools/make_android_icons.gd` (`1ea34c1`: replaced by the gilded launcher icons), compiled Python caches
+All removals were deliberate and recorded by a commit: the old OTA client generation (its scripts, bundle tools, channel files and workflow; commits `06e2af3`, `6c03a92`, `c0cc33b`:
+replaced by the native `scripts/boot/` layer), `tools/make_android_icons.gd` (`1ea34c1`: replaced by the gilded launcher icons), compiled Python caches
 (`64a2167`), and the aim-pacing probe (`tests/test_aim_pacing.*`, `tools/aim_pacing_probe.*`, commit `b79d1ce`: the ATTACK drag now uses the Classic swipe path). No reverts exist in the history.
 
 ## 6. Recovery decisions
