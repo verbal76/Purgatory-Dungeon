@@ -135,3 +135,15 @@ a key and writes extra recovery files, so an older reader still loads the file, 
 
 **Remaining release blockers (documented, not solved):** Steam App ID + Steamworks (Steam keyboard, Steam Input, Steam Cloud, SteamPipe), Steam Deck / Android device / Windows and Linux GPU
 validation, controller reconnect and suspend/resume, licences for the music, sound effects, models and props, the glyph page copy, production signing credentials (the hosted Android job uses the existing key only).
+
+**Codex review of PR #1 (automated, `0e692d6`) and what was done with it.** Fixed in `5c894b7` (tests added): deleting a slot that existed only as a recovered temp file now resets the
+active profile; a blank default profile is never written (a first-launch background/quit no longer leaves a "broken" ghost slot, and an unreadable file is not replaced by a blank one);
+`tools/build.py` takes the native version from the commit being built; `tools/verify_package.py` matches required members exactly and requires the build_info commit when `--sha` is given.
+**Not changed, recorded for the next native release / owner:** `scripts/boot/ota_updater.gd` (validate the pointer's `seq` as a positive whole number and `channel` as a string before use) and
+`scripts/boot/ota_core.gd` (treat a failed pre-activation save backup as an activation failure and fall back to the known-good package): native boot code, so a new APK generation;
+the loading gate (`loading_screen.gd` 30 s timer versus generation that now yields across frames, `Purgatory_Dungeon_main_game_file.gd`): gameplay loading behaviour outside this assignment,
+needs a measured repro on a slow device.
+
+**What was and was not validated at which SHA.** Hosted build run 38317691543 built `0e692d6` (all jobs green; its PR `Tests` check also passed). The review fixes above came after it, in `5c894b7`
+(save_manager, build.py, verify_package and their tests): validated by the full local suite (112 Godot stages + Python stages, no failure) and by the hosted PR `Tests` run on `5c894b7`. A new
+hosted BUILD of the final SHA was not run (the single authorised hosted build was used); the exact-member check of `verify_package` has not yet seen a real APK listing.
