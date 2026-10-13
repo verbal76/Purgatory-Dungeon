@@ -65,6 +65,7 @@ func _ready() -> void:
 	_t_manual_actions()
 	_t_save_schema()
 	_t_saves_untouched_and_backups()
+	_t_backup_failure_and_interruption()
 	_t_real_mount()
 	await _t_updater()
 	await _t_boot_node()
@@ -978,6 +979,75 @@ func _t_saves_untouched_and_backups() -> void:
 	_check(not n.boot(_fake_mount).is_empty() and (n.state["backups"] as Array).is_empty(), "no save folder yet: mounts without a backup")
 
 
+# --- 10b. no verified backup, no activation; interrupted activation keeps the saves -----------------------------
+
+func _t_backup_failure_and_interruption() -> void:
+	var before: String = _tree_hash(_save)
+	# (a) a first-ever OTA whose required pre-update backup fails is NOT activated: the embedded baseline keeps running
+	var root: String = _new_root()
+	var c: OtaCore = _core(root)
+	_stage(c, 1)
+	_write(root.path_join("backups"), "a file where the backup folder must be".to_utf8_buffer())
+	c = _core(root)
+	var act: Dictionary = c.boot(_fake_mount)
+	_check(act.is_empty() and c.active_slot == "", "backup failure: nothing activated, the embedded baseline keeps running")
+	_check(c.slot_id("pending") == "dev-000001" and not c.is_bad("dev-000001"), "backup failure: the package stays PENDING and is not blacklisted")
+	_check(int((c.state["boot"] as Dictionary)["starts"]) == 0, "backup failure: no start was counted")
+	_check((c.state["backups"] as Array).is_empty(), "backup failure: no phantom backup is listed")
+	_check(_tree_hash(_save) == before, "backup failure: the saves are byte-identical")
+	var log_text: String = JSON.stringify(c.state["events"])
+	_has(log_text, "not activating dev-000001", "backup failure: the refusal is logged")
+	# (b) once the backup can be made the same package activates, with a backup equal to the saves
+	DirAccess.remove_absolute(root.path_join("backups"))   # the blocking file
+	c = _core(root)
+	act = c.boot(_fake_mount)
+	_check(str(act.get("ota_id", "")) == "dev-000001" and (c.state["backups"] as Array).size() == 1, "backup recovered: the package activates and one backup is listed")
+	if (c.state["backups"] as Array).size() == 1:
+		_check(_tree_hash(root.path_join("backups").path_join(str((c.state["backups"] as Array)[0]))) == before, "backup recovered: the backup equals the saves")
+	# (c) with a healthy CURRENT, a failing backup for the next package leaves CURRENT running, saves untouched
+	var root2: String = _new_root()
+	var d: OtaCore = _core(root2)
+	_stage(d, 1)
+	d = _core(root2)
+	d.boot(_fake_mount)
+	d.mark_healthy()
+	d = _core(root2)
+	_stage(d, 2)
+	_remove_tree_for_test(root2.path_join("backups"))
+	_write(root2.path_join("backups"), "blocked".to_utf8_buffer())
+	d = _core(root2)
+	act = d.boot(_fake_mount)
+	_check(str(act.get("ota_id", "")) == "dev-000001" and d.slot_id("current") == "dev-000001", "backup failure with a healthy CURRENT: CURRENT keeps running")
+	_check(d.slot_id("pending") == "dev-000002" and not d.is_bad("dev-000002"), "backup failure with a healthy CURRENT: the new package waits as PENDING")
+	_check(_tree_hash(_save) == before, "backup failure with a healthy CURRENT: saves byte-identical")
+	# (d) interrupted activation: the package is mounted, the process dies before boot health; the saves and the
+	#     backup survive, the attempt count carries over, and the third unhealthy start falls back for good
+	var root4: String = _new_root()
+	var f: OtaCore = _core(root4)
+	_stage(f, 1)
+	f = _core(root4)
+	f.boot(_fake_mount)                       # activation 1, "crash": no mark_healthy
+	var bname: String = str((f.state["backups"] as Array)[0])
+	f = _core(root4)                          # restart after the interruption
+	f.boot(_fake_mount)
+	_check(int((f.state["boot"] as Dictionary)["starts"]) == 2 and (f.state["backups"] as Array).size() == 1, "interrupted activation: restart counts the attempt, no second backup")
+	_check(_tree_hash(root4.path_join("backups").path_join(bname)) == before and _tree_hash(_save) == before, "interrupted activation: backup and saves intact")
+	f = _core(root4)
+	f.boot(_fake_mount)
+	f = _core(root4)
+	var after: Dictionary = f.boot(_fake_mount)
+	_check(after.is_empty() and f.is_bad("dev-000001"), "interrupted activation: the package that never got healthy is abandoned")
+	_check(_tree_hash(_save) == before and _tree_hash(root4.path_join("backups").path_join(bname)) == before, "interrupted activation: saves and the recovery copy are preserved after the fallback")
+	# a torn state file is recovered from, never fatal
+	_write(root4.path_join("state.json"), "{ torn".to_utf8_buffer())
+	f = _core(root4)
+	_check(f.boot(_fake_mount).is_empty() and _tree_hash(_save) == before, "interrupted state write: boots the baseline, saves untouched")
+
+
+static func _remove_tree_for_test(path: String) -> void:
+	OtaCore._remove_tree(path)
+
+
 # --- 11. a REAL mount ------------------------------------------------------------------------------------------
 
 func _t_real_mount() -> void:
@@ -1237,6 +1307,27 @@ func _t_updater() -> void:
 	stub.routes["/dev/latest.json"] = JSON.stringify({"channel": "dev"}).to_utf8_buffer()
 	await u.check(true)
 	_check(u.status == "failed", "pointer without fields: failed")
+	# an unsigned pointer is untrusted input: malformed sequence/channel/id values are refused before anything is fetched
+	var manifest_hits: int = stub.hit_count("/dev/dev-000010.json")
+	for bad in [["seq as string", "10"], ["seq as array", [10]], ["seq as object", {"n": 10}], ["seq as bool", true], ["seq null", null],
+			["seq zero", 0], ["seq negative", -4], ["seq fractional", 10.5]]:
+		stub.routes["/dev/latest.json"] = JSON.stringify({"channel": "dev", "ota_id": "dev-000010", "seq": bad[1], "manifest_url": stub.url("/dev/dev-000010.json"),
+				"signature_url": stub.url("/dev/dev-000010.json.sig")}).to_utf8_buffer()
+		await u.check(true)
+		_check(u.status == "failed" and u.status_detail.contains("invalid channel pointer"), "pointer with %s: failed (%s)" % [bad[0], u.status_detail])
+	for bad in [["channel as array", {"channel": ["dev"]}], ["ota_id as number", {"ota_id": 10}], ["manifest_url as array", {"manifest_url": ["x"]}]]:
+		var pd: Dictionary = {"channel": "dev", "ota_id": "dev-000010", "seq": 10, "manifest_url": stub.url("/dev/dev-000010.json"), "signature_url": stub.url("/dev/dev-000010.json.sig")}
+		pd.merge(bad[1], true)
+		stub.routes["/dev/latest.json"] = JSON.stringify(pd).to_utf8_buffer()
+		await u.check(true)
+		_check(u.status == "failed", "pointer with %s: failed (%s)" % [bad[0], u.status_detail])
+	_check(stub.hit_count("/dev/dev-000010.json") == manifest_hits and c.slot_id("pending") == "dev-000002", "malformed pointers fetch nothing and change nothing")
+	# a pointer at or below the installed/staged sequence (replayed, rolled back) is never an update
+	for stale_seq in [1, 2]:
+		stub.routes["/dev/latest.json"] = JSON.stringify({"channel": "dev", "ota_id": "dev-%06d" % stale_seq, "seq": stale_seq, "manifest_url": stub.url("/dev/dev-%06d.json" % stale_seq),
+				"signature_url": stub.url("/dev/dev-%06d.json.sig" % stale_seq)}).to_utf8_buffer()
+		await u.check(true)
+		_check(u.status == "up_to_date" and c.slot_id("pending") == "dev-000002", "pointer seq %d <= known: not an update, PENDING untouched (%s)" % [stale_seq, u.status_detail])
 	var mm: Dictionary = _manifest(11, _payload(11), {"ota_id": "dev-000012", "pck_url": stub.url("/dev/dev-000012.pck")})
 	var sgm: Array = _sign(mm)
 	stub.routes["/dev/mm.json"] = sgm[0]
@@ -1252,7 +1343,8 @@ func _t_updater() -> void:
 	stub.routes["/dev/stale.json"] = sg_stale[0]
 	stub.routes["/dev/stale.json.sig"] = (sg_stale[1] as String).to_utf8_buffer()
 	await u.check(true)
-	_check(u.status == "up_to_date" and stub.hit_count("/dev/old.pck") == 0, "a pointer that overstates seq cannot make an old manifest an update (%s)" % u.status_detail)
+	_check(u.status == "rejected" and u.status_detail.contains("seq mismatch") and stub.hit_count("/dev/old.pck") == 0 and c.slot_id("pending") == "dev-000002",
+			"a pointer that overstates seq is rejected as inconsistent and downloads nothing (%s)" % u.status_detail)
 
 	# bundled baseline sha equal => up to date (nothing staged/running)
 	var root_b: String = _new_root()

@@ -107,8 +107,13 @@ func check(download: bool = true) -> String:
 		return _done("check", "invalid channel pointer; keeping current package", "failed")
 	remote = ptr
 	latest_compat = ""
-	if not (remote["ota_id"] is String) or not (remote["manifest_url"] is String) or not (remote["signature_url"] is String):
+	if not (remote["ota_id"] is String) or not (remote["manifest_url"] is String) or not (remote["signature_url"] is String) \
+			or not (remote["channel"] is String):
 		return _done("check", "invalid channel pointer; keeping current package", "failed")
+	# The pointer is unsigned, so its sequence is untrusted input: only a positive whole number is a sequence at all
+	# (an array, object, string, bool, fraction, zero or negative value would otherwise be coerced by int()).
+	if not OtaCore._is_whole(remote["seq"]) or int(remote["seq"]) < 1:
+		return _done("check", "invalid channel pointer (seq); keeping current package", "failed")
 	if remote["channel"] != core.channel:
 		return _done("check", "pointer is for channel '%s', this install follows '%s'" % [str(remote["channel"]), core.channel], "failed")
 	# The pointer is unsigned: everything it points at must stay inside the release download base (this repository's
@@ -135,6 +140,8 @@ func check(download: bool = true) -> String:
 	var m: Dictionary = res[0]
 	if m["ota_id"] != remote["ota_id"]:
 		return _done("check", "pointer/manifest mismatch (%s vs %s)" % [remote["ota_id"], m["ota_id"]], "rejected")
+	if int(m["seq"]) != int(remote["seq"]):
+		return _done("check", "pointer/manifest seq mismatch (%d vs %d); the pointer is not trusted" % [int(remote["seq"]), int(m["seq"])], "rejected")
 	latest_compat = "compatible"
 	if core.is_bad(m["ota_id"]):
 		return _done("check", "latest is %s, which was rejected or rolled back here; not re-downloading" % m["ota_id"], "rejected")

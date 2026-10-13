@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Release convention (mandatory — read before delivering any build)
 
 From the first build after v8 the owner identifies builds only as **`Purgatory Dungeon Build NN`** (one monotonically increasing sequence that continues the release series:
-v1-v8 are builds 1-8, the next is 9; the number is independent of `./VERSION`, the native version). Deliver every coordinated build as ONE GitHub Release titled exactly
+v1-v8 are builds 1-8, the next is 9; Build 9 ships `./VERSION` 9 = Android versionCode 9, and a Build NN may equal the native version once that number is unused). Deliver every coordinated build as ONE GitHub Release titled exactly
 `Purgatory Dungeon Build NN` (tag `build-NN` at the exact commit) with `Purgatory Dungeon Build NN APK.apk`, `... EXE.zip`, `... Linux.tar.gz`, `build-manifest.json` and
 `checksums.sha256`. Never use codenames, SHAs or CI artifact links in anything the owner sees; keep those as engineering metadata in the release notes. One number = one
 source commit = one set of artifacts; never reuse or overwrite. Releases v1-v8 and their tags/assets are history and are never renamed or touched.

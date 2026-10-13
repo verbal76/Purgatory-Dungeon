@@ -697,7 +697,11 @@ func boot(loader: Callable) -> Dictionary:
 		if never_run:
 			var bwhy: String = backup_saves(id)
 			if bwhy != "":
-				event("backup", "save backup before first activation of %s failed: %s" % [id, bwhy])
+				# No verified save backup, no activation. Not a faulty package (it stays PENDING and is retried on a later
+				# start once the backup can be made): the next candidate, or the embedded baseline, runs instead.
+				event("backup", "not activating %s: the save backup it requires failed (%s); keeping the playable version" % [id, bwhy])
+				save_state()
+				continue
 		# Count the attempt BEFORE mounting, so a crash during load still counts.
 		state["boot"] = {"ota_id": id, "starts": (int(b["starts"]) if attempted else 0) + 1, "healthy_id": b.get("healthy_id", "")}
 		save_state()
@@ -821,14 +825,23 @@ func backup_saves(ota_id: String) -> String:
 		name = "%s_%d" % [base, n]
 	var dst: String = root.path_join("backups").path_join(name)
 	DirAccess.make_dir_recursive_absolute(dst)
+	if not DirAccess.dir_exists_absolute(dst):
+		event("backup", "cannot create backups/%s" % name)
+		return "cannot create the backup folder"
 	var ok: bool = _copy_tree(save_root, dst)
+	if not ok:
+		# An incomplete copy is not a backup: remove it and never let it count against (or evict) the good ones.
+		_remove_tree(dst)
+		event("backup", "copy of the saves to backups/%s was incomplete; discarded" % name)
+		save_state()
+		return "copy incomplete"
 	var list: Array = state["backups"]
 	list.append(name)
 	while list.size() > MAX_BACKUPS:
 		_remove_tree(root.path_join("backups").path_join(str(list.pop_front())))
-	event("backup", "saves copied to backups/%s%s" % [name, "" if ok else " (incomplete)"])
+	event("backup", "saves copied to backups/%s" % name)
 	save_state()
-	return "" if ok else "copy incomplete"
+	return ""
 
 
 ## Files or sub-directories of `dir`, INCLUDING hidden (dot) entries: the static DirAccess helpers skip them.

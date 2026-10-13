@@ -173,6 +173,7 @@ Every release build must contain the canonical Hot Attic Games logo
 | v6 | `a9168e16ceac23b0dbb00d3f34f12ff3be070901` | Mage aim fix, typography, twin-stick controls; last native APK without the OTA-capable runtime | rollback baseline for v7; never modified |
 | v7 | (the `release/v7` release commit; see its release notes) | First OTA-capable native APK: signed OTA client + runtime lock, `v7.K` versioning, separate right thumbstick removed (Attack-drag aims) | no OTA published with it; first OTA will be v7.1 |
 | v8 | (the `release/v8` release commit; see its release notes) | Native generation `android-godot-4.6.0-r2`: Boot status API, Options > About (Check for updates, Copy diagnostics), no player-facing OTA overlay, main-menu Exit, gilded dungeon-door icon (Android + desktop), tap/hold/drag ATTACK gesture, Rapid Attack removed, floor-seam and enemy-model fixes | OTAs on it will be v8.1, v8.2 ... (none published yet) |
+| Build 9 | (the commit named in the build's manifest; test build, not a release) | Native generation `android-godot-4.6.0-r3` (versionCode 9, versionName `9`): pointer validation and "no verified backup, no activation" in the OTA client, save schema versioning + backups (`docs/COMPLIANCE_AUDIT.md`), unified Build NN workflow | a real APK: installed v8 APKs cannot receive it by OTA; OTAs on it would be 9.1, 9.2 ... (none published) |
 
 ### OTAs on the v8 native generation (`android-godot-4.6.0-r2`)
 | Owner-facing | OTA id | What it changed |

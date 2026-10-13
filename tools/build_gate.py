@@ -125,11 +125,13 @@ def consumed_numbers(tags: list, release_names: list) -> set:
 
 def check_number(number: int, tags: list, release_names: list, version: int) -> list:
     used = consumed_numbers(tags, release_names)
-    floor = max(used | {version})
+    # Build NN continues the release series and may equal ./VERSION when the native version was bumped to it (Build 9 ships
+    # VERSION 9): the floor is the highest CONSUMED number, and never below the release before VERSION.
+    floor = max(used | {version - 1})
     if number in used:
         return [f"build number {number} is already consumed (a tag or release carries it); the next valid number is {floor + 1}"]
     if number <= floor:
-        return [f"build number {number} is not above the highest consumed number {floor} (release series v1-v{version} plus any later Build NN): the next valid number is {floor + 1}"]
+        return [f"build number {number} is not above the highest consumed number {floor} (release series plus any later Build NN, and never below the release before v{version}): the next valid number is {floor + 1}"]
     return []
 
 

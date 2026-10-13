@@ -178,6 +178,14 @@ first activated the client copies the save folder to `user://ota/backups/` (last
 defines `SAVE_SCHEMA` / `MIN_SAVE_SCHEMA`; manifests carry both and the client will not activate an OTA that cannot read the
 schema recorded on the device (this protects rollbacks past a deliberate migration). Save formats are unchanged in v7.
 
+**No verified backup, no activation (Build 9).** If that pre-activation copy cannot be made completely (`OtaCore.backup_saves`
+returns a reason), the package is *not* mounted: it stays PENDING (not blacklisted, no start counted) and the next candidate, or the
+embedded baseline, runs; it is retried on a later start. An incomplete copy is deleted and never evicts a good backup. An
+activation interrupted before boot health keeps its attempt count, the backup and the saves; the third unhealthy start abandons
+the package. The unsigned channel pointer is validated before use: `seq` must be a positive whole number, `channel`/`ota_id`/URLs
+must be strings, a `seq` at or below the installed/staged one is never an update, and a pointer whose `seq` differs from the signed
+manifest's is rejected as inconsistent (tests: `tests/test_ota_core.gd`, sections 10b and the updater pointer cases).
+
 ## 10. What players see, and diagnostics
 
 **Players see no OTA or debug text over the game or the menus, except the cold-launch update hand-off** (`scripts/update_gate.gd`, game layer, owner-requested after v8.2: the check starts with the splash through `Boot.check_now()`; only when an update is really found does it say "Downloading update..." and "Applying update..." and restart once; nothing is shown for no update / offline / failure) (runtime r2 onwards; v7.x showed "v7.2 (dev-000002) ready: restart to run it" as a

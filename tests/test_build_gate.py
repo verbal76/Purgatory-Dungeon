@@ -65,6 +65,14 @@ class TestNumber(unittest.TestCase):
         self.assertTrue(G.check_number(5, [], [], 8))
         self.assertEqual(G.check_number(9, [], [], 8), [])
 
+    def test_build_may_equal_the_native_version_once_it_is_unused(self):
+        # Build 9 ships VERSION 9 (versionCode 9): v1-v8 are consumed, 9 is free.
+        tags = [f"v{i}" for i in range(1, 9)] + ["ota-dev-000007"]
+        self.assertEqual(G.check_number(9, tags, [], 9), [])
+        self.assertTrue(G.check_number(8, tags, [], 9), "v8 is consumed")
+        self.assertTrue(G.check_number(9, tags + ["build-9"], [], 9), "a second Build 9 is refused")
+        self.assertTrue(G.check_number(8, [], [], 9), "never below the release before VERSION")
+
 
 class TestSource(unittest.TestCase):
     def setUp(self):

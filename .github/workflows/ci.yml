@@ -393,6 +393,10 @@ jobs:
         run: |
           python3 tools/build_gate.py assemble --in parts --out bundle --platform "$IN_PLATFORM" --source-sha "$SOURCE_SHA" --build-number "$BUILD_NUMBER"
           echo "manifest_sha256=$(sha256sum bundle/build-manifest.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          # The same facts in the job log (readable without downloading the artifact): sizes, SHA-256, source commit.
+          echo "Source commit: ${SOURCE_SHA}"
+          ls -l bundle
+          cat bundle/checksums.sha256
           {
             echo "### Purgatory Dungeon Build ${BUILD_NUMBER} (${IN_PLATFORM}, local_only unless published below)"
             echo "Source commit \`${SOURCE_SHA}\`"
