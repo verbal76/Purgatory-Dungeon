@@ -29,6 +29,8 @@
 
 extends Area3D
 
+const Juice := preload("res://scripts/juice.gd")
+
 
 # ── Tuning constants ───────────────────────────────────────
 
@@ -101,6 +103,11 @@ func _ready() -> void:
 	# Start lifetime countdown if enabled.
 	if LIFETIME > 0.0:
 		_life_timer = LIFETIME
+
+	# Loot pop: it springs out of the kill (small to full size with an overshoot) with a glint, instead of appearing whole.
+	Juice.burst("gold", global_position + Vector3(0.0, 0.5, 0.0), Vector3.UP, 0.5)
+	scale = Vector3.ONE * 0.2
+	create_tween().tween_property(self, "scale", Vector3.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _build_visual() -> void:
@@ -211,4 +218,10 @@ func _on_body_entered(body: Node3D) -> void:
 
 	_collected = true
 	PlayerWallet.add_potions(POTION_VALUE)
+	# Collected: a glitter burst, a floating "+1", a coin sound (it was silent).
+	Juice.burst("gold", global_position, Vector3.UP, 0.8)
+	Juice.number(global_position + Vector3(0.0, 0.5, 0.0), "+%d" % POTION_VALUE, Color(0.55, 1.0, 0.6), 1.0)
+	if has_node("/root/AudioManager"):
+		AudioManager.play_sfx("coin", -3.0, 0.96, 1.08, 1)
+	Juice.haptic(14)
 	queue_free()

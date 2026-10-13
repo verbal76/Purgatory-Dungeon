@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://cs62x5s48ong3"
+path="res://godot/imported/landing_thud.wav-a0f2b7b87eb415a2ca9321b0487849ca.sample"
+
+[deps]
+
+source_file="res://Music & background images/Sound Effects/juice/landing_thud.wav"
+dest_files=["res://godot/imported/landing_thud.wav-a0f2b7b87eb415a2ca9321b0487849ca.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

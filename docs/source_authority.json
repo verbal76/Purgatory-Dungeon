@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "policy": "docs/SOURCE_OF_TRUTH.md",
+  "authoritative_branch": "main",
+  "current_line": {
+    "branch": "ccr-5f32885a-gvu16v",
+    "note": "origin/main still points at the old v2.5 upload snapshot (f0eaa47), so until the owner fast-forwards main this branch IS the authoritative line: it contains origin/main, every release tag (v1-v8), every OTA tag and every other branch. Pull request #1 (draft) is the vehicle for moving main."
+  },
+  "accounted_unmerged": {}
+}

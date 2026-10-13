@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://c33takilydp2h"
+path="res://godot/imported/torch_crackle.wav-861b39ceb91c126d737c9993c6943a0d.sample"
+
+[deps]
+
+source_file="res://Music & background images/Sound Effects/juice/torch_crackle.wav"
+dest_files=["res://godot/imported/torch_crackle.wav-861b39ceb91c126d737c9993c6943a0d.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

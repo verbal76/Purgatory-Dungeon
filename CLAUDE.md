@@ -4,13 +4,132 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Purgatory Dungeon** (v2.5) is a 3D dungeon-crawler roguelike built in **Godot 4.6** (Forward Plus, Jolt Physics). Language is 100% GDScript. Players choose Barbarian or Mage, run procedurally generated dungeons of 125 modules, pick daily buffs, and survive 30 in-game days (~30 min). Target: stable 60+ FPS on mid-range hardware.
+**Purgatory Dungeon** is a 3D dungeon-crawler roguelike built in **Godot 4.6** (Forward Plus, Jolt Physics). Language is 100% GDScript. Players choose Barbarian or Mage, run procedurally generated dungeons of ~110 rooms, pick daily buffs, and survive 30 in-game days (~30 min). Target: stable 60+ FPS on mid-range hardware.
+
+## Release convention (mandatory — read before delivering any build)
+
+From the first build after v8 the owner identifies builds only as **`Purgatory Dungeon Build NN`** (one monotonically increasing sequence that continues the release series:
+v1-v8 are builds 1-8, the next is 9; Build 9 ships `./VERSION` 9 = Android versionCode 9, and a Build NN may equal the native version once that number is unused). Deliver every coordinated build as ONE GitHub Release titled exactly
+`Purgatory Dungeon Build NN` (tag `build-NN` at the exact commit) with `Purgatory Dungeon Build NN APK.apk`, `... EXE.zip`, `... Linux.tar.gz`, `build-manifest.json` and
+`checksums.sha256`. Never use codenames, SHAs or CI artifact links in anything the owner sees; keep those as engineering metadata in the release notes. One number = one
+source commit = one set of artifacts; never reuse or overwrite. Releases v1-v8 and their tags/assets are history and are never renamed or touched.
+**Building and publishing are separate:** the only build workflow is `.github/workflows/ci.yml` ("Build (manual)", `workflow_dispatch` only; inputs platform / source_sha /
+build_number / destination, default `local_only`); a push, pull request, merge, tag or test run never builds for release or publishes. `github_releases` needs all three platforms,
+a repository admin/maintain actor, and is the only way to create the release. Full procedure, tooling and history: **docs/RELEASES.md** (`tools/build.py`, `tools/build_gate.py`).
+
+## Android (same product, same version number)
+
+The game also ships as an Android APK (`Purgatory Dungeon Build NN APK.apk`) attached to the same GitHub
+Release as the Windows zip and the Linux package. Package `com.hotatticgames.purgatorydungeon`, arm64, API 30-36, signed with one
+persistent key (never in the repo/logs/notes). Touch input feeds the same semantic actions as keyboard
+and controller (`scripts/touch/`); all touch/phone behaviour is gated by `TouchControls.is_touch_platform()`
+so Windows is unchanged. Details, controls table and build pipeline: **docs/ANDROID.md**.
+
+## OTA updates (same product, same version number)
+
+**Versioning rule (owner, authoritative): whole numbers = real APKs; decimals = OTAs on that APK generation.** v6 = published APK;
+v7 = the next REAL OTA-capable APK (`Purgatory-Dungeon-v7.apk` must exist); v7.1, v7.2... = OTAs running on the v7 APK (never a new
+APK, never a GitHub Release named `Purgatory Dungeon vN`); v8 only with another real APK. Keep native APK version, owner-facing running
+version (`7` / `7.K`), OTA update id (`#000001`) and native runtime/fingerprint separate; every handoff states all four.
+
+Android-only, from the first v7-generation APK (v1-v6 cannot receive it). One authoritative mechanism, specified in
+**docs/OTA.md**: the native layer `scripts/boot/` (autoload `Boot`, first) mounts a signed, cumulative patch pack for exactly
+one native baseline; a runtime lock (`ota/runtime_lock.json`, `tools/ota_runtime.py`) gives every native build a
+`runtime_id` + `runtime_fingerprint` and a device accepts only a manifest that names both. What may ship OTA vs needs an
+APK is defined once in `ota/boundary.json` (`tools/ota/classify.py` enforces it). Never edit `scripts/boot/**`,
+`project.godot`, `export_presets.cfg`, `ota/**`, the Android manifest settings or the engine version expecting an OTA to
+carry it (changing them changes the fingerprint: run `python3 tools/ota_runtime.py --check`, then `--bump`/`--relock`).
+An OTA cannot add a new global `class_name`, autoload or input action. Players see no OTA/channel/debug text over the menus or the game, with ONE owner-requested exception: the cold-launch update hand-off (`scripts/update_gate.gd`, docs/ANDROID.md) shows "Downloading update..." / "Applying update..." right after the studio card when an update was actually found, then restarts. Update state, the OTA label, **Check for updates** (`Boot.check_now()`, the one updater) and **Copy diagnostics** live in Options > About (docs/OTA.md section 10); the performance readout and the native diagnostics overlay are developer tools. Publication = push branch `ota/<channel>/<40-hex sha>`
+(`.github/workflows/ota-publish.yml`); recovery = automatic rollback, the diagnostics overlay and channel revocation. The
+signing key lives outside the repo (CI key store); only the public key is compiled in. Saves are never written by OTA.
+OTA files are served from this repository's own GitHub Releases (the Mote pattern), published by the publish workflow with GitHub's
+automatic `GITHUB_TOKEN` (`contents: write` on the publishing job only): no PAT, no second repo, no Pages, no device credential; trust comes
+from the signature + runtime fingerprint, not the host. **Verified repository visibility: `verbal76/Purgatory-Dungeon` is PUBLIC** (check it,
+never assume it: `curl -s https://api.github.com/repos/verbal76/Purgatory-Dungeon`, `"private": false`); so never commit keys or private artifacts.
+Publishing an actual OTA to players needs the owner's explicit authorization.
+
+## One game, one history (permanent engineering policy: docs/SOURCE_OF_TRUTH.md)
+
+We are developing **ONE GAME** that runs on Android and Windows, not an Android game and a Windows game. One authoritative codebase and one integrated history; every
+platform build, OTA and release derives from a commit in it; platform differences are small, named, gated branches (table in the policy). A fix for one platform is checked
+against every platform. Branches are temporary workspaces: start from the authoritative line (`docs/source_authority.json`; `main` is intended, the file names the interim
+line while `origin/main` lags), integrate when validated, never delete a branch, rewrite shared history or merge into `main` without the owner. Agents first run
+`python3 tools/source_audit.py base-check` (a worktree cut from the stale default branch says STALE BASE: stop). A release must descend from every earlier release tag
+(`tools/source_audit.py lineage-gate`, and `tools/build_gate.py source` at the start of every build run); all platforms of one build come from the same validated `source_sha`; a failed
+platform never gets a different revision substituted. Every abandoned or unmerged piece of work is accounted for in `docs/BRANCH_LEDGER.md` before anything is discarded
+(`tools/source_audit.py ledger --check`). Tested by `tests/test_source_of_truth.py`.
+
+## Three-platform builds and the master standard (docs/PLATFORM_SUPPORT.md, docs/COMPLIANCE_AUDIT.md)
+
+`python3 tools/build.py --platform windows|linux|android|all` builds the EXACT commit locally (never the working tree), verifies each package, and writes
+`build-manifest.json` + `checksums.sha256`; it never uploads or releases. Native Linux x86-64 is a target (scratch export preset; no tracked preset because that would
+change the native fingerprint). The Hot Attic Games master standard v2.0 audit, scorecard and owner decisions (naming convention, Steamworks, save backups, asset licenses)
+are in `docs/COMPLIANCE_AUDIT.md`; third-party licenses in `docs/THIRD_PARTY_ASSETS.md` (never claim a license that is not evidenced there). Runtime data must be `.json`/resources:
+a `.txt` data file is not exported (`tools/verify_package.py` checks). GitHub skips CI for a draft PR, so `tools/preflight.sh` (Godot-free, ~15 s) is the cheap local gate before a push; unreferenced, unlicensed media lives behind `.gdignore` (`tests/test_licenses.py`).
+
+## Steam Deck / Steam Machine (held for the next APK; docs/STEAM_DECK.md)
+
+The Windows build is meant to run on a Deck through Proton. Controller glyphs (`scripts/controller_glyphs.gd`, `glyph_prompt.gd`, art in `assets/ui/glyphs`),
+controller-only navigation, the Graphics Quality setting (`scripts/graphics_quality.gd`, Medium by default on a Deck) and the Deck checklist are in the repo; a
+prompt that names a key or button must go through `GlyphPromptScript` / `InputManager.glyph()` so it follows the input in use. Not released and not measured on a
+real Deck. `project.godot` changes (e.g. the Windows renderer) wait for the next APK.
+
+## GitHub Actions budget (standing owner policy: GitHub-hosted minutes are scarce)
+
+Actions usage is shared across the owner's projects with a deliberately small monthly budget. Before starting any hosted workflow ask:
+**"Does this need GitHub Actions, or can I prove it locally?"** Validate locally first (`tests/run_tests.sh`, `python3 tools/ota_runtime.py --check`,
+`python3 tools/ota/classify.py <base> HEAD`, the local OTA e2e `tests/ota_e2e.py`, the lavapipe render probes); use Actions only for evidence only
+GitHub can give. Rules:
+- Appropriate: final validation of a candidate that is approaching a release/OTA; tests that cannot be reproduced locally; an APK/AAB/EXE the owner actually
+  needs for physical testing or release; OTA publication and its safety/compatibility/signing checks (`ota-publish.yml`); release builds and release verification.
+- Not appropriate: building every platform on every push; Windows EXEs when Windows was not requested; APKs for an OTA-only change; re-running a workflow to see
+  whether an intermittent test passes (root-cause it locally instead); rebuilding the same SHA when a verified result/artifact can be reused; release validation
+  for docs/comments/bookkeeping; using CI instead of local debugging.
+- How the workflows enforce it: `tests.yml` runs the tests only, for pull requests that are ready for review (never drafts) and never for docs-only changes, and a newer
+  commit cancels the superseded run; `ci.yml` (manual dispatch only) is the one place anything is built, and builds exactly the platforms asked for. Keep PRs as drafts until a candidate is really close to release.
+- Release safety is NOT traded for minutes: signing verification, runtime/OTA compatibility, the release gates, rollback protections and the full test suite on
+  the exact OTA SHA (`ota-tests.yml`) stay mandatory. Do not publish a release/OTA/APK merely because workflows were audited or edited.
+- Prefer one verified run per SHA; push several commits together rather than one at a time; do not push to a branch with an open non-draft PR for every small edit.
+
+## Release cadence (standing owner philosophy)
+
+Develop locally -> accumulate related changes -> validate locally -> freeze a meaningful candidate -> one necessary CI/release gate -> one meaningful OTA/APK.
+Do not publish tiny OTAs for cosmetic or minor gameplay corrections, and consolidate native changes into worthwhile APK generations (do not build an APK to
+inspect one native tweak; validate assets/config locally first). Immediate small releases are justified only for urgent problems: crashes, save/data corruption,
+severe update failure, release-blocking defects, security/integrity problems, or a release that is substantially unusable. Otherwise batch. A finished, green
+candidate is HELD until the owner authorises publication (more playtest findings may arrive); never publish just because it is green.
+
+## Studio splash (Hot Attic Games standing requirement — do not remove)
+
+Every Hot Attic Games application opens with the studio splash before its own title screen:
+cold launch -> **Hot Attic Games splash** -> product title/menu -> normal game. The artwork is the
+owner-supplied canonical file **`Hot_Attic_Games_Master_Logo_ALPHA_FINAL.png`** (look for exactly
+that name; the older `branding/Hot_Attic_Games_Master_Logo.png` path is obsolete). Never redraw,
+recreate, crop, stretch or substitute it, and do not wait for a differently named asset.
+Implementation: `scenes/StudioSplash.tscn` + `scripts/studio_splash.gd` (`StudioSplash`) is the
+project's main scene; it finds the file by name at the repo root, `branding/`, `assets/` or
+`Music & background images/`, fits the whole image with its aspect ratio and transparency, shows it
+about 2.4 s (fade in/hold/fade out) while the main menu loads behind it, plays only on cold launch,
+and can never strand the player (missing logo skips it; failsafe timer). `tests/test_studio_splash.gd`
+covers it; release builds set `REQUIRE_STUDIO_LOGO=1`, so a release without the logo fails CI.
+
+## Human testing gate (Hot Attic Games rule — applies before asking the owner to test)
+
+Do not send the owner a build to test while confirmed, reproducible, repairable engineering defects
+remain that can be fixed without human judgment. A build that exists, launches, or passes CI/headless
+tests is not by itself an owner-testing gate. The owner tests subjective questions (feel, visuals,
+audio, real-hardware performance, fun); never ask him to rediscover defects already known.
+Until those defects are repaired the project state is "engineering work remains", not "waiting on
+owner testing" — unless the owner explicitly says to test anyway. Earlier builds stay as rollback
+checkpoints; repairing defects never invalidates them.
 
 ## How to Run
 
-- Open `project.godot` in Godot 4.6+. No build scripts or CLI tooling exist.
+- Open `project.godot` in Godot 4.6+.
+- Headless tests: `tests/run_tests.sh <godot-binary>` (see README). CI: `.github/workflows/ci.yml`.
+- Windows export: `godot --headless --export-release "Windows Desktop" build/windows/PurgatoryDungeon.exe`.
 - Entry point: `MainMenu.tscn` → `CharacterSelection.tscn` → `Purgatory_Dungeon_main_game_file.tscn`
-- Settings persist to `~/Documents/PurgetoryDungeon/settings.json`; save slots persist alongside it.
+- Settings persist to `<Documents>/PurgetoryDungeon/settings.json` (path logic in `scripts/storage_paths.gd`); save slots persist alongside it. Keep the misspelled folder name (compatibility).
 
 ## How to Work With Claude
 
@@ -33,13 +152,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `GlobeManager` | Mystery sphere pickup effects (defined in `data/globe_effects.json`) |
 | `PlayerWallet` | Currency HUD; used by `AlchemistStore` mid-run |
 | `SettingsManager` | Audio/video/gameplay preferences |
-| `CodexManager` | Lore/bestiary data from `data/codex_lore.txt` |
+| `CodexManager` | Lore/bestiary data from `data/codex_lore.json` |
 
 ### Main Game Scene
 
 `scripts/Purgatory_Dungeon_main_game_file.gd` boots the level:
 1. Spawns player (Barbarian or Mage from `GlobalRunData`)
-2. Runs `DungeonGenerationFunction` — places ~125 module `.tscn` rooms, registers typed spawn points (`brute`/`mage`/`buffed`), builds waypoint graph
+2. Runs `DungeonGenerationFunction` — places ~110 rooms (`target_piece_count` in the main scene; ~310-340 modules including connectors/end caps), registers typed spawn points (`brute`/`mage`/`buffed`), builds waypoint graph
 3. Instantiates `EnemyManager` (proximity spawner using typed spawn data + waypoints)
 4. Instantiates `HealthOrbManager`, `TrapManager`
 5. Starts `GameClock`
@@ -49,9 +168,9 @@ Exploration tracking is throttled to 0.5 s intervals (not every frame).
 ### Character System
 
 - `characters/brute/scripts/character_base.gd` — Abstract base for all characters. Handles health, buffs, animation blending with LOD, stun, physics. Caches animation map once (not per frame). Maintains a **static player LOD cache** shared across all enemy instances to avoid per-enemy tree scans.
-- `characters/brute/scripts/brute_player.gd` — Barbarian: 1st-person with head-bob, swing/rapid_attack/kick/AOE/block
+- `characters/brute/scripts/brute_player.gd` — Barbarian: 1st-person with head-bob, swing/kick/AOE/block
 - `characters/Lutsch Mage/scripts/mage_player.gd` — Mage: projectile firing, area spells
-- `*_ai.gd` variants implement enemy AI with **LOD tick rates**: <12 m = 60 Hz, 12–25 m = 30 Hz, >25 m = 10 Hz
+- `*_ai.gd` variants implement enemy AI with **LOD tick intervals** (nominally 60/30/10 Hz; physics runs at 30 ticks/s so effective rates are 30/15/5 Hz): <12 m, 12–25 m, >25 m
 
 ### Procedural Generation
 
@@ -59,9 +178,9 @@ Exploration tracking is throttled to 0.5 s intervals (not every frame).
 
 ### Data Files
 
-- `data/buffs.json` — 8 buffs with `effect_type`, `stat`, `tradeoff` fields; extensible
+- `data/buffs.json` — 49 buffs with `effect_type`, `stat`, `tradeoff` fields; extensible. Percent-style stats (`BuffManager.PERCENT_OF_BASE_STATS`) are fractions of the player's base value; the pick pool only offers buffs whose stats exist on the current player (`tests/test_buffs.gd` enforces both)
 - `data/globe_effects.json` — Mystery sphere pickup effects
-- `data/codex_lore.txt` — Bestiary/lore entries
+- `data/codex_lore.json` — Bestiary/lore entries (a JSON array: a `.txt` data file is NOT packed by the Godot export, see tests/test_codex_save.gd)
 
 ### Key Manager Scripts
 

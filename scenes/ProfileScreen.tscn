@@ -11,44 +11,61 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_script")
 
-[node name="Background" type="ColorRect" parent="." unique_id=1170989466]
+[node name="Margin" type="MarginContainer" parent="." unique_id=1744920311]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0.0784314, 0.0784314, 0.0784314, 1)
+theme_override_constants/margin_left = 48
+theme_override_constants/margin_top = 32
+theme_override_constants/margin_right = 48
+theme_override_constants/margin_bottom = 32
 
-[node name="MainLayout" type="VBoxContainer" parent="." unique_id=2109398333]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-mouse_filter = 0
-theme_override_constants/separation = 40
-alignment = 1
-
-[node name="Header" type="Label" parent="MainLayout" unique_id=1021714860]
+[node name="MainLayout" type="VBoxContainer" parent="Margin" unique_id=2109398333]
 layout_mode = 2
-theme_override_font_sizes/font_size = 32
-text = "PLAYER PROFILES"
+mouse_filter = 0
+theme_override_constants/separation = 16
+
+[node name="TopRow" type="HBoxContainer" parent="Margin/MainLayout" unique_id=1980337412]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="BackButton" type="Button" parent="Margin/MainLayout/TopRow" unique_id=2109684104]
+custom_minimum_size = Vector2(200, 56)
+layout_mode = 2
+theme_type_variation = &"NavButton"
+text = "Back"
+
+[node name="Header" type="Label" parent="Margin/MainLayout/TopRow" unique_id=1021714860]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_type_variation = &"ScreenTitle"
+text = "Player Profiles"
 horizontal_alignment = 1
 
-[node name="SlotGrid" type="GridContainer" parent="MainLayout" unique_id=1355231052]
+[node name="Spacer" type="Control" parent="Margin/MainLayout/TopRow" unique_id=1506624118]
+custom_minimum_size = Vector2(200, 0)
 layout_mode = 2
-size_flags_horizontal = 4
-theme_override_constants/h_separation = 20
-theme_override_constants/v_separation = 15
-columns = 2
 
-[node name="BackButton" type="Button" parent="MainLayout" unique_id=2109684104]
-custom_minimum_size = Vector2(240, 50)
+[node name="Scroll" type="ScrollContainer" parent="Margin/MainLayout" unique_id=1355231060]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="GridCenter" type="HBoxContainer" parent="Margin/MainLayout/Scroll" unique_id=1355231061]
+layout_mode = 2
+size_flags_horizontal = 3
+alignment = 1
+
+[node name="SlotGrid" type="GridContainer" parent="Margin/MainLayout/Scroll/GridCenter" unique_id=1355231052]
+custom_minimum_size = Vector2(1080, 0)
 layout_mode = 2
 size_flags_horizontal = 4
-text = "Back to Main Menu"
+theme_override_constants/h_separation = 16
+theme_override_constants/v_separation = 12
+columns = 2
 
 [node name="PopupLayer" type="ColorRect" parent="." unique_id=1611099260]
 visible = false
@@ -58,68 +75,79 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0, 0, 0, 0.784314)
+color = Color(0, 0, 0, 0)
 
 [node name="ChoicePanel" type="PanelContainer" parent="PopupLayer" unique_id=1764390158]
 visible = false
-custom_minimum_size = Vector2(300, 200)
+custom_minimum_size = Vector2(480, 0)
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -150.0
-offset_top = -100.0
-offset_right = 150.0
-offset_bottom = 100.0
+offset_left = -240.0
+offset_top = -120.0
+offset_right = 240.0
+offset_bottom = 120.0
 grow_horizontal = 2
 grow_vertical = 2
 
 [node name="VBox" type="VBoxContainer" parent="PopupLayer/ChoicePanel" unique_id=431558747]
 layout_mode = 2
 mouse_filter = 0
-theme_override_constants/separation = 15
+theme_override_constants/separation = 12
 alignment = 1
 
 [node name="SlotTitle" type="Label" parent="PopupLayer/ChoicePanel/VBox" unique_id=1270251899]
 layout_mode = 2
+theme_type_variation = &"CardTitle"
 text = "Slot Action"
 horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="Divider" type="HSeparator" parent="PopupLayer/ChoicePanel/VBox" unique_id=1270251900]
+layout_mode = 2
+theme_type_variation = &"BrassDivider"
 
 [node name="LoadBtn" type="Button" parent="PopupLayer/ChoicePanel/VBox" unique_id=1276501895]
+custom_minimum_size = Vector2(0, 64)
 layout_mode = 2
+theme_type_variation = &"PrimaryButton"
 text = "LOAD PROFILE"
 
 [node name="DeleteBtn" type="Button" parent="PopupLayer/ChoicePanel/VBox" unique_id=188230396]
+custom_minimum_size = Vector2(0, 56)
 layout_mode = 2
-theme_override_colors/font_color = Color(1, 0.305882, 0.231373, 1)
+theme_type_variation = &"DangerButton"
 text = "DELETE"
 
 [node name="CancelBtn" type="Button" parent="PopupLayer/ChoicePanel/VBox" unique_id=1170266122]
+custom_minimum_size = Vector2(0, 56)
 layout_mode = 2
+theme_type_variation = &"NavButton"
 text = "CANCEL"
 
 [node name="ConfirmPanel" type="PanelContainer" parent="PopupLayer" unique_id=675156059]
 visible = false
-custom_minimum_size = Vector2(300, 150)
+custom_minimum_size = Vector2(480, 0)
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -150.0
-offset_top = -75.0
-offset_right = 150.0
-offset_bottom = 75.0
+offset_left = -240.0
+offset_top = -90.0
+offset_right = 240.0
+offset_bottom = 90.0
 grow_horizontal = 2
 grow_vertical = 2
 
 [node name="VBox" type="VBoxContainer" parent="PopupLayer/ConfirmPanel" unique_id=8442938]
 layout_mode = 2
 mouse_filter = 0
-theme_override_constants/separation = 15
+theme_override_constants/separation = 16
 alignment = 1
 
 [node name="Label" type="Label" parent="PopupLayer/ConfirmPanel/VBox" unique_id=97669009]
@@ -131,14 +159,17 @@ horizontal_alignment = 1
 [node name="HBox" type="HBoxContainer" parent="PopupLayer/ConfirmPanel/VBox" unique_id=158574423]
 layout_mode = 2
 mouse_filter = 0
+theme_override_constants/separation = 16
 alignment = 1
 
 [node name="YesBtn" type="Button" parent="PopupLayer/ConfirmPanel/VBox/HBox" unique_id=666083555]
-custom_minimum_size = Vector2(80, 0)
+custom_minimum_size = Vector2(180, 56)
 layout_mode = 2
-text = "YES"
+theme_type_variation = &"DangerButton"
+text = "Yes"
 
 [node name="NoBtn" type="Button" parent="PopupLayer/ConfirmPanel/VBox/HBox" unique_id=1768888923]
-custom_minimum_size = Vector2(80, 0)
+custom_minimum_size = Vector2(180, 56)
 layout_mode = 2
-text = "NO"
+theme_type_variation = &"NavButton"
+text = "No"

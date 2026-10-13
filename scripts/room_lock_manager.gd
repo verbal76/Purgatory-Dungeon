@@ -13,8 +13,17 @@
 #
 #  Each large room can only lock once per run.
 #  Wired up by Purgatory_Dungeon_main_game_file._boot_room_lock_manager().
+#
+#  ARMING: a brand-new run cannot be swarmed. The encounter system is dormant until the player's
+#  FIRST daily buff selection (BuffManager.buff_chosen). Entering a large room while dormant does
+#  nothing and does not use the room up, so it can still become a swarm room on a later entry once
+#  armed. Arming is never retroactive: a room the player is standing in when the first buff is
+#  picked does not lock; only entries made after that moment count. (With the buff roulette
+#  switched off there is no first selection, so the system arms on the day it would have fired.)
 # ============================================================
 extends Node3D
+
+const Juice := preload("res://scripts/juice.gd")
 
 const LARGE_ROOM_PATHS : Array[String] = [
 	"res://dungeon modules/new_collision_rectangle_4_opening.tscn",
@@ -43,7 +52,10 @@ class RoomLock:
 	var room_aabb : AABB   = AABB()  # Room bounds — used to detect live enemies inside
 
 
+signal armed
+
 # ── Runtime references ─────────────────────────────────────────────────────────
+var _armed       : bool      = false
 var _player      : Node3D    = null
 var _dungeon_gen : Node      = null
 var _enemy_mgr   : Node3D    = null
@@ -57,27 +69,76 @@ var _active_locks : Array     = []
 #  BOOT
 # ══════════════════════════════════════════════════════════════
 
-func boot(player: Node3D, dungeon_gen: Node, enemy_mgr: Node3D) -> void:
+# Staged setup (see Purgatory_Dungeon_main_game_file.gd): the trigger of every large room is created in its
+# own budgeted step, nearest rooms first. A trigger only matters once the player enters its room.
+var stage_near_done : bool = true
+var stage_done : bool = true
+
+
+func boot(player: Node3D, dungeon_gen: Node, enemy_mgr: Node3D, origin: Vector3 = Vector3.ZERO) -> void:
 	_player      = player
 	_dungeon_gen = dungeon_gen
 	_enemy_mgr   = enemy_mgr
-	_setup_room_triggers()
+	_connect_arming()
+	if _dungeon_gen != null:
+		stage_done = false   # (never gates the hand-over: a trigger only matters once its room is entered)
+		call("_stage_triggers", origin)   # dynamic call: runs as a background coroutine
+
+
+# ══════════════════════════════════════════════════════════════
+#  ARMING (no swarm before the player's first buff selection)
+# ══════════════════════════════════════════════════════════════
+
+func is_armed() -> bool:
+	return _armed
+
+
+## Starts allowing swarm encounters from the NEXT qualifying room entry on. Idempotent.
+func arm() -> void:
+	if _armed:
+		return
+	_armed = true
+	armed.emit()
+
+
+func _connect_arming() -> void:
+	if has_node("/root/BuffManager") and not BuffManager.buff_chosen.is_connected(_on_first_buff_chosen):
+		BuffManager.buff_chosen.connect(_on_first_buff_chosen)
+	# Buff roulette off (debug toggle): nothing will ever be "chosen", so arm on the day the first
+	# pick would have happened instead of leaving the rooms dormant for the whole run.
+	if has_node("/root/GlobalRunData") and GlobalRunData.debug_no_buffs and has_node("/root/GameClock"):
+		if not GameClock.day_changed.is_connected(_on_day_changed_no_buffs):
+			GameClock.day_changed.connect(_on_day_changed_no_buffs)
+
+
+func _on_first_buff_chosen(_buff: Dictionary) -> void:
+	arm()
+
+
+func _on_day_changed_no_buffs(day: int) -> void:
+	var first_pick_day : int = GameClock.buff_every_n_days if GameClock.buff_every_n_days > 0 else 2
+	if day >= first_pick_day:
+		arm()
 
 
 # ══════════════════════════════════════════════════════════════
 #  TRIGGER SETUP
 # ══════════════════════════════════════════════════════════════
 
-func _setup_room_triggers() -> void:
-	if _dungeon_gen == null:
-		return
-	var modules : Array = _dungeon_gen.placed_modules
+func _stage_triggers(origin: Vector3) -> void:
+	var main : Node = get_parent()
+	var budgeted : bool = main != null and main.has_method("stage_over")
+	var modules : Array = _dungeon_gen.get_modules_by_distance(origin) \
+			if _dungeon_gen.has_method("get_modules_by_distance") else _dungeon_gen.placed_modules
 	for mod in modules:
 		if not is_instance_valid(mod):
 			continue
 		if not (mod.scene_file_path in LARGE_ROOM_PATHS):
 			continue
 		_create_trigger_for_module(mod)
+		if budgeted and main.stage_over():
+			await get_tree().process_frame
+	stage_done = true
 
 
 func _create_trigger_for_module(mod: Node3D) -> void:
@@ -121,6 +182,10 @@ func _on_trigger_body_entered(body: Node3D, trigger: Area3D) -> void:
 	if not is_instance_valid(mod):
 		return
 	if _cleared.has(mod):
+		return
+	# Dormant (before the first buff selection): walking in changes nothing - the room is not used up
+	# and the trigger stays, so a later entry after arming can still swarm it.
+	if not _armed:
 		return
 
 	_cleared[mod] = true              # Prevent any second fire
@@ -208,6 +273,18 @@ func _lock_room(mod: Node3D) -> void:
 		blocker.global_transform = (conn as Node3D).global_transform
 		lock.blockers.append(blocker)
 		_start_orb_pulse(blocker)
+		Juice.burst("dust", blocker.global_position + Vector3(0.0, 0.2, 0.0), Vector3.UP, 0.7)
+		if has_node("/root/AudioManager"):
+			AudioManager.play_sfx_3d("door_slam", blocker.global_position + Vector3(0.0, 1.5, 0.0), 0.0, 0.92, 1.05, 40.0, 2)
+
+	# The seal lands: a heavy camera jolt and the message (the doors used to appear with no sound and no word).
+	var fx : Node = Juice.cam_fx(_player)
+	if fx != null:
+		fx.add_trauma(0.6)
+		fx.punch_fov(3.0)
+	Juice.haptic(80)
+	Juice.banner("SEALED", 1.8, PUI.BLOOD_BRIGHT)
+	Juice.counter("Sealed: %d left" % LOCK_ENEMY_COUNT)
 
 	# ── Clear space for the encounter — cull the 5 furthest existing enemies ──
 	if _enemy_mgr != null and _enemy_mgr.has_method("cull_for_room_lock"):
@@ -361,6 +438,8 @@ func _force_spawn(pos: Vector3, waypoints: Array) -> Node3D:
 
 func _on_lock_enemy_died(lock: RoomLock) -> void:
 	lock.remaining -= 1
+	if lock.remaining > 0 and _active_locks.has(lock):
+		Juice.counter("Sealed: %d left" % lock.remaining)
 	# Scan the room AABB for any live enemy still inside.
 	# This handles: enemies that escaped before blockers went up (outside AABB →
 	# not counted), enemies recycled without firing died, and any other edge case.
@@ -390,6 +469,23 @@ func _count_live_enemies_in_room(aabb: AABB) -> int:
 func _unlock_room(lock: RoomLock) -> void:
 	for blocker in lock.blockers:
 		if is_instance_valid(blocker):
-			blocker.queue_free()
+			_dissolve_blocker(blocker)
 	lock.blockers.clear()
+	Juice.counter("")
+	if _active_locks.has(lock):
+		Juice.banner("DOORS OPEN", 1.6, PUI.EMBER_BRIGHT)
+		if has_node("/root/AudioManager"):
+			AudioManager.play_sfx("unlock_chime", -2.0, 1.0, 1.0, 2)
+		Juice.haptic(40)
 	_active_locks.erase(lock)   # Release the strong reference — GC can now collect
+
+
+# A barrier doesn't blink out: it stops blocking at once, then collapses to a line and bursts into embers over 0.35 s.
+func _dissolve_blocker(blocker: StaticBody3D) -> void:
+	for child in blocker.get_children():
+		if child is CollisionShape3D:
+			(child as CollisionShape3D).set_deferred("disabled", true)
+	Juice.burst("ember", blocker.global_position + Vector3(0.0, 1.5, 0.0), Vector3.UP, 1.0)
+	var tw : Tween = blocker.create_tween()
+	tw.tween_property(blocker, "scale", Vector3(1.0, 0.02, 1.0), 0.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_callback(blocker.queue_free)

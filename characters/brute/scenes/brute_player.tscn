@@ -20,8 +20,7 @@ kick_speed_scale = 1.2
 weapon_hitbox = NodePath("Mesh/Brute/Node/Skeleton3D/WeaponBoneAttach/WeaponHitbox")
 kick_hitbox = NodePath("Mesh/Brute/Node/Skeleton3D/RightFootKickAttach/KickHitbox")
 block_knockback_force = 10.0
-rapid_attack_duration = 5.0
-max_health = 150.0
+max_health = 200.0
 footstep_volume_db = 15.0
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1761834214]

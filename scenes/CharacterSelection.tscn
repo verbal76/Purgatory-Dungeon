@@ -24,15 +24,6 @@ texture = ExtResource("2_bg_image")
 expand_mode = 1
 stretch_mode = 6
 
-[node name="BackgroundShade" type="ColorRect" parent="."]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-color = Color(0, 0, 0, 0.588235)
-
 [node name="Margin" type="MarginContainer" parent="."]
 layout_mode = 1
 anchors_preset = 15
@@ -41,122 +32,129 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/margin_left = 40
-theme_override_constants/margin_top = 40
+theme_override_constants/margin_top = 32
 theme_override_constants/margin_right = 40
-theme_override_constants/margin_bottom = 40
+theme_override_constants/margin_bottom = 32
 
 [node name="VBox" type="VBoxContainer" parent="Margin"]
 layout_mode = 2
-theme_override_constants/separation = 20
+theme_override_constants/separation = 16
 
 [node name="TopRow" type="HBoxContainer" parent="Margin/VBox"]
 layout_mode = 2
-theme_override_constants/separation = 15
+theme_override_constants/separation = 16
 
 [node name="BackButton" type="Button" parent="Margin/VBox/TopRow"]
-custom_minimum_size = Vector2(100, 40)
+custom_minimum_size = Vector2(160, 56)
 layout_mode = 2
 focus_mode = 2
-text = "<- Back"
+theme_type_variation = &"NavButton"
+text = "Back"
 
 [node name="LoadCharacterButton" type="Button" parent="Margin/VBox/TopRow"]
-custom_minimum_size = Vector2(150, 40)
+custom_minimum_size = Vector2(150, 56)
 layout_mode = 2
 focus_mode = 2
 text = "Load Character"
 
-[node name="Title" type="Label" parent="Margin/VBox/TopRow"]
+[node name="TitleBox" type="VBoxContainer" parent="Margin/VBox/TopRow"]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_font_sizes/font_size = 32
+theme_override_constants/separation = 0
+alignment = 1
+
+[node name="Title" type="Label" parent="Margin/VBox/TopRow/TitleBox"]
+layout_mode = 2
+theme_type_variation = &"ScreenTitle"
 text = "Character Selection"
 horizontal_alignment = 1
 
 [node name="Spacer" type="Control" parent="Margin/VBox/TopRow"]
-custom_minimum_size = Vector2(265, 0)
+custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 
 [node name="CenterContent" type="HBoxContainer" parent="Margin/VBox"]
 layout_mode = 2
-size_flags_vertical = 3
-theme_override_constants/separation = 50
+size_flags_vertical = 6
+theme_override_constants/separation = 24
 alignment = 1
 
 [node name="SelectedCharPanel" type="PanelContainer" parent="Margin/VBox/CenterContent"]
-custom_minimum_size = Vector2(300, 0)
+custom_minimum_size = Vector2(400, 0)
 layout_mode = 2
+theme_type_variation = &"CardPanel"
 
 [node name="VBox" type="VBoxContainer" parent="Margin/VBox/CenterContent/SelectedCharPanel"]
 layout_mode = 2
-theme_override_constants/separation = 15
-alignment = 1
+theme_override_constants/separation = 12
 
 [node name="CharName" type="Label" parent="Margin/VBox/CenterContent/SelectedCharPanel/VBox"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 24
-text = "Character Name"
+theme_type_variation = &"CardTitle"
+text = "New Character"
 horizontal_alignment = 1
+autowrap_mode = 3
 
-[node name="CharImagePlaceholder" type="Label" parent="Margin/VBox/CenterContent/SelectedCharPanel/VBox"]
+[node name="StatsScroll" type="ScrollContainer" parent="Margin/VBox/CenterContent/SelectedCharPanel/VBox"]
+visible = false
+custom_minimum_size = Vector2(0, 220)
 layout_mode = 2
-theme_override_colors/font_color = Color(0.890196, 0.231373, 0.223529, 1)
-theme_override_font_sizes/font_size = 64
-text = "?"
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="CharImagePlaceholder" type="Label" parent="Margin/VBox/CenterContent/SelectedCharPanel/VBox/StatsScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_type_variation = &"SecondaryLabel"
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="NameHeading" type="Label" parent="Margin/VBox/CenterContent/SelectedCharPanel/VBox"]
+layout_mode = 2
+theme_type_variation = &"SectionHeading"
+text = "Name"
 horizontal_alignment = 1
 
 [node name="CharNameInput" type="LineEdit" parent="Margin/VBox/CenterContent/SelectedCharPanel/VBox"]
+custom_minimum_size = Vector2(0, 56)
 layout_mode = 2
 focus_mode = 2
-placeholder_text = "Enter Name..."
+placeholder_text = "Enter name..."
 alignment = 1
 
 [node name="RunOptionsPanel" type="PanelContainer" parent="Margin/VBox/CenterContent"]
-custom_minimum_size = Vector2(300, 0)
+custom_minimum_size = Vector2(540, 0)
 layout_mode = 2
 
-[node name="Margin" type="MarginContainer" parent="Margin/VBox/CenterContent/RunOptionsPanel"]
+[node name="VBox" type="VBoxContainer" parent="Margin/VBox/CenterContent/RunOptionsPanel"]
 layout_mode = 2
-theme_override_constants/margin_left = 20
-theme_override_constants/margin_top = 20
-theme_override_constants/margin_right = 20
-theme_override_constants/margin_bottom = 20
-
-[node name="VBox" type="VBoxContainer" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin"]
-layout_mode = 2
-theme_override_constants/separation = 10
+theme_override_constants/separation = 12
 alignment = 1
 
-[node name="RunOptionsLabel" type="Label" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
-layout_mode = 2
-text = "Run Options"
-horizontal_alignment = 1
-
-[node name="SeedLabel" type="Label" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
+[node name="SeedLabel" type="Label" parent="Margin/VBox/CenterContent/RunOptionsPanel/VBox"]
 layout_mode = 2
 text = "Seed:"
 
-[node name="SeedInput" type="LineEdit" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
+[node name="SeedInput" type="LineEdit" parent="Margin/VBox/CenterContent/RunOptionsPanel/VBox"]
 layout_mode = 2
 focus_mode = 2
 placeholder_text = "Enter Custom Seed..."
 
-[node name="RandomSeedButton" type="Button" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
+[node name="RandomSeedButton" type="Button" parent="Margin/VBox/CenterContent/RunOptionsPanel/VBox"]
 layout_mode = 2
 focus_mode = 2
 text = "Randomize Seed"
 
-[node name="Spacer" type="Control" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
-custom_minimum_size = Vector2(0, 20)
+[node name="Spacer" type="Control" parent="Margin/VBox/CenterContent/RunOptionsPanel/VBox"]
+custom_minimum_size = Vector2(0, 8)
 layout_mode = 2
 
-[node name="StartRunButton" type="Button" parent="Margin/VBox/CenterContent/RunOptionsPanel/Margin/VBox"]
-custom_minimum_size = Vector2(200, 60)
+[node name="StartRunButton" type="Button" parent="Margin/VBox/CenterContent/RunOptionsPanel/VBox"]
+custom_minimum_size = Vector2(0, 64)
 layout_mode = 2
-size_flags_horizontal = 4
 focus_mode = 2
-theme_override_colors/font_color = Color(0.196078, 0.803922, 0.196078, 1)
-theme_override_font_sizes/font_size = 24
-text = "START RUN"
+theme_type_variation = &"PrimaryButton"
+text = "Start Run"
 
 [node name="VirtualKeyboard" parent="." instance=ExtResource("3_keyboard")]
 visible = false

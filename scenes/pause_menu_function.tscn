@@ -2,35 +2,6 @@
 
 [ext_resource type="Script" uid="uid://ssciooeio0pt" path="res://scripts/pause_menu_function.gd" id="1"]
 
-[sub_resource type="StyleBoxFlat" id="1"]
-bg_color = Color(0.07, 0.05, 0.09, 0.97)
-border_width_left = 2
-border_width_top = 2
-border_width_right = 2
-border_width_bottom = 2
-border_color = Color(0.55, 0.10, 0.10, 1)
-corner_radius_top_left = 8
-corner_radius_top_right = 8
-corner_radius_bottom_right = 8
-corner_radius_bottom_left = 8
-shadow_color = Color(0.6, 0.05, 0.05, 0.5)
-shadow_size = 12
-shadow_offset = Vector2(0, 3)
-
-[sub_resource type="StyleBoxFlat" id="2"]
-bg_color = Color(0.55, 0.10, 0.10, 1)
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
-
-[sub_resource type="StyleBoxFlat" id="3"]
-bg_color = Color(0.75, 0.22, 0.15, 1)
-corner_radius_top_left = 3
-corner_radius_top_right = 3
-corner_radius_bottom_right = 3
-corner_radius_bottom_left = 3
-
 [node name="pause_menu_function" type="CanvasLayer" unique_id=1417776468]
 process_mode = 2
 layer = 10
@@ -45,7 +16,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-color = Color(0, 0, 0, 0.62)
+color = Color(0, 0, 0, 0.2)
 
 [node name="PauseMenu" type="Control" parent="." unique_id=907655823]
 process_mode = 2
@@ -58,7 +29,7 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 
-[node name="PausePanel" type="Panel" parent="PauseMenu" unique_id=1521671157]
+[node name="PausePanel" type="PanelContainer" parent="PauseMenu" unique_id=1521671157]
 process_mode = 2
 layout_mode = 1
 anchors_preset = 8
@@ -66,146 +37,140 @@ anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -495.0
-offset_top = -450.0
-offset_right = 495.0
-offset_bottom = 450.0
+offset_left = -380.0
+offset_top = -1.0
+offset_right = 380.0
+offset_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_styles/panel = SubResource("1")
 
 [node name="PauseMargin" type="MarginContainer" parent="PauseMenu/PausePanel" unique_id=154919713]
 process_mode = 2
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = 20.0
-offset_right = -20.0
-offset_bottom = -20.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_constants/margin_left = 10
-theme_override_constants/margin_top = 10
-theme_override_constants/margin_right = 10
-theme_override_constants/margin_bottom = 10
+layout_mode = 2
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 4
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 4
 
 [node name="PauseVBox" type="VBoxContainer" parent="PauseMenu/PausePanel/PauseMargin" unique_id=1323078173]
 process_mode = 2
 layout_mode = 2
-theme_override_constants/separation = 16
+theme_override_constants/separation = 12
 
 [node name="PauseTitle" type="Label" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=584575703]
 process_mode = 2
 layout_mode = 2
-theme_override_font_sizes/font_size = 28
+theme_type_variation = &"ScreenTitle"
 text = "Paused"
 horizontal_alignment = 1
 
-[node name="MasterVolumeRow" type="VBoxContainer" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=942696608]
+[node name="MasterVolumeRow" type="HBoxContainer" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=942696608]
 process_mode = 2
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 16
 
 [node name="MasterVolumeLabel" type="Label" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox/MasterVolumeRow" unique_id=1124468935]
 process_mode = 2
 layout_mode = 2
-theme_override_font_sizes/font_size = 18
+custom_minimum_size = Vector2(250, 0)
 text = "Master Volume"
 
 [node name="MasterVolumeSlider" type="HSlider" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox/MasterVolumeRow" unique_id=1703333859]
 process_mode = 2
 layout_mode = 2
-theme_override_styles/grabber_area = SubResource("2")
-theme_override_styles/grabber_area_highlight = SubResource("3")
+size_flags_horizontal = 3
+size_flags_vertical = 4
 max_value = 1.0
 step = 0.01
 value = 1.0
 
-[node name="MusicVolumeRow" type="VBoxContainer" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=69319499]
+[node name="MusicVolumeRow" type="HBoxContainer" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=69319499]
 process_mode = 2
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 16
 
 [node name="MusicVolumeLabel" type="Label" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox/MusicVolumeRow" unique_id=1578321198]
 process_mode = 2
 layout_mode = 2
-theme_override_font_sizes/font_size = 18
+custom_minimum_size = Vector2(250, 0)
 text = "Music Volume"
 
 [node name="MusicVolumeSlider" type="HSlider" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox/MusicVolumeRow" unique_id=1804297667]
 process_mode = 2
 layout_mode = 2
-theme_override_styles/grabber_area = SubResource("2")
-theme_override_styles/grabber_area_highlight = SubResource("3")
+size_flags_horizontal = 3
+size_flags_vertical = 4
 max_value = 1.0
 step = 0.01
 value = 1.0
 
-[node name="SfxVolumeRow" type="VBoxContainer" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=2136583072]
+[node name="SfxVolumeRow" type="HBoxContainer" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=2136583072]
 process_mode = 2
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 16
 
 [node name="SfxVolumeLabel" type="Label" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox/SfxVolumeRow" unique_id=1753514120]
 process_mode = 2
 layout_mode = 2
-theme_override_font_sizes/font_size = 18
+custom_minimum_size = Vector2(250, 0)
 text = "SFX Volume"
 
 [node name="SfxVolumeSlider" type="HSlider" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox/SfxVolumeRow" unique_id=493073420]
 process_mode = 2
 layout_mode = 2
-theme_override_styles/grabber_area = SubResource("2")
-theme_override_styles/grabber_area_highlight = SubResource("3")
+size_flags_horizontal = 3
+size_flags_vertical = 4
 max_value = 1.0
 step = 0.01
 value = 1.0
 
-[node name="DisplayModeRow" type="VBoxContainer" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=1295390393]
+[node name="DisplayModeRow" type="HBoxContainer" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=1295390393]
 process_mode = 2
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 16
 
 [node name="DisplayModeLabel" type="Label" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox/DisplayModeRow" unique_id=357298845]
 process_mode = 2
 layout_mode = 2
-theme_override_font_sizes/font_size = 18
+custom_minimum_size = Vector2(250, 0)
 text = "Display Mode"
 
 [node name="DisplayModeOption" type="OptionButton" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox/DisplayModeRow" unique_id=1648247611]
 process_mode = 2
 layout_mode = 2
+size_flags_horizontal = 3
 
-[node name="ResolutionRow" type="VBoxContainer" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=910282388]
+[node name="ResolutionRow" type="HBoxContainer" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=910282388]
 process_mode = 2
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 16
 
 [node name="ResolutionLabel" type="Label" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox/ResolutionRow" unique_id=1202284782]
 process_mode = 2
 layout_mode = 2
-theme_override_font_sizes/font_size = 18
+custom_minimum_size = Vector2(250, 0)
 text = "Resolution"
 
 [node name="ResolutionOption" type="OptionButton" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox/ResolutionRow" unique_id=1050869620]
 process_mode = 2
 layout_mode = 2
+size_flags_horizontal = 3
 
 [node name="ButtonSpacer" type="Control" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=533870972]
 process_mode = 2
-custom_minimum_size = Vector2(0, 8)
+custom_minimum_size = Vector2(0, 4)
 layout_mode = 2
 
 [node name="ResumeButton" type="Button" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=971161386]
 process_mode = 2
-custom_minimum_size = Vector2(0, 46)
+custom_minimum_size = Vector2(0, 56)
 layout_mode = 2
+theme_type_variation = &"PrimaryButton"
 text = "Resume"
 
 [node name="ExitToMainMenuButton" type="Button" parent="PauseMenu/PausePanel/PauseMargin/PauseVBox" unique_id=180232340]
 process_mode = 2
-custom_minimum_size = Vector2(0, 46)
+custom_minimum_size = Vector2(0, 56)
 layout_mode = 2
+theme_type_variation = &"DangerButton"
 text = "Exit to Main Menu"

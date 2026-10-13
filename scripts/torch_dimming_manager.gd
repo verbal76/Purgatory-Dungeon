@@ -43,6 +43,12 @@ var _early_die_queue : Array = []
 # Instance IDs of lights that have fully died — skipped in the main loop.
 var _dead_light_ids  : Dictionary = {}
 
+# The level's TorchLightBudget (a sibling node), when there is one. It owns the energy and the
+# visibility of every torch light (only the nearest few are on), so this manager hands it the global
+# energy, the flicker factors and the deaths instead of writing ~750 lights every frame. Without a
+# budget the manager writes the lights itself, exactly as before.
+var _budget : Node = null
+
 # Flicker states for torches with the flicker trait.
 # Each entry: { light, idle_timer, burst_timer, sub_timer }
 #   idle_timer  — seconds until the next flicker burst starts
@@ -61,6 +67,8 @@ var _flickering_now  : Dictionary = {}
 
 func boot(torch_nodes: Array, lighting_mgr: Node) -> void:
 	_lighting_mgr = lighting_mgr
+	var par : Node = get_parent()
+	_budget = par.get_node_or_null("TorchLightBudget") if par != null else null
 
 	# Collect OmniLight3D children from each torch root.
 	for torch_root in torch_nodes:
@@ -87,6 +95,7 @@ func boot(torch_nodes: Array, lighting_mgr: Node) -> void:
 		if randf() < torch_flicker_chance:
 			_flicker_states.append({
 				"light"       : light,
+				"index"       : _budget.index_of(light) if _budget != null else -1,
 				"idle_timer"  : randf_range(1.0, 25.0),  # staggered first burst
 				"burst_timer" : 0.0,
 				"sub_timer"   : 0.0,
@@ -123,7 +132,10 @@ func _process(delta: float) -> void:
 		_early_die_queue.pop_front()
 		var dying_light : OmniLight3D = entry.get("light") as OmniLight3D
 		if is_instance_valid(dying_light):
-			dying_light.light_energy = 0.0
+			if _budget != null:
+				_budget.kill_light(dying_light)
+			else:
+				dying_light.light_energy = 0.0
 			_dead_light_ids[dying_light.get_instance_id()] = true
 
 	# Global dimmed energy level this frame.
@@ -149,11 +161,17 @@ func _process(delta: float) -> void:
 				# Each sub-step: dip to a random fraction of current base energy.
 				# Range 0.45–0.88 gives believable wind-flicker without going dark.
 				fs["sub_timer"] = randf_range(0.04, 0.22)
-				fl.light_energy = global_energy * randf_range(0.45, 0.88)
+				if _budget != null:
+					_budget.set_light_factor_at(int(fs["index"]), randf_range(0.45, 0.88))
+				else:
+					fl.light_energy = global_energy * randf_range(0.45, 0.88)
 
 			if fs["burst_timer"] <= 0.0:
 				# Burst finished — restore to base and schedule next idle wait.
-				fl.light_energy   = global_energy
+				if _budget != null:
+					_budget.set_light_factor_at(int(fs["index"]), 1.0)
+				else:
+					fl.light_energy = global_energy
 				fs["idle_timer"]  = randf_range(5.0, 40.0)
 			else:
 				# Still bursting — exclude from main energy-set loop this frame.
@@ -166,6 +184,14 @@ func _process(delta: float) -> void:
 				# Kick off a new burst: short random duration, sub_timer fires immediately.
 				fs["burst_timer"] = randf_range(0.25, 2.0)
 				fs["sub_timer"]   = 0.0
+
+	# ── With a TorchLightBudget: one call. It applies the energy (times each light's flicker /
+	# death factor and its fade) to the few lights that are on, and to the others when they come on.
+	if _budget != null:
+		_budget.set_global_energy(global_energy)
+		if t >= 1.0:
+			set_process(false)
+		return
 
 	# ── Main energy loop — set all living, non-bursting torches ───────────────
 	for light in _torch_lights:

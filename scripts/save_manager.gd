@@ -43,10 +43,15 @@ signal profile_loaded
 #   Windows: C:/Users/<name>/Documents/PurgetoryDungeon/saves/
 #   macOS:   ~/Documents/PurgetoryDungeon/saves/
 #   Linux:   ~/Documents/PurgetoryDungeon/saves/
-const GAME_FOLDER    := "PurgetoryDungeon"
+const GAME_FOLDER    := StoragePaths.GAME_FOLDER
 const MAX_NAME_LENGTH := 20
 const MAX_SEED_LENGTH := 20
 const SLOT_COUNT := 10
+
+# Save schema (docs/COMPLIANCE_AUDIT.md RED-5). A profile file carries "schema_version"; a file without it is the legacy layout (version 0) and is migrated
+# in memory to the current version, which only adds that key. Unknown keys of any version are kept and written back, and a file written by a NEWER
+# game (version above this one) is never downgraded: its version number and every key stay as they were. Backups are described at _backup_before_write.
+const SCHEMA_VERSION := 1
 
 const VALID_CLASSES      := ["barbarian", "mage"]
 const VALID_DIFFICULTIES := ["easy", "medium", "hardcore"]
@@ -86,9 +91,9 @@ func _build_paths() -> void:
 	# OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS) returns the real Documents
 	# folder on Windows/macOS/Linux regardless of whether you are running
 	# inside the Godot editor or from an exported build.
-	var docs : String = OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
-	SAVE_DIR      = docs.path_join(GAME_FOLDER).path_join("saves") + "/"
-	SETTINGS_PATH = docs.path_join(GAME_FOLDER).path_join("settings.json")
+	var game_dir : String = StoragePaths.root()
+	SAVE_DIR      = game_dir.path_join("saves") + "/"
+	SETTINGS_PATH = game_dir.path_join("settings.json")
 	print("SaveManager: save dir → ", SAVE_DIR)
 
 
@@ -103,15 +108,12 @@ func _ensure_save_dir() -> void:
 # cause the wrong character to appear.
 
 func _last_slot_pref_path() -> String:
-	var docs : String = OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
-	return docs.path_join(GAME_FOLDER).path_join("last_slot.json")
+	return StoragePaths.root().path_join("last_slot.json")
 
 
 func _save_last_slot_pref() -> void:
-	var path : String = _last_slot_pref_path()
-	var file = FileAccess.open(path, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify({"slot": active_slot_index}))
+	StoragePaths.write_text_atomic(_last_slot_pref_path(),
+		JSON.stringify({"slot": active_slot_index}))
 
 
 func _load_last_slot_pref() -> int:
@@ -122,6 +124,7 @@ func _load_last_slot_pref() -> int:
 	if file == null:
 		return 0
 	var parsed = JSON.parse_string(file.get_as_text())
+	file.close()
 	if parsed is Dictionary:
 		return int(parsed.get("slot", 0))
 	return 0
@@ -146,6 +149,7 @@ func get_file_path(slot: int) -> String:
 # "character_class" starts empty — set once during identity creation.
 func get_default_profile() -> Dictionary:
 	return {
+		"schema_version":  SCHEMA_VERSION,
 		"character_name":  "",
 		"character_class": "",
 		"difficulty":      "medium",
@@ -168,32 +172,65 @@ func get_default_profile() -> Dictionary:
 #  SLOT LOADING / SAVING / DELETING
 # ══════════════════════════════════════════════════════════════
 
+# Reads a slot file and returns its profile dictionary (missing keys backfilled).
+# Returns an empty Dictionary if the file is absent, unreadable or not valid JSON.
+# Has NO side effects: it does not change the active slot, the last-slot
+# preference, current_profile, or emit signals. Use this to inspect slots.
+func peek_slot(slot_index: int) -> Dictionary:
+	var path := get_file_path(slot_index)
+	var profile := _read_profile_file(path)
+	if profile.is_empty():
+		# The main file is missing or unreadable. A write that was interrupted after its temp file was complete (profile_N.save.tmp) or the
+		# backup of the previous session (profile_N.save.bak) still holds the player's progress; the newest readable one wins.
+		profile = _read_profile_file(path + ".tmp")
+		if profile.is_empty() and FileAccess.file_exists(path):
+			profile = _read_profile_file(path + ".bak")
+	if profile.is_empty():
+		return {}
+	var defaults := get_default_profile()
+	for key in defaults.keys():
+		if not profile.has(key):
+			profile[key] = defaults[key]
+	return profile
+
+
+# A profile file parsed as a Dictionary, or {} when it is absent, unreadable, not JSON or not an object. Never changes anything.
+func _read_profile_file(path: String) -> Dictionary:
+	if not FileAccess.file_exists(path):
+		return {}
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var json := JSON.new()
+	var err := json.parse(file.get_as_text())
+	file.close()
+	if err != OK or typeof(json.data) != TYPE_DICTIONARY:
+		return {}
+	return json.data
+
+
 # Loads a slot into current_profile. If the file does not exist or
 # is corrupt, a fresh default profile is loaded instead.
 func load_slot(slot_index: int) -> void:
 	active_slot_index = slot_index
 	# Persist the choice so the next launch pre-selects this character.
 	_save_last_slot_pref()
-	var path = get_file_path(slot_index)
 
-	if not FileAccess.file_exists(path):
+	var profile := peek_slot(slot_index)
+	if FileAccess.file_exists(get_file_path(slot_index)) and _read_profile_file(get_file_path(slot_index)).is_empty():
+		_preserve_unreadable(slot_index)
+		if not profile.is_empty():
+			push_warning("SaveManager: slot %d was unreadable; its progress was restored from the previous session's backup." % slot_index)
+	if profile.is_empty():
 		current_profile = get_default_profile()
-		emit_signal("profile_loaded")
-		return
-
-	var file := FileAccess.open(path, FileAccess.READ)
-	var parsed = JSON.parse_string(file.get_as_text())
-	file.close()
-
-	if typeof(parsed) == TYPE_DICTIONARY:
-		current_profile = parsed
-		# Backfill any keys that older save files might be missing.
-		# This keeps the game forward-compatible when new fields are added.
-		_backfill_missing_keys()
 	else:
-		current_profile = get_default_profile()
-	
+		current_profile = profile
+
 	emit_signal("profile_loaded")
+
+
+# Successful profile writes this session (lets tests assert how many writes an action costs).
+var save_count : int = 0
 
 
 # Writes the current profile to disk. Returns true on success.
@@ -204,14 +241,82 @@ func save_profile() -> bool:
 	current_profile["updated_at_unix"] = Time.get_unix_time_from_system()
 
 	var path = get_file_path(active_slot_index)
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	if file == null:
+	# A blank default profile (no character created, e.g. the first launch's main menu being backgrounded or quit) is never written: it would turn an
+	# empty slot into a "broken" ghost, or replace an unreadable file whose bytes are the player's only copy. Real characters (identity locked) always save.
+	if not _profile_is_valid(current_profile) and _read_profile_file(path).is_empty():
 		return false
-
-	file.store_string(JSON.stringify(current_profile, "\t"))
-	file.close()
+	_backup_before_write(active_slot_index)
+	# Never downgrade: a profile from a newer game keeps its (higher) schema version; everything else is written at the current one.
+	current_profile["schema_version"] = maxi(int(current_profile.get("schema_version", 0)), SCHEMA_VERSION)
+	if not StoragePaths.write_text_atomic(path, JSON.stringify(current_profile, "\t")):
+		return false
+	save_count += 1
 	# Always keep the last-slot preference in sync.
 	_save_last_slot_pref()
+	return true
+
+
+# A slot file that exists but cannot be read (garbage, truncated, not an object) is about to be replaced in memory by a default profile, and the
+# quit / background paths save the current profile: the unreadable bytes would then be overwritten for good. Keep a copy beside it first
+# (profile_N.save.unreadable, refreshed while the file stays unreadable). The save format and slot files are unchanged.
+func _preserve_unreadable(slot_index: int) -> void:
+	var path := get_file_path(slot_index)
+	if not FileAccess.file_exists(path):
+		return
+	var src := FileAccess.open(path, FileAccess.READ)
+	if src == null:
+		return
+	var bytes := src.get_buffer(src.get_length())
+	src.close()
+	var dst := FileAccess.open(path + ".unreadable", FileAccess.WRITE)
+	if dst == null:
+		push_warning("SaveManager: could not keep a copy of the unreadable save in slot %d." % slot_index)
+		return
+	dst.store_buffer(bytes)
+	dst.close()
+
+
+# Slots already backed up in this session (a backup is the state the session STARTED with, taken once, so the many saves of a run cost no extra IO).
+var _backed_up_slots: Dictionary = {}
+
+
+# Before the first write of a slot in a session, keep the file as it is:
+#   profile_N.save.bak        the previous good file (replaced once per session, only by a file that parses)
+#   profile_N.save.vK.bak     the file as written by schema K (0 = legacy, no version key) before it is migrated, or by a NEWER schema K than this
+#                             game knows before this game touches it; written once and never overwritten
+# A slot whose main file is gone starts clean: stale recovery copies of an earlier character are removed so they cannot resurrect it.
+func _backup_before_write(slot_index: int) -> void:
+	if _backed_up_slots.has(slot_index):
+		return
+	_backed_up_slots[slot_index] = true
+	var path := get_file_path(slot_index)
+	if not FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path + ".bak")
+		DirAccess.remove_absolute(path + ".tmp")
+		return
+	var on_disk := _read_profile_file(path)
+	if on_disk.is_empty():
+		return   # unreadable: it was copied to .unreadable at load; the existing .bak stays the way back
+	_copy_file(path, path + ".bak")
+	var disk_version: int = int(on_disk.get("schema_version", 0))
+	if disk_version != SCHEMA_VERSION:
+		var versioned := "%s.v%d.bak" % [path, disk_version]
+		if not FileAccess.file_exists(versioned):
+			_copy_file(path, versioned)
+
+
+func _copy_file(from_path: String, to_path: String) -> bool:
+	var src := FileAccess.open(from_path, FileAccess.READ)
+	if src == null:
+		return false
+	var bytes := src.get_buffer(src.get_length())
+	src.close()
+	var dst := FileAccess.open(to_path, FileAccess.WRITE)
+	if dst == null:
+		push_warning("SaveManager: could not write the backup %s." % to_path.get_file())
+		return false
+	dst.store_buffer(bytes)
+	dst.close()
 	return true
 
 
@@ -219,10 +324,16 @@ func save_profile() -> bool:
 # one, current_profile resets to a blank default.
 func delete_slot(slot_index: int) -> void:
 	var path = get_file_path(slot_index)
+	# Deleting a character is deliberate: its recovery copies go with it (a stale .bak must not bring it back). Copies of unreadable files are kept.
+	DirAccess.remove_absolute(path + ".bak")
+	DirAccess.remove_absolute(path + ".tmp")
+	_backed_up_slots.erase(slot_index)
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
-		if active_slot_index == slot_index:
-			current_profile = get_default_profile()
+	# Independent of whether a main file existed: a slot that lived only in a recovered temp file was loaded into memory too, and a later quit /
+	# background save must not write the deleted character back.
+	if active_slot_index == slot_index:
+		current_profile = get_default_profile()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -232,40 +343,30 @@ func delete_slot(slot_index: int) -> void:
 # Tier 1: Does a save file physically exist on disk for this slot?
 # Does not read or parse the file — just checks existence.
 func slot_has_file(slot_index: int) -> bool:
-	return FileAccess.file_exists(get_file_path(slot_index))
+	# A complete temp file with no main file is a write that was interrupted between the two steps of the atomic rename: the slot is occupied.
+	return FileAccess.file_exists(get_file_path(slot_index)) or not _read_profile_file(get_file_path(slot_index) + ".tmp").is_empty()
 
 
 # Tier 2: Does the slot contain a fully initialized character?
-# Temporarily loads the slot to inspect it, then restores the
-# previously active slot so nothing is disturbed.
+# Reads the slot via peek_slot(), so nothing else is disturbed.
 func slot_has_valid_character(slot_index: int) -> bool:
-	if not slot_has_file(slot_index):
-		return false
-
-	# Remember where we were so we can restore after peeking.
-	var previous_slot := active_slot_index
-	var previous_profile := current_profile.duplicate(true)
-
-	load_slot(slot_index)
-	var is_valid := current_profile_is_valid()
-
-	# Restore the original state.
-	active_slot_index = previous_slot
-	current_profile = previous_profile
-
-	return is_valid
+	return _profile_is_valid(peek_slot(slot_index))
 
 
 # Tier 3: Is the currently loaded profile a complete, valid character?
 # Checks all three identity fields: name, class, and initialized flag.
 func current_profile_is_valid() -> bool:
-	if current_profile.is_empty():
+	return _profile_is_valid(current_profile)
+
+
+func _profile_is_valid(profile: Dictionary) -> bool:
+	if profile.is_empty():
 		return false
-	if not bool(current_profile.get("initialized", false)):
+	if not bool(profile.get("initialized", false)):
 		return false
-	if str(current_profile.get("character_name", "")).strip_edges() == "":
+	if str(profile.get("character_name", "")).strip_edges() == "":
 		return false
-	if str(current_profile.get("character_class", "")) not in VALID_CLASSES:
+	if str(profile.get("character_class", "")) not in VALID_CLASSES:
 		return false
 	return true
 

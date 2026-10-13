@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://ptopk0idyxcp"
+path="res://godot/imported/swing_whoosh.wav-3042a089c48c364ed438e8cdf9e44634.sample"
+
+[deps]
+
+source_file="res://Music & background images/Sound Effects/juice/swing_whoosh.wav"
+dest_files=["res://godot/imported/swing_whoosh.wav-3042a089c48c364ed438e8cdf9e44634.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

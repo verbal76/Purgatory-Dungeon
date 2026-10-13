@@ -1,0 +1,85 @@
+{
+  "format": 1,
+  "notes": [
+    "Single machine-readable definition of the native boundary (docs/OTA.md section 3). Read by tools/ota_runtime.py, tools/ota/classify.py, tools/ota_build_payload.sh, tools/ota_inspect_pack.gd and the publish workflow.",
+    "Matching is case-sensitive on a root-relative path with '/' separators (no 'res://', no leading './'): exact = whole path, prefixes = begins with, suffixes = ends with. native_inputs entries are exact paths or globs ('*' does not cross '/', '**' does).",
+    "Category per changed source path (tools/ota/classify.py): native_inputs first (APK required: the runtime fingerprint would change), then not_shipped, then payload_protected (APK required), then guarded, otherwise safe.",
+    "A path inside a payload pack is checked against payload_protected and guarded using its raw name AND its source name (pack_aliases: 'x.gd.remap' and 'x.gdc' both map to 'x.gd').",
+    "Native-code suffixes are protected anywhere in a pack, a deliberate superset of 'addons/**/*.gdextension|*.so|*.dll|*.dylib'. ota/ (this file and runtime_lock.json) is protected too: a boundary change must never be able to weaken itself over the air."
+  ],
+  "max_payload_bytes": 536870912,
+  "warn_payload_bytes": 99614720,
+  "native_inputs": [
+    "project.godot",
+    "export_presets.cfg",
+    "scripts/boot/*.gd",
+    "tools/android/build_apk.sh"
+  ],
+  "engine_version_source": {
+    "file": ".github/workflows/ci.yml",
+    "regex": "^\\s*GODOT_RELEASE:\\s*\"?([0-9]+(?:\\.[0-9]+)*)-stable\"?\\s*$"
+  },
+  "runtime_revision_source": {
+    "file": "scripts/boot/ota_config.gd",
+    "constant": "RUNTIME_REVISION"
+  },
+  "payload_protected": {
+    "exact": [
+      ".godot/extension_list.cfg",
+      "VERSION",
+      "build_info.json",
+      "export_presets.cfg",
+      "godot/extension_list.cfg",
+      "project.binary",
+      "project.godot"
+    ],
+    "prefixes": [
+      "android/",
+      "ota/",
+      "scripts/boot/"
+    ],
+    "suffixes": [
+      ".dll",
+      ".dylib",
+      ".gdextension",
+      ".so"
+    ]
+  },
+  "guarded": {
+    "exact": [
+      "scripts/SettingsManager.gd",
+      "scripts/save_manager.gd",
+      "scripts/storage_paths.gd"
+    ],
+    "prefixes": [],
+    "suffixes": []
+  },
+  "not_shipped": {
+    "exact": [
+      ".editorconfig",
+      ".gitattributes",
+      ".gitignore"
+    ],
+    "prefixes": [
+      ".claude/",
+      ".github/",
+      "archive/",
+      "docs/",
+      "production/",
+      "tests/",
+      "tools/"
+    ],
+    "suffixes": [
+      ".md"
+    ]
+  },
+  "pack_aliases": {
+    "strip_suffixes": [
+      ".remap"
+    ],
+    "map_suffixes": {
+      ".gdc": ".gd",
+      ".gde": ".gd"
+    }
+  }
+}
